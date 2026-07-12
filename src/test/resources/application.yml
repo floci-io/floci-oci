@@ -1,0 +1,16 @@
+quarkus:
+  log:
+    level: WARN
+    category:
+      "io.floci.oci":
+        level: INFO
+
+floci-oci:
+  default-tenancy-id: "ocid1.tenancy.oc1..flocitesttenancy00000000000000000000000000000000000000000"
+  default-namespace: floci-test
+  storage:
+    mode: memory
+  init-hooks:
+    shell-executable: /bin/sh
+    timeout-seconds: 5
+    shutdown-grace-period-seconds: 2

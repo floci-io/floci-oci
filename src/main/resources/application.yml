@@ -1,0 +1,85 @@
+quarkus:
+  log:
+    console:
+      format: "%d{yyyy-MM-dd HH:mm:ss,SSS} %-5p [%c{3.}] %s%e%n"
+
+  http:
+    port: ${floci-oci.port}
+    host: 0.0.0.0
+    limits:
+      max-body-size: ${floci-oci.max-request-size}M
+  security:
+    security-providers: BC
+  shutdown:
+    # Enables the pre-shutdown phase so stop hooks run before the HTTP server stops.
+    delay-enabled: true
+  native:
+    additional-build-args:
+      - --report-unsupported-elements-at-runtime
+      - --allow-incomplete-classpath
+      - --enable-url-protocols=http,https
+      - --initialize-at-run-time=com.github.dockerjava.transport.NamedPipeSocket$Kernel32
+      - --initialize-at-run-time=org.bouncycastle.jcajce.provider.drbg.DRBG$Default
+      - --initialize-at-run-time=org.bouncycastle.jcajce.provider.drbg.DRBG$NonceAndIV
+      - --initialize-at-run-time=org.bouncycastle.crypto.prng.SP800SecureRandom
+      - --initialize-at-run-time=org.bouncycastle.jcajce.provider.asymmetric.rsa.KeyPairGeneratorSpi
+      - --initialize-at-run-time=org.bouncycastle.jcajce.provider.asymmetric.x509.CertificateFactory
+      - --initialize-at-run-time=io.floci.oci.core.common.BouncyCastleInitializer
+      - --initialize-at-run-time=io.floci.oci.config.TlsConfigSource
+
+floci-oci:
+  port: 4599
+  max-request-size: 2048
+  base-url: "http://localhost:4599"
+  # hostname: ""  # When set, overrides the hostname in response URLs.
+                   # Needed for multi-container Docker setups. Example: FLOCI_OCI_HOSTNAME=floci-oci
+  default-region: us-ashburn-1
+  default-realm: oc1
+  default-tenancy-id: "ocid1.tenancy.oc1..flocilocaltenancy0000000000000000000000000000000000000000"
+  default-namespace: floci-local
+  storage:
+    # Supported modes: memory, persistent, hybrid, wal
+    mode: memory
+    persistent-path: ./data
+    host-persistent-path: ./data
+    prune-volumes-on-delete: false
+    wal:
+      compaction-interval-ms: 30000
+    # Per-service overrides:
+    # services:
+    #   objectstorage:
+    #     mode: wal
+    #     flush-interval-ms: 5000
+  dns:
+    # extra-suffixes:
+    #   - objectstorage.example.internal
+    container-fallback-enabled: true
+    container-fallback-servers:
+      - 8.8.8.8
+      - 8.8.4.4
+  auth:
+    # When true, requests without a structurally valid OCI Signature Authorization
+    # header are rejected with 401. The RSA signature itself is never verified.
+    require-signature: false
+  security:
+    disable-cors-headers: false
+    cors-allow-private-network: false
+  tls:
+    enabled: false
+    self-signed: true
+    https-port: 443    # FLOCI_OCI_TLS_HTTPS_PORT — also bind 443 for clients that assume OCI on 443 (0 disables)
+  docker:
+    log-max-size: 10m
+    log-max-file: "3"
+    docker-host: unix:///var/run/docker.sock
+    resource-namespace: ""
+    docker-config-path: ""
+  init-hooks:
+    shell-executable: /bin/sh
+    shutdown-grace-period-seconds: 2
+    timeout-seconds: 30
+  services:
+    identity:
+      enabled: true
+    objectstorage:
+      enabled: true

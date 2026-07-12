@@ -1,0 +1,14 @@
+{
+  "resources": {
+    "includes": [
+      {"pattern": "META-INF/services/java.security.Provider"},
+      {"pattern": "ec2/.*\\.yaml"},
+      {"pattern": "org/apache/velocity/runtime/defaults/velocity.properties"}
+    ]
+  },
+  "bundles": [
+    {"name": "com.sun.org.apache.xerces.internal.impl.msg.XMLMessages"},
+    {"name": "com.sun.org.apache.xerces.internal.impl.msg.XMLSerializerMessages"},
+    {"name": "com.sun.org.apache.xerces.internal.impl.xpath.regex.message"}
+  ]
+}
