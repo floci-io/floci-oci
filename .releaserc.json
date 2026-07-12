@@ -1,0 +1,33 @@
+{
+  "tagFormat": "${version}",
+  "branches": [
+    {
+      "name": "release/+([0-9])?(.{+([0-9]),x}).x",
+      "channel": "${name.replace(/^release\\//,'')}"
+    }
+  ],
+  "plugins": [
+    "@semantic-release/commit-analyzer",
+    "@semantic-release/release-notes-generator",
+    [
+      "@semantic-release/changelog",
+      {
+        "changelogFile": "CHANGELOG.md"
+      }
+    ],
+    [
+      "@semantic-release/exec",
+      {
+        "prepareCmd": "mvn versions:set -DnewVersion=${nextRelease.version} -DgenerateBackupPoms=false"
+      }
+    ],
+    [
+      "@semantic-release/git",
+      {
+        "assets": ["pom.xml", "CHANGELOG.md"],
+        "message": "chore(release): ${nextRelease.version}\n\n${nextRelease.notes}"
+      }
+    ],
+    "@semantic-release/github"
+  ]
+}
