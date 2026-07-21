@@ -1,0 +1,4 @@
+#!/bin/sh
+# Wrapper for the OCI CLI that targets the local floci-oci emulator.
+# Usage: ocilocal os ns get
+exec oci --endpoint "${FLOCI_OCI_ENDPOINT:-http://localhost:4599}" "$@"
