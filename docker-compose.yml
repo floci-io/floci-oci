@@ -1,0 +1,23 @@
+services:
+  floci-oci:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    tty: true
+    ports:
+      - "4599:4599"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./data:/app/data
+    environment:
+      FLOCI_OCI_SERVICES_DOCKER_NETWORK: floci_oci_default
+      FLOCI_OCI_HOSTNAME: floci-oci
+      FLOCI_OCI_BASE_URL: http://floci-oci:4599
+    networks:
+      floci_oci_default:
+        aliases:
+          - localhost.floci.io
+
+networks:
+  floci_oci_default:
+    name: floci_oci_default

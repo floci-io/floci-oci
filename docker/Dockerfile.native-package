@@ -1,0 +1,65 @@
+FROM registry.access.redhat.com/ubi9-minimal:9.7
+
+ARG VERSION=latest
+# Automatically set by Docker BuildKit to "amd64" or "arm64"
+ARG TARGETARCH
+
+ENV FLOCI_OCI_VERSION=${VERSION}
+ENV FLOCI_OCI_STORAGE_PERSISTENT_PATH=/app/data
+
+ENV GOSU_VERSION=1.17
+ENV GOSU_AMD64_SHA256=bbc4136d03ab138b1ad66fa4fc051bafc6cc7ffae632b069a53657279a450de3
+ENV GOSU_ARM64_SHA256=c3805a85d17f4454c23d7059bcb97e1ec1af272b90126e79ed002342de08389b
+RUN set -eux; \
+    microdnf install -y --nodocs shadow-utils; \
+    microdnf clean all; \
+    useradd -r -u 1001 -g root -d /app -s /sbin/nologin floci; \
+    arch="$(uname -m)"; \
+    case "$arch" in \
+        x86_64) gosuArch='amd64'; gosuSha256="$GOSU_AMD64_SHA256" ;; \
+        aarch64) gosuArch='arm64'; gosuSha256="$GOSU_ARM64_SHA256" ;; \
+        *) echo >&2 "unsupported arch: $arch"; exit 1 ;; \
+    esac; \
+    curl -fsSL -o /usr/local/bin/gosu "https://github.com/tianon/gosu/releases/download/${GOSU_VERSION}/gosu-${gosuArch}"; \
+    echo "${gosuSha256}  /usr/local/bin/gosu" | sha256sum -c -; \
+    chmod +x /usr/local/bin/gosu; \
+    gosu --version; \
+    gosu nobody true
+
+WORKDIR /app
+
+RUN mkdir -p /app/data \
+    && chown -R 1001:root /app \
+    && chmod -R g+rwX /app
+
+VOLUME /app/data
+
+COPY --chown=1001:root native/${TARGETARCH}/ /app/
+RUN mv /app/*-runner /app/application && chmod +x /app/application
+
+COPY --chmod=755 docker/entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+
+LABEL org.opencontainers.image.title="Floci" \
+      org.opencontainers.image.description="Local Oracle Cloud (OCI) emulator" \
+      org.opencontainers.image.url="https://floci.io" \
+      org.opencontainers.image.source="https://github.com/floci-io/floci-oci" \
+      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.vendor="Floci" \
+      description="Local Oracle Cloud (OCI) emulator" \
+      io.k8s.description="Local Oracle Cloud (OCI) emulator" \
+      io.k8s.display-name="floci-oci" \
+      io.openshift.expose-services="4599:tcp" \
+      io.openshift.tags="floci-oci oci-emulator" \
+      maintainer="Floci <https://github.com/floci-io/floci>" \
+      name="floci/floci-oci" \
+      summary="Local Oracle Cloud (OCI) emulator" \
+      url="https://floci.io" \
+      vendor="Floci"
+
+EXPOSE 4599
+
+HEALTHCHECK --interval=5s --timeout=3s --retries=5 \
+    CMD curl -f http://localhost:4599/_floci-oci/health || exit 1
+
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
+CMD ["/app/application", "-Dquarkus.http.host=0.0.0.0"]
