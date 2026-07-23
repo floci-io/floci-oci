@@ -1,0 +1,70 @@
+site_name: floci-oci
+site_description: Fast, free, open-source local Oracle Cloud (OCI) emulator
+site_url: https://floci.io/floci-oci/
+repo_url: https://github.com/floci-io/floci-oci
+repo_name: floci-io/floci-oci
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  custom_dir: overrides
+  logo: assets/floci-header.svg
+  favicon: assets/floci.svg
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - navigation.instant
+    - search.highlight
+    - search.suggest
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+
+extra_css:
+  - assets/extra.css
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.inlinehilite
+  - tables
+  - attr_list
+
+nav:
+  - Home: index.md
+  - Getting Started:
+    - Quick Start: getting-started/quick-start.md
+    - OCI CLI & SDK Setup: getting-started/oci-setup.md
+  - Configuration:
+    - Environment Variables: configuration/environment-variables.md
+    - Storage Modes: configuration/storage.md
+    - Initialization Hooks: configuration/initialization-hooks.md
+  - Services:
+    - Overview: services/index.md
+    - Identity (IAM): services/identity.md
+    - Object Storage: services/object-storage.md
+  - Contributing: contributing.md
