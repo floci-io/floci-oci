@@ -13,6 +13,35 @@ run: ## Start in dev mode on port 4599
 
 package: build
 
+# ── OCI reference sources ────────────────────────────────────────────────────
+#
+# Shallow clones of the official OCI SDKs / CLI / Terraform provider under the
+# gitignored local/oracle/. These are the wire-contract reference — see
+# "OCI Source as Reference" in AGENTS.md. Idempotent: clones if missing,
+# fast-forwards if present.
+
+REF_REPOS = oci-go-sdk oci-java-sdk oci-python-sdk oci-typescript-sdk oci-cli terraform-provider-oci
+
+.PHONY: refs
+
+refs: ## Download/refresh the OCI reference checkouts into local/oracle/
+	@mkdir -p local/oracle
+	@for repo in $(REF_REPOS); do \
+		if [ -d "local/oracle/$$repo/.git" ]; then \
+			echo "updating $$repo"; \
+			git -C "local/oracle/$$repo" pull --ff-only --depth 1 || true; \
+		else \
+			echo "cloning $$repo"; \
+			git clone --depth 1 "https://github.com/oracle/$$repo.git" "local/oracle/$$repo"; \
+		fi; \
+	done
+	@if [ -d "local/oracle/fn/.git" ]; then \
+		echo "updating fn"; git -C "local/oracle/fn" pull --ff-only --depth 1 || true; \
+	else \
+		echo "cloning fn (Fn Project — the engine behind OCI Functions)"; \
+		git clone --depth 1 "https://github.com/fnproject/fn.git" "local/oracle/fn"; \
+	fi
+
 # ── Compatibility suites ─────────────────────────────────────────────────────
 #
 # Each suite is a Docker image whose entrypoint runs the tests and writes JUnit
