@@ -8,9 +8,9 @@
   --md-primary-fg-color--dark:  #3f4280;
   --md-primary-bg-color:        #ffffff;
   --md-primary-bg-color--light: hsla(0, 0%, 100%, 0.7);
-  --md-accent-fg-color:         #ff9900;
+  --md-accent-fg-color:         #C74634;
 }
 
 [data-md-color-scheme="slate"] {
-  --md-accent-fg-color:         #ff9900;
+  --md-accent-fg-color:         #C74634;
 }
