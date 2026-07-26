@@ -10,6 +10,9 @@ floci-oci:
   default-namespace: floci-test
   storage:
     mode: memory
+  services:
+    functions:
+      mock: true
   init-hooks:
     shell-executable: /bin/sh
     timeout-seconds: 5

@@ -185,6 +185,16 @@ public interface EmulatorConfig {
 
         ObjectStorageServiceConfig objectstorage();
 
+        QueueServiceConfig queue();
+
+        KmsServiceConfig kms();
+
+        VaultServiceConfig vault();
+
+        StreamingServiceConfig streaming();
+
+        FunctionsServiceConfig functions();
+
         interface IdentityServiceConfig {
             @WithDefault("true")
             boolean enabled();
@@ -193,6 +203,52 @@ public interface EmulatorConfig {
         interface ObjectStorageServiceConfig {
             @WithDefault("true")
             boolean enabled();
+        }
+
+        interface QueueServiceConfig {
+            @WithDefault("true")
+            boolean enabled();
+        }
+
+        interface KmsServiceConfig {
+            @WithDefault("true")
+            boolean enabled();
+        }
+
+        interface VaultServiceConfig {
+            @WithDefault("true")
+            boolean enabled();
+        }
+
+        interface StreamingServiceConfig {
+            @WithDefault("true")
+            boolean enabled();
+        }
+
+        interface FunctionsServiceConfig {
+            @WithDefault("true")
+            boolean enabled();
+
+            /**
+             * When {@code true}, no Docker containers are started: the management plane
+             * works fully and invocations return a synthetic body. The only container
+             * toggle for this service. Env: FLOCI_OCI_SERVICES_FUNCTIONS_MOCK
+             */
+            @WithDefault("false")
+            boolean mock();
+
+            /** The Fn Project server image backing real invocations. */
+            @WithDefault("fnproject/fnserver:latest")
+            String serverImage();
+
+            @WithDefault("8085")
+            int serverBasePort();
+
+            @WithDefault("8095")
+            int serverMaxPort();
+
+            @WithDefault("120")
+            int startupTimeoutSeconds();
         }
     }
 

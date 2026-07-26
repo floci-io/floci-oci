@@ -83,3 +83,18 @@ floci-oci:
       enabled: true
     objectstorage:
       enabled: true
+    queue:
+      enabled: true
+    kms:
+      enabled: true
+    vault:
+      enabled: true
+    streaming:
+      enabled: true
+    functions:
+      enabled: true
+      mock: false            # true = no Docker; invocations return a synthetic body
+      server-image: "fnproject/fnserver:latest"
+      server-base-port: 8085
+      server-max-port: 8095
+      startup-timeout-seconds: 120
