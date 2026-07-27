@@ -14,6 +14,9 @@ import java.util.List;
 public class StoredWorkRequest {
 
     private String id;
+    /** Owning service (identity, objectstorage, queue, streaming). Persisted, but excluded
+     *  from wire responses — controllers serialize via {@link #toWire()}. */
+    private String service;
     private String operationType;
     private String status;
     private String compartmentId;
@@ -24,6 +27,45 @@ public class StoredWorkRequest {
     private List<Resource> resources = new ArrayList<>();
 
     public StoredWorkRequest() {
+    }
+
+    /**
+     * The OCI wire shape: everything except the internal {@code service} partition tag.
+     * Field order matches the documented response body.
+     */
+    public java.util.Map<String, Object> toWire() {
+        java.util.Map<String, Object> wire = new java.util.LinkedHashMap<>();
+        wire.put("operationType", operationType);
+        wire.put("status", status);
+        wire.put("id", id);
+        wire.put("compartmentId", compartmentId);
+        wire.put("resources", resources.stream().map(r -> {
+            java.util.Map<String, Object> res = new java.util.LinkedHashMap<>();
+            res.put("entityType", r.getEntityType());
+            res.put("actionType", r.getActionType());
+            res.put("identifier", r.getIdentifier());
+            if (r.getEntityUri() != null) {
+                res.put("entityUri", r.getEntityUri());
+            }
+            return res;
+        }).toList());
+        wire.put("percentComplete", percentComplete);
+        wire.put("timeAccepted", timeAccepted);
+        if (timeStarted != null) {
+            wire.put("timeStarted", timeStarted);
+        }
+        if (timeFinished != null) {
+            wire.put("timeFinished", timeFinished);
+        }
+        return wire;
+    }
+
+    public String getService() {
+        return service;
+    }
+
+    public void setService(String service) {
+        this.service = service;
     }
 
     @RegisterForReflection

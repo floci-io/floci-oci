@@ -411,8 +411,8 @@ public class ObjectStorageController {
     @GET
     @Path("/workRequests/{workRequestId}")
     public Response getWorkRequest(@PathParam("workRequestId") String workRequestId) {
-        StoredWorkRequest wr = workRequests.get(workRequestId);
-        return Response.ok(wr).build();
+        StoredWorkRequest wr = workRequests.get("objectstorage", workRequestId);
+        return Response.ok(wr.toWire()).build();
     }
 
     @GET
@@ -420,8 +420,9 @@ public class ObjectStorageController {
     public Response listWorkRequests(@QueryParam("compartmentId") String compartmentId,
                                      @QueryParam("limit") Integer limit,
                                      @QueryParam("page") String page) {
-        OciPage.Page<StoredWorkRequest> result =
-                OciPage.paginate(workRequests.listByCompartment(compartmentId), limit, page);
+        OciPage.Page<Map<String, Object>> result = OciPage.paginate(
+                workRequests.list("objectstorage", compartmentId).stream()
+                        .map(StoredWorkRequest::toWire).toList(), limit, page);
         Response.ResponseBuilder builder = Response.ok(result.items());
         if (result.hasNextPage()) {
             builder.header(OciPage.OPC_NEXT_PAGE, result.nextPage());
@@ -432,14 +433,14 @@ public class ObjectStorageController {
     @GET
     @Path("/workRequests/{workRequestId}/errors")
     public Response listWorkRequestErrors(@PathParam("workRequestId") String workRequestId) {
-        workRequests.get(workRequestId);
+        workRequests.get("objectstorage", workRequestId);
         return Response.ok(List.of()).build();
     }
 
     @GET
     @Path("/workRequests/{workRequestId}/logs")
     public Response listWorkRequestLogs(@PathParam("workRequestId") String workRequestId) {
-        workRequests.get(workRequestId);
+        workRequests.get("objectstorage", workRequestId);
         return Response.ok(List.of()).build();
     }
 

@@ -17,8 +17,17 @@ import java.util.Map;
 /**
  * Shared work-request plane — OCI's async-operation record store. Services create a
  * work request when returning {@code 202} + {@code opc-work-request-id}; clients and
- * Terraform poll it until {@code SUCCEEDED}. Emulated operations complete synchronously,
- * so the typical call is {@link #succeeded}.
+ * Terraform poll it until terminal. Emulated operations complete synchronously, so the
+ * typical call is {@link #succeeded}, and the record always carries populated
+ * {@code resources} and a {@code timeFinished} — Terraform's retry predicates spin
+ * until both are present.
+ *
+ * <p>Work requests are partitioned by owning service ({@link StoredWorkRequest#getService()})
+ * because each OCI service exposes its own {@code /workRequests} listing; a queue work
+ * request must not appear in Identity's list.
+ *
+ * <p>The terminal success status differs per service on real OCI: Identity, Queue and
+ * Streaming use {@code SUCCEEDED}; Object Storage uses {@code COMPLETED}.
  */
 @ApplicationScoped
 public class WorkRequestService {
@@ -42,35 +51,32 @@ public class WorkRequestService {
     }
 
     /**
-     * Records an already-completed operation and returns its work-request OCID —
-     * the value for the {@code opc-work-request-id} response header.
-     *
-     * <p>The terminal success status differs per service on real OCI: Identity uses
-     * {@code SUCCEEDED}, Object Storage uses {@code COMPLETED}.
+     * Records an already-completed operation with terminal status {@code SUCCEEDED} and
+     * returns its work-request OCID — the value for the {@code opc-work-request-id} header.
      */
-    public String succeeded(String operationType, String compartmentId,
+    public String succeeded(String service, String operationType, String compartmentId,
                             List<StoredWorkRequest.Resource> resources) {
-        return completed(operationType, compartmentId, resources, "SUCCEEDED");
+        return completed(service, operationType, compartmentId, resources, "SUCCEEDED");
     }
 
     /** Records a completed operation with a service-specific terminal status. */
-    public String completed(String operationType, String compartmentId,
+    public String completed(String service, String operationType, String compartmentId,
                             List<StoredWorkRequest.Resource> resources, String terminalStatus) {
-        StoredWorkRequest wr = base(operationType, compartmentId, resources);
+        StoredWorkRequest wr = base(service, operationType, compartmentId, resources);
         wr.setStatus(terminalStatus);
         wr.setPercentComplete(100.0f);
         String now = Instant.now().toString();
         wr.setTimeStarted(now);
         wr.setTimeFinished(now);
         store.put(wr.getId(), wr);
-        LOG.debugf("workRequest %s: %s SUCCEEDED", wr.getId(), operationType);
+        LOG.debugf("workRequest %s: %s %s (%s)", wr.getId(), operationType, terminalStatus, service);
         return wr.getId();
     }
 
     /** Records a failed operation and returns its work-request OCID. */
-    public String failed(String operationType, String compartmentId,
+    public String failed(String service, String operationType, String compartmentId,
                          List<StoredWorkRequest.Resource> resources) {
-        StoredWorkRequest wr = base(operationType, compartmentId, resources);
+        StoredWorkRequest wr = base(service, operationType, compartmentId, resources);
         wr.setStatus("FAILED");
         wr.setPercentComplete(0.0f);
         String now = Instant.now().toString();
@@ -86,8 +92,19 @@ public class WorkRequestService {
                         "Work request not found or not authorized: " + workRequestId));
     }
 
-    public List<StoredWorkRequest> listByCompartment(String compartmentId) {
+    /** Get scoped to a service: foreign-service work requests read as not found. */
+    public StoredWorkRequest get(String service, String workRequestId) {
+        StoredWorkRequest wr = get(workRequestId);
+        if (service != null && wr.getService() != null && !service.equals(wr.getService())) {
+            throw OciException.notAuthorizedOrNotFound(
+                    "Work request not found or not authorized: " + workRequestId);
+        }
+        return wr;
+    }
+
+    public List<StoredWorkRequest> list(String service, String compartmentId) {
         return store.scan(k -> true).stream()
+                .filter(wr -> service == null || service.equals(wr.getService()))
                 .filter(wr -> compartmentId == null || compartmentId.equals(wr.getCompartmentId()))
                 .toList();
     }
@@ -97,10 +114,11 @@ public class WorkRequestService {
         return new StoredWorkRequest.Resource(entityType, actionType, identifier, entityUri);
     }
 
-    private StoredWorkRequest base(String operationType, String compartmentId,
+    private StoredWorkRequest base(String service, String operationType, String compartmentId,
                                    List<StoredWorkRequest.Resource> resources) {
         StoredWorkRequest wr = new StoredWorkRequest();
         wr.setId(Ocids.generateGlobal("coreservicesworkrequest", config.defaultRealm()));
+        wr.setService(service);
         wr.setOperationType(operationType);
         wr.setCompartmentId(compartmentId);
         wr.setTimeAccepted(Instant.now().toString());

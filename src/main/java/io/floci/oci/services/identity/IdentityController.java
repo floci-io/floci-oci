@@ -294,8 +294,8 @@ public class IdentityController {
     @GET
     @Path("/workRequests/{workRequestId}")
     public Response getWorkRequest(@PathParam("workRequestId") String workRequestId) {
-        StoredWorkRequest wr = workRequests.get(workRequestId);
-        return Response.ok(wr).build();
+        StoredWorkRequest wr = workRequests.get("identity", workRequestId);
+        return Response.ok(wr.toWire()).build();
     }
 
     @GET
@@ -303,7 +303,9 @@ public class IdentityController {
     public Response listWorkRequests(@QueryParam("compartmentId") String compartmentId,
                                      @QueryParam("limit") Integer limit,
                                      @QueryParam("page") String page) {
-        return paged(workRequests.listByCompartment(compartmentId), limit, page);
+        List<java.util.Map<String, Object>> items = workRequests.list("identity", compartmentId)
+                .stream().map(StoredWorkRequest::toWire).toList();
+        return paged(items, limit, page);
     }
 
     // ── Helpers ────────────────────────────────────────────────────────────────

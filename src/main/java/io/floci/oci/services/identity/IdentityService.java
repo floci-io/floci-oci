@@ -170,7 +170,7 @@ public class IdentityService {
         c.setLifecycleState("DELETED");
         c.setEtag(Etags.newEtag());
         compartments.put(c.getId(), c);
-        return workRequests.succeeded("DELETE_COMPARTMENT", c.getCompartmentId(),
+        return workRequests.succeeded("identity", "DELETE_COMPARTMENT", c.getCompartmentId(),
                 List.of(WorkRequestService.resource("COMPARTMENT", "DELETED", compartmentId,
                         "/20160918/compartments/" + compartmentId)));
     }

@@ -323,7 +323,7 @@ public class ObjectStorageService {
 
         StoredBucket bucket = getBucket(namespaceName, bucketName);
         // Object Storage work requests terminate in COMPLETED (Identity uses SUCCEEDED).
-        return workRequests.completed("COPY_OBJECT", bucket.getCompartmentId(),
+        return workRequests.completed("objectstorage", "COPY_OBJECT", bucket.getCompartmentId(),
                 List.of(WorkRequestService.resource("object", "CREATED", destObjectName,
                         "/n/" + namespace() + "/b/" + destBucket + "/o/" + destObjectName)),
                 "COMPLETED");

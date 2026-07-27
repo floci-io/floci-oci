@@ -71,6 +71,17 @@ public final class Ocids {
         return parse(value).map(o -> o.resourceType().equals(expectedType)).orElse(false);
     }
 
+    /** Region key short form used inside regional OCIDs, e.g. us-ashburn-1 → iad. */
+    public static String regionShort(String regionName) {
+        return switch (regionName) {
+            case "us-ashburn-1" -> "iad";
+            case "us-phoenix-1" -> "phx";
+            case "eu-frankfurt-1" -> "fra";
+            case "uk-london-1" -> "lhr";
+            default -> regionName.replaceAll("[^a-z]", "").substring(0, 3);
+        };
+    }
+
     private static String randomUnique() {
         StringBuilder sb = new StringBuilder(UNIQUE_LENGTH);
         for (int i = 0; i < UNIQUE_LENGTH; i++) {
