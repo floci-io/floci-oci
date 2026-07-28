@@ -4,6 +4,10 @@
 |---|---|---|
 | [Identity (IAM)](identity.md) | `/20160918/…` | Compartments, users, groups, memberships, policies, reference data, work requests |
 | [Object Storage](object-storage.md) | `/n/{ns}/b/{bucket}/o/{object}` | Buckets, objects, listing, rename, copy, multipart, pre-authenticated requests |
+| [Queue](queue.md) | `/20210201/…` | Queues (work-request driven), messages with visibility timeouts and DLQ, stats, channels |
+| [Vault, KMS & Secrets](kms-vault.md) | `/20180608/…`, `/20190301/…` | Vaults, keys and versions, **real** AES-GCM/RSA/ECDSA crypto, secrets and bundles |
+| [Streaming](streaming.md) | `/20180418/…` | Streams, partitioned log, cursors (incl. group cursors), commit/heartbeat |
+| [Functions](functions.md) | `/20181201/…` | Applications, functions, real invocation via an `fnproject/fnserver` sidecar |
 
 ## Wire contract
 
@@ -24,6 +28,11 @@ Every service follows the OCI wire contract:
 ```bash
 FLOCI_OCI_SERVICES_IDENTITY_ENABLED=false
 FLOCI_OCI_SERVICES_OBJECTSTORAGE_ENABLED=false
+FLOCI_OCI_SERVICES_QUEUE_ENABLED=false
+FLOCI_OCI_SERVICES_KMS_ENABLED=false
+FLOCI_OCI_SERVICES_VAULT_ENABLED=false
+FLOCI_OCI_SERVICES_STREAMING_ENABLED=false
+FLOCI_OCI_SERVICES_FUNCTIONS_ENABLED=false
 ```
 
 Disabled services answer `503 ServiceUnavailable`.
