@@ -66,3 +66,76 @@ output "bucket_name" {
 output "object_md5" {
   value = oci_objectstorage_object.tf_object.content_md5
 }
+
+# ── Queue (work-request driven control plane) ────────────────────────────────
+
+resource "oci_queue_queue" "tf_queue" {
+  compartment_id = var.tenancy_ocid
+  display_name   = "tf-compat-queue"
+
+  retention_in_seconds  = 3600
+  visibility_in_seconds = 30
+}
+
+# ── KMS vault + key (endpoint indirection) ───────────────────────────────────
+
+resource "oci_kms_vault" "tf_vault" {
+  compartment_id = var.tenancy_ocid
+  display_name   = "tf-compat-vault"
+  vault_type     = "DEFAULT"
+}
+
+resource "oci_kms_key" "tf_key" {
+  compartment_id      = var.tenancy_ocid
+  display_name        = "tf-compat-key"
+  management_endpoint = oci_kms_vault.tf_vault.management_endpoint
+
+  key_shape {
+    algorithm = "AES"
+    length    = 32
+  }
+}
+
+# ── Vault secret ─────────────────────────────────────────────────────────────
+
+resource "oci_vault_secret" "tf_secret" {
+  compartment_id = var.tenancy_ocid
+  vault_id       = oci_kms_vault.tf_vault.id
+  key_id         = oci_kms_key.tf_key.id
+  secret_name    = "tf-compat-secret"
+
+  secret_content {
+    content_type = "BASE64"
+    content      = base64encode("terraform secret payload")
+  }
+}
+
+# ── Streaming (dual body + work-request create) ──────────────────────────────
+
+resource "oci_streaming_stream" "tf_stream" {
+  name               = "tf-compat-stream"
+  partitions         = 2
+  compartment_id     = var.tenancy_ocid
+  retention_in_hours = 24
+}
+
+# NOTE: oci_functions_application is deliberately NOT exercised here — the provider
+# hardcodes a 5-minute post-destroy sleep (ExtraWaitPostDelete) outside httpreplay
+# mode, which would dominate the suite's runtime. Functions coverage lives in the
+# SDK suites and FunctionsDockerTest instead.
+
+output "queue_messages_endpoint" {
+  value = oci_queue_queue.tf_queue.messages_endpoint
+}
+
+output "vault_management_endpoint" {
+  value = oci_kms_vault.tf_vault.management_endpoint
+}
+
+output "key_state" {
+  value = oci_kms_key.tf_key.state
+}
+
+output "stream_messages_endpoint" {
+  value = oci_streaming_stream.tf_stream.messages_endpoint
+}
