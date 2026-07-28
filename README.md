@@ -386,16 +386,21 @@ Or a single suite against a locally running emulator: `make test-java-compat`, `
 
 Every tag combines a variant and a channel.
 
-| Channel | Tag |
-|---|---|
-| Release, floating | `latest` |
-| Release, pinned | `x.y.z` |
-| Nightly, floating | `nightly` |
-| Nightly, dated | `nightly-mmddyyyy` |
+| Channel | Standard | Compat with OCI CLI and Python SDK |
+|---|---|---|
+| Release, floating | `latest` | `latest-compat` |
+| Release, pinned | `x.y.z` | `x.y.z-compat` |
+| Nightly, floating | `nightly` | `nightly-compat` |
+| Nightly, dated | `nightly-mmddyyyy` | `nightly-mmddyyyy-compat` |
+
+Use `latest` for stable releases, a pinned version for reproducible builds, and `nightly` to track `main`.
 
 ```yaml
 # Recommended
 image: floci/floci-oci:latest
+
+# Includes the OCI CLI and the oci Python SDK
+image: floci/floci-oci:latest-compat
 
 # Pinned release
 image: floci/floci-oci:0.1.0
@@ -403,6 +408,18 @@ image: floci/floci-oci:0.1.0
 # Track main
 image: floci/floci-oci:nightly
 ```
+
+The compat image ships a throwaway API key and config, so the CLI works with no setup:
+
+```bash
+docker run -d --name floci-oci -p 4599:4599 floci/floci-oci:latest-compat
+docker exec floci-oci ocilocal os ns get
+```
+
+`ocilocal` is a thin wrapper that points `oci` at the emulator. The bundled key exists
+only because the OCI CLI refuses to run without one — floci-oci parses request
+signatures but never verifies them, so the key is public by design. Never point that
+config at real OCI.
 
 ## Configuration
 
