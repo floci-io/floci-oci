@@ -39,7 +39,9 @@ setup() {
     [ -n "$output" ]
 
     run "$TF_BIN" output -raw vault_management_endpoint
-    [[ "$output" == */kms/ocid1.vault.* ]]
+    # Host-only by design: the OCI SDKs reject endpoints containing a path, so every
+    # vault is served from the single emulator host (see docs/services/kms-vault.md).
+    [[ "$output" == http*://* ]]
 
     run "$TF_BIN" output -raw key_state
     [ "$output" = "ENABLED" ]
