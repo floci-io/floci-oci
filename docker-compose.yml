@@ -2,7 +2,7 @@ services:
   floci-oci:
     build:
       context: .
-      dockerfile: docker/Dockerfile
+      dockerfile: docker/Dockerfile.native
     tty: true
     ports:
       - "4599:4599"
