@@ -26,6 +26,11 @@ quarkus:
       - --initialize-at-run-time=org.bouncycastle.jcajce.provider.asymmetric.x509.CertificateFactory
       - --initialize-at-run-time=io.floci.oci.core.common.BouncyCastleInitializer
       - --initialize-at-run-time=io.floci.oci.config.TlsConfigSource
+      # Classes holding a static SecureRandom: GraalVM refuses to bake a seeded
+      # RNG into the image heap, so their initializers must run at image runtime.
+      - --initialize-at-run-time=io.floci.oci.core.common.Ocids
+      - --initialize-at-run-time=io.floci.oci.core.tls.CertificateGenerator
+      - --initialize-at-run-time=io.floci.oci.services.kms.KmsService
 
 floci-oci:
   port: 4599
