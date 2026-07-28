@@ -41,6 +41,69 @@ public final class EmulatorFixture {
         return client;
     }
 
+    public static com.oracle.bmc.queue.QueueAdminClient queueAdmin() {
+        var client = com.oracle.bmc.queue.QueueAdminClient.builder()
+                .region(Region.US_ASHBURN_1).build(AUTH);
+        client.setEndpoint(ENDPOINT);
+        return client;
+    }
+
+    public static com.oracle.bmc.queue.QueueClient queueData() {
+        var client = com.oracle.bmc.queue.QueueClient.builder()
+                .region(Region.US_ASHBURN_1).build(AUTH);
+        client.setEndpoint(ENDPOINT);
+        return client;
+    }
+
+    public static com.oracle.bmc.keymanagement.KmsVaultClient kmsVault() {
+        var client = com.oracle.bmc.keymanagement.KmsVaultClient.builder()
+                .region(Region.US_ASHBURN_1).build(AUTH);
+        client.setEndpoint(ENDPOINT);
+        return client;
+    }
+
+    public static com.oracle.bmc.keymanagement.KmsManagementClient kmsManagement(String endpoint) {
+        return com.oracle.bmc.keymanagement.KmsManagementClient.builder()
+                .endpoint(endpoint).build(AUTH);
+    }
+
+    public static com.oracle.bmc.keymanagement.KmsCryptoClient kmsCrypto(String endpoint) {
+        return com.oracle.bmc.keymanagement.KmsCryptoClient.builder()
+                .endpoint(endpoint).build(AUTH);
+    }
+
+    public static com.oracle.bmc.vault.VaultsClient vaults() {
+        var client = com.oracle.bmc.vault.VaultsClient.builder()
+                .region(Region.US_ASHBURN_1).build(AUTH);
+        client.setEndpoint(ENDPOINT);
+        return client;
+    }
+
+    public static com.oracle.bmc.secrets.SecretsClient secrets() {
+        var client = com.oracle.bmc.secrets.SecretsClient.builder()
+                .region(Region.US_ASHBURN_1).build(AUTH);
+        client.setEndpoint(ENDPOINT);
+        return client;
+    }
+
+    public static com.oracle.bmc.streaming.StreamAdminClient streamAdmin() {
+        var client = com.oracle.bmc.streaming.StreamAdminClient.builder()
+                .region(Region.US_ASHBURN_1).build(AUTH);
+        client.setEndpoint(ENDPOINT);
+        return client;
+    }
+
+    public static com.oracle.bmc.streaming.StreamClient streamData(String endpoint) {
+        return com.oracle.bmc.streaming.StreamClient.builder().endpoint(endpoint).build(AUTH);
+    }
+
+    public static com.oracle.bmc.functions.FunctionsManagementClient functionsManagement() {
+        var client = com.oracle.bmc.functions.FunctionsManagementClient.builder()
+                .region(Region.US_ASHBURN_1).build(AUTH);
+        client.setEndpoint(ENDPOINT);
+        return client;
+    }
+
     public static ObjectStorageClient objectStorage() {
         ObjectStorageClient client = ObjectStorageClient.builder()
                 .region(Region.US_ASHBURN_1)
