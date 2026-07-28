@@ -1,0 +1,48 @@
+ARG VERSION=latest
+FROM floci/floci-oci:${VERSION}
+
+LABEL org.opencontainers.image.title="floci-oci (compat)" \
+      org.opencontainers.image.description="floci-oci compatibility image with the OCI CLI and Python SDK pre-installed" \
+      org.opencontainers.image.url="https://floci.io" \
+      org.opencontainers.image.source="https://github.com/floci-io/floci-oci" \
+      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.vendor="Floci"
+
+ENV FLOCI_OCI_ENDPOINT=http://localhost:4599
+# OCI_CLI_CONFIG_FILE is read by the CLI, OCI_CONFIG_FILE by the SDKs.
+ENV OCI_CLI_CONFIG_FILE=/etc/floci-oci/oci/config
+ENV OCI_CONFIG_FILE=/etc/floci-oci/oci/config
+
+RUN microdnf install -y --nodocs python3.11 python3.11-pip \
+    && python3.11 -m pip install --upgrade pip \
+    && python3.11 -m pip install --no-cache-dir oci oci-cli \
+    && microdnf clean all \
+    && rm -rf /root/.cache/pip
+
+COPY --chmod=755 bin/ocilocal /usr/local/bin/ocilocal
+
+# Pre-create the init-hook directories so archive-based copies (Testcontainers
+# withCopyFileToContainer / `docker cp`) can drop hooks straight into them.
+# Docker's archive extract unpacks into an existing dir and never mkdir -p's
+# the parents, so without these the copy fails. Paths match InitializationHook.
+RUN mkdir -p /etc/floci-oci/init/boot.d /etc/floci-oci/init/start.d \
+             /etc/floci-oci/init/ready.d /etc/floci-oci/init/stop.d \
+             /etc/floci-oci/init/shutdown.d
+
+# The OCI CLI refuses to run without an API key, so ship a throwaway one — the
+# emulator parses signatures but never verifies them. Public by construction.
+COPY docker/gen-oci-cli-config.py /tmp/gen-oci-cli-config.py
+RUN python3.11 /tmp/gen-oci-cli-config.py \
+    && rm /tmp/gen-oci-cli-config.py \
+    && chown -R 1001:root /etc/floci-oci
+
+# Tools that ignore the env vars and only look at ~/.oci/config — the Java SDK
+# and the Terraform provider among them — need it at both homes: root (the
+# image user, so `docker exec` works) and /app (the floci runtime user).
+RUN mkdir -p /root/.oci /app/.oci \
+    && ln -sf /etc/floci-oci/oci/config /root/.oci/config \
+    && ln -sf /etc/floci-oci/oci/config /app/.oci/config \
+    && chown -R 1001:root /app/.oci
+
+# No USER directive on purpose: the base image stays root so entrypoint.sh can
+# fix up /app/data ownership and drop to uid 1001 through gosu.
