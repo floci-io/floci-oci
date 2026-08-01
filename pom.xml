@@ -15,8 +15,8 @@
     <properties>
         <maven.compiler.release>25</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <quarkus.platform.version>3.36.3</quarkus.platform.version>
-        <jackson.version>2.21.4</jackson.version>
+        <quarkus.platform.version>3.37.4</quarkus.platform.version>
+        <jackson.version>2.22.1</jackson.version>
     </properties>
 
     <dependencyManagement>
@@ -114,12 +114,12 @@
         <dependency>
             <groupId>org.bouncycastle</groupId>
             <artifactId>bcprov-jdk18on</artifactId>
-            <version>1.84</version>
+            <version>1.85</version>
         </dependency>
         <dependency>
             <groupId>org.bouncycastle</groupId>
             <artifactId>bcpkix-jdk18on</artifactId>
-            <version>1.84</version>
+            <version>1.85</version>
         </dependency>
 
         <!-- Testing -->
@@ -141,7 +141,7 @@
         <dependency>
             <groupId>org.awaitility</groupId>
             <artifactId>awaitility</artifactId>
-            <version>4.2.2</version>
+            <version>4.3.0</version>
             <scope>test</scope>
         </dependency>
     </dependencies>
