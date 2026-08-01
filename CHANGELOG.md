@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **docker:** every emulator-created container and volume is now labelled `floci=true` and `floci_emulator=floci-oci` (plus `floci_namespace` when `FLOCI_OCI_DOCKER_RESOURCE_NAMESPACE` is set), so one emulator's resources can be filtered or pruned without touching sibling Floci emulators on the same Docker host: `docker volume prune --filter label=floci_emulator=floci-oci`
+- **docs:** documented `FLOCI_OCI_DOCKER_RESOURCE_NAMESPACE`
+
+### Changed
+
+- **docker:** the `floci-oci-` container/volume name prefix is now owned by `ContainerStorageHelper` instead of being spelled at call sites. Default names are unchanged (`floci-oci-fnserver`); with a resource namespace configured, the namespace now lands after the cloud token (`floci-oci-<ns>-fnserver`, previously `floci-<ns>-oci-fnserver`). If you run namespaced instances, remove orphaned containers from earlier versions with `docker rm -f $(docker ps -aq --filter name=^/floci-)`
+
 ## [0.1.0] - 2026-07-27
 
 Initial release. floci-oci emulates seven Oracle Cloud Infrastructure services on a

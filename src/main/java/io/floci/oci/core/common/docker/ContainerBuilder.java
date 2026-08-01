@@ -13,6 +13,7 @@ import jakarta.inject.Inject;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -24,7 +25,7 @@ import java.util.Optional;
  * <p>Example usage:
  * <pre>{@code
  * ContainerSpec spec = containerBuilder.newContainer("nginx:latest")
- *     .withName("floci-my-service")
+ *     .withName(ContainerStorageHelper.dockerName(config, "my-service"))
  *     .withEnv("MY_VAR", "value")
  *     .withDynamicPort(8080)
  *     .withDockerNetwork(config.services().myService().dockerNetwork())
@@ -126,6 +127,7 @@ public class ContainerBuilder {
         private String user;
         private final List<String> groupAdd = new ArrayList<>();
         private final List<String> dnsServers = new ArrayList<>();
+        private final Map<String, String> labels = new LinkedHashMap<>();
 
         Builder(String image, EmulatorConfig config, DockerHostResolver dockerHostResolver,
                 EmbeddedDnsServer embeddedDnsServer,
@@ -387,6 +389,22 @@ public class ContainerBuilder {
         }
 
         /**
+         * Adds a single Docker label. Merged over the emulator default labels at create time.
+         */
+        public Builder withLabel(String key, String value) {
+            this.labels.put(key, value);
+            return this;
+        }
+
+        /**
+         * Adds multiple Docker labels. Merged over the emulator default labels at create time.
+         */
+        public Builder withLabels(Map<String, String> labels) {
+            this.labels.putAll(labels);
+            return this;
+        }
+
+        /**
          * Injects Floci's embedded DNS server into the container so virtual-hosted
          * S3 hostnames (my-bucket.localhost.floci.io) resolve to Floci's Docker
          * network IP. No-op when the embedded DNS server is not running.
@@ -432,7 +450,8 @@ public class ContainerBuilder {
                     List.copyOf(dnsServers),
                     workingDir,
                     user,
-                    List.copyOf(groupAdd)
+                    List.copyOf(groupAdd),
+                    Map.copyOf(labels)
             );
         }
     }

@@ -29,6 +29,7 @@ All configuration lives under the `floci-oci.*` prefix; every property maps to a
 | `FLOCI_OCI_SERVICES_FUNCTIONS_MOCK` | `false` | Skip the Fn sidecar; invocations return a synthetic body |
 | `FLOCI_OCI_SERVICES_FUNCTIONS_SERVER_IMAGE` | `fnproject/fnserver:latest` | Fn Project server image |
 | `FLOCI_OCI_SERVICES_DOCKER_NETWORK` | – | Shared Docker network for sidecar containers |
+| `FLOCI_OCI_DOCKER_RESOURCE_NAMESPACE` | – | Namespace inserted into sidecar container/volume names (`floci-oci-<ns>-…`) so parallel emulator instances on one Docker host don't collide |
 
 Per-service storage overrides use the map form:
 

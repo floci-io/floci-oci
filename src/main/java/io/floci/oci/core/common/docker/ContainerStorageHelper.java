@@ -6,14 +6,22 @@ import org.jboss.logging.Logger;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 /**
- * Central helper for child-container volume management across RDS, OpenSearch, MSK, and ECR.
+ * Central helper for naming and labelling emulator-managed Docker containers and volumes,
+ * and for child-container volume management.
  *
- * <p>Two modes:
+ * <p>Every emulator-created resource is named {@code floci-oci-[<namespace>-]<service>[-<id>]}
+ * and labelled {@code floci=true} plus {@code floci_emulator=floci-oci} so it is attributable
+ * to this emulator by name and by label. The prefix is owned here — call sites pass bare
+ * service tokens, never the prefix.
+ *
+ * <p>Volume storage modes:
  * <ul>
- *   <li>Named-volume (default) — Floci manages per-resource Docker named volumes labelled
- *       {@code floci=true}. Active when {@code FLOCI_STORAGE_HOST_PERSISTENT_PATH} is not set.</li>
+ *   <li>Named-volume (default) — Floci manages per-resource Docker named volumes.
+ *       Active when {@code FLOCI_STORAGE_HOST_PERSISTENT_PATH} is not set.</li>
  *   <li>Host-path (legacy) — active when {@code FLOCI_STORAGE_HOST_PERSISTENT_PATH} is set;
  *       callers fall through to their existing bind-mount logic.</li>
  * </ul>
@@ -21,6 +29,10 @@ import java.nio.file.Path;
 public final class ContainerStorageHelper {
 
     private static final Logger LOG = Logger.getLogger(ContainerStorageHelper.class);
+
+    static final String CLOUD = "oci";
+    static final String CONTAINER_PREFIX = "floci-" + CLOUD + "-";
+    static final String LEGACY_PREFIX = "floci-";
 
     private ContainerStorageHelper() {}
 
@@ -34,18 +46,48 @@ public final class ContainerStorageHelper {
     }
 
     public static String resourceName(EmulatorConfig config, String service, String volumeId, String fallbackId) {
-        return dockerName(config, "floci-" + service + "-" + (volumeId != null ? volumeId : fallbackId));
+        return dockerName(config, service + "-" + (volumeId != null ? volumeId : fallbackId));
     }
 
+    /**
+     * Prefixes {@code baseName} with {@code floci-oci-} and the configured resource namespace.
+     * Accepts already-prefixed names (current or legacy {@code floci-} prefix) and normalises
+     * them, so the namespace always lands between the cloud token and the service token.
+     */
     public static String dockerName(EmulatorConfig config, String baseName) {
+        String base = stripPrefix(baseName);
         String namespace = resourceNamespace(config);
         if (namespace.isBlank()) {
-            return baseName;
+            return CONTAINER_PREFIX + base;
         }
-        if (baseName.startsWith("floci-")) {
-            return "floci-" + namespace + "-" + baseName.substring("floci-".length());
+        return CONTAINER_PREFIX + namespace + "-" + base;
+    }
+
+    /**
+     * Labels applied to every emulator-created container and volume:
+     * {@code floci=true} (umbrella across all Floci emulators),
+     * {@code floci_emulator=floci-oci} (per-emulator discriminator), and
+     * {@code floci_namespace} when a resource namespace is configured.
+     */
+    public static Map<String, String> defaultLabels(EmulatorConfig config) {
+        Map<String, String> labels = new LinkedHashMap<>();
+        labels.put("floci", "true");
+        labels.put("floci_emulator", "floci-" + CLOUD);
+        String namespace = resourceNamespace(config);
+        if (!namespace.isBlank()) {
+            labels.put("floci_namespace", namespace);
         }
-        return "floci-" + namespace + "-" + baseName;
+        return labels;
+    }
+
+    private static String stripPrefix(String baseName) {
+        if (baseName.startsWith(CONTAINER_PREFIX)) {
+            return baseName.substring(CONTAINER_PREFIX.length());
+        }
+        if (baseName.startsWith(LEGACY_PREFIX)) {
+            return baseName.substring(LEGACY_PREFIX.length());
+        }
+        return baseName;
     }
 
     public static Path hostResourcePath(EmulatorConfig config, String service, String resourceId) {

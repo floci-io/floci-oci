@@ -4,6 +4,7 @@ import io.floci.oci.config.EmulatorConfig;
 import org.junit.jupiter.api.Test;
 
 import java.nio.file.Path;
+import java.util.Map;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -13,36 +14,58 @@ import static org.mockito.Mockito.when;
 class ContainerStorageHelperTest {
 
     @Test
-    void resourceNamesStayUnchangedWithoutNamespace() {
-        assertEquals("floci-rds-db1", ContainerStorageHelper.resourceName("rds", null, "db1"));
-        assertEquals("floci-rds-vol1", ContainerStorageHelper.resourceName(config(""), "rds", "vol1", "db1"));
-        assertEquals("floci-opensearch-domain1", ContainerStorageHelper.resourceName(config(""), "opensearch", null, "domain1"));
-        assertEquals("floci-ec2-i-123", ContainerStorageHelper.dockerName(config(""), "floci-ec2-i-123"));
+    void namesCarryTheOciPrefixWithoutNamespace() {
+        assertEquals("floci-oci-fnserver", ContainerStorageHelper.dockerName(config(""), "fnserver"));
+        assertEquals("floci-oci-fnserver-id1", ContainerStorageHelper.resourceName("fnserver", null, "id1"));
+        assertEquals("floci-oci-fnserver-vol1", ContainerStorageHelper.resourceName(config(""), "fnserver", "vol1", "id1"));
     }
 
     @Test
-    void resourceNamesIncludeSanitizedNamespaceWhenConfigured() {
+    void namespaceLandsBetweenCloudAndServiceTokens() {
         EmulatorConfig config = config(" run/one ");
 
-        assertEquals("floci-run-one-rds-db1", ContainerStorageHelper.resourceName(config, "rds", null, "db1"));
-        assertEquals("floci-run-one-rds-vol1", ContainerStorageHelper.resourceName(config, "rds", "vol1", "db1"));
-        assertEquals("floci-run-one-ec2-i-123", ContainerStorageHelper.dockerName(config, "floci-ec2-i-123"));
-        assertEquals("floci-run-one-ui", ContainerStorageHelper.dockerName(config, "floci-ui"));
+        assertEquals("floci-oci-run-one-fnserver", ContainerStorageHelper.dockerName(config, "fnserver"));
+        assertEquals("floci-oci-run-one-fnserver-id1", ContainerStorageHelper.resourceName(config, "fnserver", null, "id1"));
+        assertEquals("floci-oci-run-one-fnserver-vol1", ContainerStorageHelper.resourceName(config, "fnserver", "vol1", "id1"));
+    }
+
+    @Test
+    void alreadyPrefixedNamesAreNormalized() {
+        assertEquals("floci-oci-fnserver", ContainerStorageHelper.dockerName(config(""), "floci-oci-fnserver"));
+        assertEquals("floci-oci-fnserver", ContainerStorageHelper.dockerName(config(""), "floci-fnserver"));
+        assertEquals("floci-oci-run-one-fnserver", ContainerStorageHelper.dockerName(config("run-one"), "floci-oci-fnserver"));
+        assertEquals("floci-oci-run-one-fnserver", ContainerStorageHelper.dockerName(config("run-one"), "floci-fnserver"));
+    }
+
+    @Test
+    void defaultLabelsIdentifyThisEmulator() {
+        assertEquals(
+                Map.of("floci", "true", "floci_emulator", "floci-oci"),
+                ContainerStorageHelper.defaultLabels(config("")));
+        assertEquals(
+                Map.of("floci", "true", "floci_emulator", "floci-oci", "floci_namespace", "run-one"),
+                ContainerStorageHelper.defaultLabels(config(" run/one ")));
+        assertEquals(
+                Map.of("floci", "true", "floci_emulator", "floci-oci"),
+                ContainerStorageHelper.defaultLabels(null));
     }
 
     @Test
     void hostResourcePathsIncludeNamespaceWhenConfigured() {
         EmulatorConfig config = config("run-one");
 
-        assertEquals(Path.of("/tmp/floci/run-one/rds/db1"), ContainerStorageHelper.hostResourcePath(config, "rds", "db1"));
+        assertEquals(Path.of("/tmp/floci/run-one/fnserver/id1"), ContainerStorageHelper.hostResourcePath(config, "fnserver", "id1"));
     }
 
     @Test
     void unsafeNamespaceSegmentsAreIgnored() {
         EmulatorConfig config = config("..");
 
-        assertEquals(Path.of("/tmp/floci/rds/db1"), ContainerStorageHelper.hostResourcePath(config, "rds", "db1"));
-        assertEquals("floci-rds-db1", ContainerStorageHelper.resourceName(config, "rds", null, "db1"));
+        assertEquals(Path.of("/tmp/floci/fnserver/id1"), ContainerStorageHelper.hostResourcePath(config, "fnserver", "id1"));
+        assertEquals("floci-oci-fnserver-id1", ContainerStorageHelper.resourceName(config, "fnserver", null, "id1"));
+        assertEquals(
+                Map.of("floci", "true", "floci_emulator", "floci-oci"),
+                ContainerStorageHelper.defaultLabels(config));
     }
 
     private static EmulatorConfig config(String namespace) {

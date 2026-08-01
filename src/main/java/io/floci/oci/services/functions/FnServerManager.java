@@ -67,7 +67,7 @@ public class FnServerManager {
             LOG.warn("fnserver container died — restarting");
             stop();
         }
-        String name = ContainerStorageHelper.dockerName(config, "floci-oci-fnserver");
+        String name = ContainerStorageHelper.dockerName(config, "fnserver");
         lifecycleManager.removeIfExists(name);
         int port = portAllocator.allocate(
                 config.services().functions().serverBasePort(),
@@ -90,6 +90,7 @@ public class FnServerManager {
                 .withNamedVolume(iofsVolume, "/iofs")
                 .withDockerNetwork(config.services().dockerNetwork())
                 .withLogRotation()
+                .withLabel("floci_service", "functions")
                 .build();
         ContainerLifecycleManager.ContainerInfo info = lifecycleManager.createAndStart(spec);
         containerId = info.containerId();
@@ -131,7 +132,7 @@ public class FnServerManager {
             try {
                 lifecycleManager.stopAndRemove(containerId, null);
                 lifecycleManager.removeVolume(
-                        ContainerStorageHelper.dockerName(config, "floci-oci-fnserver") + "-iofs");
+                        ContainerStorageHelper.dockerName(config, "fnserver") + "-iofs");
             } catch (Exception e) {
                 LOG.warnv("Failed to stop fnserver container: {0}", e.getMessage());
             }
