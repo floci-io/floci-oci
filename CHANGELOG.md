@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **release:** one-button releases — new "Release Cut" workflow (`workflow_dispatch`, with a dry-run option) runs semantic-release from `main`: bumps `pom.xml`, writes `CHANGELOG.md`, commits, tags, and creates the GitHub Release; the tag then triggers the existing publishing workflow. `release/x.y.x` branches are retired for now
 - **docker:** every emulator-created container and volume is now labelled `floci=true` and `floci_emulator=floci-oci` (plus `floci_namespace` when `FLOCI_OCI_DOCKER_RESOURCE_NAMESPACE` is set), so one emulator's resources can be filtered or pruned without touching sibling Floci emulators on the same Docker host: `docker volume prune --filter label=floci_emulator=floci-oci`
 - **docs:** documented `FLOCI_OCI_DOCKER_RESOURCE_NAMESPACE`
 
