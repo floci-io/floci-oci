@@ -1,3 +1,22 @@
+# [0.2.0](https://github.com/floci-io/floci-oci/compare/0.1.0...0.2.0) (2026-08-05)
+
+
+### Bug Fixes
+
+* **tls:** register BouncyCastle before the persisted-cert reuse check ([#6](https://github.com/floci-io/floci-oci/issues/6)) ([6c12a14](https://github.com/floci-io/floci-oci/commit/6c12a140b012b7efda83264070a22785fdcfaaf4))
+
+
+### Features
+
+* **docker:** compat image with the OCI CLI and Python SDK preconfigured ([91f0535](https://github.com/floci-io/floci-oci/commit/91f0535ad8fcbea62dc15dfe2245bf56b08f232f))
+* **docker:** label all containers/volumes, own the floci-oci- prefix ([#5](https://github.com/floci-io/floci-oci/issues/5)) ([a7f6ecf](https://github.com/floci-io/floci-oci/commit/a7f6ecfa910e3ad06d7789ad0c7e1b385e1ad7c7))
+* **release:** one-button release cut from main ([#8](https://github.com/floci-io/floci-oci/issues/8)) ([a4a8a2a](https://github.com/floci-io/floci-oci/commit/a4a8a2a5bba3b6ad1e54f4b86f13cd02125f734a))
+
+
+### Performance Improvements
+
+* **docker:** stop duplicating the native binary into a second image layer ([#7](https://github.com/floci-io/floci-oci/issues/7)) ([72e4920](https://github.com/floci-io/floci-oci/commit/72e4920e0fd0319650690610a1b81a51d839dbc7))
+
 # Changelog
 
 All notable changes to this project will be documented in this file.
