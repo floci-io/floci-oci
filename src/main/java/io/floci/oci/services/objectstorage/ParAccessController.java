@@ -30,6 +30,8 @@ public class ParAccessController {
             Set.of("ObjectRead", "ObjectReadWrite", "AnyObjectRead", "AnyObjectReadWrite");
     private static final Set<String> WRITE_TYPES =
             Set.of("ObjectWrite", "ObjectReadWrite", "AnyObjectWrite", "AnyObjectReadWrite");
+    private static final Set<String> PREFIX_TYPES =
+            Set.of("AnyObjectRead", "AnyObjectWrite", "AnyObjectReadWrite");
 
     private final ObjectStorageService service;
 
@@ -73,9 +75,13 @@ public class ParAccessController {
             throw OciException.notAuthorizedOrNotFound(
                     "The pre-authenticated request does not grant access to this bucket.");
         }
-        if (par.getObjectName() != null && !par.getObjectName().equals(objectName)) {
-            throw OciException.notAuthorizedOrNotFound(
-                    "The pre-authenticated request does not grant access to this object.");
+        if (par.getObjectName() != null) {
+            boolean isPrefixMatch = PREFIX_TYPES.contains(par.getAccessType())
+                    && objectName.startsWith(par.getObjectName());
+            if (!isPrefixMatch && !par.getObjectName().equals(objectName)) {
+                throw OciException.notAuthorizedOrNotFound(
+                        "The pre-authenticated request does not grant access to this object.");
+            }
         }
         if (!allowedTypes.contains(par.getAccessType())) {
             throw OciException.notAuthorizedOrNotFound(
