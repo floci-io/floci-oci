@@ -304,6 +304,40 @@ class ObjectStorageRestIntegrationTest {
     }
 
     @Test
+    void prefixPreauthenticatedRequestGrantsWriteUnderPrefix() {
+        String bucket = uniqueBucket("it-par-prefix");
+        createBucket(bucket);
+
+        String accessUri = given()
+                .contentType("application/json")
+                .body(Map.of("name", "uploads", "accessType", "AnyObjectWrite",
+                        "timeExpires", "2999-01-01T00:00:00Z", "objectName", "uploads/"))
+            .when().post("/n/" + NS + "/b/" + bucket + "/p")
+            .then().statusCode(200)
+                .body("accessUri", startsWith("/p/"))
+                .extract().path("accessUri");
+
+        // A prefix PAR must allow writes to any object name under that prefix.
+        given().contentType("text/plain").body("under-prefix")
+            .when().put(accessUri + "file.txt")
+            .then().statusCode(200);
+
+        given()
+            .when().get("/n/" + NS + "/b/" + bucket + "/o/uploads/file.txt")
+            .then().statusCode(200).body(equalTo("under-prefix"));
+
+        // Writes outside the granted prefix must still be rejected — same PAR token,
+        // an object name that does not start with "uploads/".
+        String parBasePath = accessUri.substring(0, accessUri.length() - "uploads/".length());
+        given().contentType("text/plain").body("outside-prefix")
+            .when().put(parBasePath + "other/file.txt")
+            .then().statusCode(404);
+
+        given().when().delete("/n/" + NS + "/b/" + bucket + "/o/uploads/file.txt").then().statusCode(204);
+        given().when().delete("/n/" + NS + "/b/" + bucket).then().statusCode(204);
+    }
+
+    @Test
     void listRetentionRulesAnswersEmptyCollection() {
         // Terraform's bucket Read calls ListRetentionRules unconditionally — a 404 here
         // makes the provider silently drop the bucket from state.
