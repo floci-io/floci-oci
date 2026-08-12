@@ -39,13 +39,6 @@
     </dependencyManagement>
 
     <dependencies>
-        <!-- floci-core shared foundation library -->
-        <dependency>
-            <groupId>org.floci</groupId>
-            <artifactId>floci-core</artifactId>
-            <version>1.0.0-SNAPSHOT</version>
-        </dependency>
-
         <!-- Quarkus REST (RESTEasy Reactive) -->
         <dependency>
             <groupId>io.quarkus</groupId>
