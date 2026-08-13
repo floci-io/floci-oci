@@ -9,6 +9,7 @@ import io.floci.oci.core.common.ServiceDescriptor;
 import io.floci.oci.core.common.ServiceRegistry;
 import io.floci.oci.core.storage.StorageBackend;
 import io.floci.oci.core.storage.StorageFactory;
+import io.floci.oci.core.storage.TenancyAwareStorageBackend;
 import io.floci.oci.core.workrequest.StoredWorkRequest;
 import io.floci.oci.core.workrequest.WorkRequestService;
 import io.floci.oci.services.oke.model.StoredNodePool;
@@ -80,7 +81,10 @@ public class OkeService implements Resettable {
         if (clusterManager == null || config == null || config.services().oke().mock()) {
             return;
         }
-        List<StoredOkeCluster> existingClusters = clusters.scan(k -> true);
+        @SuppressWarnings("unchecked")
+        List<StoredOkeCluster> existingClusters = (clusters instanceof TenancyAwareStorageBackend)
+                ? ((TenancyAwareStorageBackend<StoredOkeCluster>) clusters).scanAllTenancies()
+                : clusters.scan(k -> true);
         for (StoredOkeCluster cluster : existingClusters) {
             clusterManager.registerExistingCluster(cluster);
         }

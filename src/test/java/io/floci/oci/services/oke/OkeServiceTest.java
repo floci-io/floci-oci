@@ -3,6 +3,8 @@ package io.floci.oci.services.oke;
 import io.floci.oci.config.EmulatorConfig;
 import io.floci.oci.core.common.OciException;
 import io.floci.oci.core.storage.InMemoryStorage;
+import io.floci.oci.core.storage.StorageBackend;
+import io.floci.oci.core.storage.TenancyAwareStorageBackend;
 import io.floci.oci.core.workrequest.WorkRequestService;
 import io.floci.oci.services.oke.model.StoredNodePool;
 import io.floci.oci.services.oke.model.StoredOkeCluster;
@@ -168,5 +170,32 @@ class OkeServiceTest {
         persistentService.reconstructClusterState();
 
         org.mockito.Mockito.verify(mockManager).registerExistingCluster(cluster);
+    }
+
+    @Test
+    void startupReconstructsActiveClusterStateAcrossTenancies() {
+        OkeClusterManager mockManager = mock(OkeClusterManager.class);
+        EmulatorConfig mockConfig = mock(EmulatorConfig.class);
+        EmulatorConfig.ServicesConfig mockServices = mock(EmulatorConfig.ServicesConfig.class);
+        EmulatorConfig.ServicesConfig.OkeServiceConfig mockOkeConfig = mock(EmulatorConfig.ServicesConfig.OkeServiceConfig.class);
+
+        lenient().when(mockConfig.services()).thenReturn(mockServices);
+        lenient().when(mockServices.oke()).thenReturn(mockOkeConfig);
+        lenient().when(mockOkeConfig.mock()).thenReturn(false);
+
+        StorageBackend<String, StoredOkeCluster> rawBackend = new InMemoryStorage<>();
+        TenancyAwareStorageBackend<StoredOkeCluster> taClusters = new TenancyAwareStorageBackend<>(rawBackend, null, "ocid1.tenancy.oc1..flocitesttenancy");
+
+        OkeService persistentService = new OkeService(taClusters, nodePools, mockConfig, null, mock(WorkRequestService.class), mockManager);
+
+        StoredOkeCluster otherTenancyCluster = new StoredOkeCluster();
+        otherTenancyCluster.setId("ocid1.cluster.oc1.iad.othertenancy");
+        otherTenancyCluster.setHostPort(16444);
+
+        rawBackend.put("ocid1.tenancy.oc1..customtenancy/ocid1.cluster.oc1.iad.othertenancy", otherTenancyCluster);
+
+        persistentService.reconstructClusterState();
+
+        org.mockito.Mockito.verify(mockManager).registerExistingCluster(otherTenancyCluster);
     }
 }
