@@ -1,9 +1,9 @@
 package io.floci.oci.core.storage;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import io.floci.oci.config.EmulatorConfig;
 import io.floci.oci.core.common.RequestContext;
 import io.floci.oci.core.common.ServiceConfigAccess;
-import com.fasterxml.jackson.core.type.TypeReference;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.inject.Instance;
 import jakarta.inject.Inject;

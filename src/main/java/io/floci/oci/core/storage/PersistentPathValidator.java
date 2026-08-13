@@ -2,8 +2,8 @@ package io.floci.oci.core.storage;
 
 import io.floci.oci.config.EmulatorConfig;
 import io.floci.oci.core.common.ServiceConfigAccess;
-import io.floci.oci.core.common.ServiceRegistry;
 import io.floci.oci.core.common.ServiceDescriptor;
+import io.floci.oci.core.common.ServiceRegistry;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
