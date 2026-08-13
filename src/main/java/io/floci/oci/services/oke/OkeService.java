@@ -84,9 +84,12 @@ public class OkeService implements Resettable {
         }
     }
 
+    public record CreateClusterResult(String workRequestId, StoredOkeCluster cluster) {}
+    public record CreateNodePoolResult(String workRequestId, StoredNodePool nodePool) {}
+
     // ── Clusters ─────────────────────────────────────────────────────────────
 
-    public String createCluster(String compartmentId, String name, String vcnId,
+    public CreateClusterResult createCluster(String compartmentId, String name, String vcnId,
                                 String kubernetesVersion, String kmsKeyId,
                                 Map<String, String> freeformTags,
                                 Map<String, Map<String, Object>> definedTags) {
@@ -129,7 +132,8 @@ public class OkeService implements Resettable {
         StoredWorkRequest.Resource res = WorkRequestService.resource(
             "cluster", "CREATED", clusterId, "/20180222/clusters/" + clusterId
         );
-        return workRequests.succeeded("oke", "CREATE_CLUSTER", compartmentId, List.of(res));
+        String workRequestId = workRequests.succeeded("oke", "CREATE_CLUSTER", compartmentId, List.of(res));
+        return new CreateClusterResult(workRequestId, cluster);
     }
 
     public StoredOkeCluster getCluster(String clusterId) {
@@ -173,9 +177,7 @@ public class OkeService implements Resettable {
         return workRequests.succeeded("oke", "DELETE_CLUSTER", cluster.getCompartmentId(), List.of(res));
     }
 
-    // ── Node Pools ────────────────────────────────────────────────────────────
-
-    public String createNodePool(String compartmentId, String clusterId, String name,
+    public CreateNodePoolResult createNodePool(String compartmentId, String clusterId, String name,
                                  String kubernetesVersion, String nodeShape,
                                  int quantityPerSubnet,
                                  Map<String, String> freeformTags,
@@ -209,7 +211,8 @@ public class OkeService implements Resettable {
         StoredWorkRequest.Resource res = WorkRequestService.resource(
             "nodepool", "CREATED", nodePoolId, "/20180222/nodePools/" + nodePoolId
         );
-        return workRequests.succeeded("oke", "CREATE_NODEPOOL", compartmentId, List.of(res));
+        String workRequestId = workRequests.succeeded("oke", "CREATE_NODEPOOL", compartmentId, List.of(res));
+        return new CreateNodePoolResult(workRequestId, pool);
     }
 
     public StoredNodePool getNodePool(String nodePoolId) {

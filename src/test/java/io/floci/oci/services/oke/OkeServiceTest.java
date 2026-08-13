@@ -43,7 +43,8 @@ class OkeServiceTest {
 
     @Test
     void createAndGetCluster() {
-        String wrId = service.createCluster(COMPARTMENT, "my-cluster", VCN, "v1.30.1", null, Map.of("env", "test"), null);
+        OkeService.CreateClusterResult res = service.createCluster(COMPARTMENT, "my-cluster", VCN, "v1.30.1", null, Map.of("env", "test"), null);
+        assertNotNull(res.cluster());
         assertNotNull(clusters);
         List<StoredOkeCluster> list = service.listClusters(COMPARTMENT);
         assertEquals(1, list.size());
@@ -53,6 +54,29 @@ class OkeServiceTest {
 
         StoredOkeCluster fetched = service.getCluster(cluster.getId());
         assertEquals(cluster.getId(), fetched.getId());
+    }
+
+    @Test
+    void createClusterWithDuplicateNameReturnsNewCluster() {
+        OkeService.CreateClusterResult res1 = service.createCluster(COMPARTMENT, "same-name", VCN, "v1.30.1", null, null, null);
+        OkeService.CreateClusterResult res2 = service.createCluster(COMPARTMENT, "same-name", VCN, "v1.30.1", null, null, null);
+
+        assertNotNull(res1.cluster().getId());
+        assertNotNull(res2.cluster().getId());
+        assertTrue(!res1.cluster().getId().equals(res2.cluster().getId()));
+    }
+
+    @Test
+    void createNodePoolWithDuplicateNameReturnsNewNodePool() {
+        OkeService.CreateClusterResult cRes = service.createCluster(COMPARTMENT, "cluster-dup", VCN, "v1.30.1", null, null, null);
+        String clusterId = cRes.cluster().getId();
+
+        OkeService.CreateNodePoolResult np1 = service.createNodePool(COMPARTMENT, clusterId, "pool-dup", "v1.30.1", "VM.Standard.E4.Flex", 2, null, null);
+        OkeService.CreateNodePoolResult np2 = service.createNodePool(COMPARTMENT, clusterId, "pool-dup", "v1.30.1", "VM.Standard.E4.Flex", 2, null, null);
+
+        assertNotNull(np1.nodePool().getId());
+        assertNotNull(np2.nodePool().getId());
+        assertTrue(!np1.nodePool().getId().equals(np2.nodePool().getId()));
     }
 
     @Test

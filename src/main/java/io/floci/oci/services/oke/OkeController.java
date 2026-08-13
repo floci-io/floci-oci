@@ -46,7 +46,7 @@ public class OkeController {
     @Path("/clusters")
     public Response createCluster(CreateClusterDetails details) {
         CreateClusterDetails req = details != null ? details : new CreateClusterDetails();
-        String workRequestId = service.createCluster(
+        OkeService.CreateClusterResult result = service.createCluster(
             req.compartmentId,
             req.name,
             req.vcnId,
@@ -56,14 +56,9 @@ public class OkeController {
             req.definedTags
         );
 
-        StoredOkeCluster cluster = service.listClusters(req.compartmentId).stream()
-                .filter(c -> c.getName() != null && c.getName().equals(req.name))
-                .findFirst()
-                .orElse(null);
-
         return Response.status(Response.Status.ACCEPTED)
-                .header("opc-work-request-id", workRequestId)
-                .entity(cluster)
+                .header("opc-work-request-id", result.workRequestId())
+                .entity(result.cluster())
                 .build();
     }
 
@@ -124,7 +119,7 @@ public class OkeController {
     @Path("/nodePools")
     public Response createNodePool(CreateNodePoolDetails details) {
         CreateNodePoolDetails req = details != null ? details : new CreateNodePoolDetails();
-        String workRequestId = service.createNodePool(
+        OkeService.CreateNodePoolResult result = service.createNodePool(
             req.compartmentId,
             req.clusterId,
             req.name,
@@ -135,14 +130,9 @@ public class OkeController {
             req.definedTags
         );
 
-        StoredNodePool pool = service.listNodePools(req.compartmentId, req.clusterId).stream()
-                .filter(p -> p.getName() != null && p.getName().equals(req.name))
-                .findFirst()
-                .orElse(null);
-
         return Response.status(Response.Status.ACCEPTED)
-                .header("opc-work-request-id", workRequestId)
-                .entity(pool)
+                .header("opc-work-request-id", result.workRequestId())
+                .entity(result.nodePool())
                 .build();
     }
 
