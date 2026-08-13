@@ -276,7 +276,7 @@ public class OkeService implements Resettable {
         return workRequests.succeeded("oke", "DELETE_NODEPOOL", pool.getCompartmentId(), List.of(res));
     }
 
-    private String regionShort() {
-        return config.defaultRegion() != null ? config.defaultRegion() : "iad";
+    String regionShort() {
+        return Ocids.regionShort(config.defaultRegion());
     }
 }

@@ -57,6 +57,12 @@ class OkeServiceTest {
     }
 
     @Test
+    void ocidUsesMappedRegionShortCode() {
+        OkeService.CreateClusterResult res = service.createCluster(COMPARTMENT, "region-cluster", VCN, "v1.30.1", null, null, null);
+        assertTrue(res.cluster().getId().startsWith("ocid1.cluster.oc1.iad."));
+    }
+
+    @Test
     void createClusterWithDuplicateNameReturnsNewCluster() {
         OkeService.CreateClusterResult res1 = service.createCluster(COMPARTMENT, "same-name", VCN, "v1.30.1", null, null, null);
         OkeService.CreateClusterResult res2 = service.createCluster(COMPARTMENT, "same-name", VCN, "v1.30.1", null, null, null);
