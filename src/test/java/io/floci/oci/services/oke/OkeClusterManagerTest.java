@@ -209,4 +209,23 @@ class OkeClusterManagerTest {
         verify(lifecycleManager, never()).removeVolume(expectedVolume);
         verify(portAllocator).release(6443);
     }
+
+    @Test
+    void registerExistingClusterRestartsContainerAndReservesPort() {
+        StoredOkeCluster cluster = new StoredOkeCluster();
+        cluster.setId("ocid1.cluster.oc1.iad.reconstructed001");
+        cluster.setHostPort(6445);
+        cluster.setName("reconstructed-cluster");
+
+        when(lifecycleManager.isContainerRunning(anyString())).thenReturn(false);
+        when(lifecycleManager.createAndStart(any())).thenReturn(new ContainerLifecycleManager.ContainerInfo("c-999", Map.of()));
+
+        manager.registerExistingCluster(cluster);
+
+        verify(portAllocator).markReserved(6445);
+        String expectedContainer = ContainerStorageHelper.dockerName(config, "oke-" + cluster.getId());
+        verify(lifecycleManager).removeIfExists(expectedContainer);
+        verify(lifecycleManager).createAndStart(any());
+        assertEquals("ACTIVE", cluster.getLifecycleState());
+    }
 }

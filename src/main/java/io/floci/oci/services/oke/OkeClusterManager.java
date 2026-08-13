@@ -51,10 +51,15 @@ public class OkeClusterManager implements Resettable {
             return;
         }
 
-        int basePort = config.services().oke().apiServerBasePort();
-        int maxPort = config.services().oke().apiServerMaxPort();
-        int hostPort = portAllocator.allocate(basePort, maxPort);
-        cluster.setHostPort(hostPort);
+        int hostPort = cluster.getHostPort();
+        if (hostPort > 0) {
+            portAllocator.markReserved(hostPort);
+        } else {
+            int basePort = config.services().oke().apiServerBasePort();
+            int maxPort = config.services().oke().apiServerMaxPort();
+            hostPort = portAllocator.allocate(basePort, maxPort);
+            cluster.setHostPort(hostPort);
+        }
 
         String nameSlug = cluster.getId();
         String containerName = ContainerStorageHelper.dockerName(config, "oke-" + nameSlug);
@@ -63,16 +68,18 @@ public class OkeClusterManager implements Resettable {
         activeClusters.put(cluster.getId(), new ActiveClusterRef(containerName, volumeName, hostPort));
 
         try {
-            lifecycleManager.removeIfExists(containerName);
+            if (!lifecycleManager.isContainerRunning(containerName)) {
+                lifecycleManager.removeIfExists(containerName);
 
-            ContainerSpec spec = containerBuilder.newContainer(config.services().oke().defaultImage())
-                    .withName(containerName)
-                    .withEnv("K3S_KUBECONFIG_MODE", "644")
-                    .withPortBinding(K3S_CONTAINER_PORT, hostPort)
-                    .withNamedVolume(volumeName, "/var/lib/rancher/k3s")
-                    .build();
+                ContainerSpec spec = containerBuilder.newContainer(config.services().oke().defaultImage())
+                        .withName(containerName)
+                        .withEnv("K3S_KUBECONFIG_MODE", "644")
+                        .withPortBinding(K3S_CONTAINER_PORT, hostPort)
+                        .withNamedVolume(volumeName, "/var/lib/rancher/k3s")
+                        .build();
 
-            lifecycleManager.createAndStart(spec);
+                lifecycleManager.createAndStart(spec);
+            }
         } catch (Exception e) {
             activeClusters.remove(cluster.getId());
             try {
@@ -100,16 +107,7 @@ public class OkeClusterManager implements Resettable {
         if (cluster == null || cluster.getId() == null || config.services().oke().mock()) {
             return;
         }
-        String nameSlug = cluster.getId();
-        String containerName = ContainerStorageHelper.dockerName(config, "oke-" + nameSlug);
-        String volumeName = ContainerStorageHelper.dockerName(config, "oke-vol-" + nameSlug);
-        int hostPort = cluster.getHostPort();
-
-        activeClusters.put(cluster.getId(), new ActiveClusterRef(containerName, volumeName, hostPort));
-        if (hostPort > 0) {
-            portAllocator.markReserved(hostPort);
-        }
-        LOG.infof("Reconstructed active cluster reference for cluster '%s' (container: '%s', port: %d)", cluster.getId(), containerName, hostPort);
+        startCluster(cluster);
     }
 
     public void stopCluster(StoredOkeCluster cluster) {
