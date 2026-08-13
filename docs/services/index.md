@@ -8,6 +8,7 @@
 | [Vault, KMS & Secrets](kms-vault.md) | `/20180608/…`, `/20190301/…` | Vaults, keys and versions, **real** AES-GCM/RSA/ECDSA crypto, secrets and bundles |
 | [Streaming](streaming.md) | `/20180418/…` | Streams, partitioned log, cursors (incl. group cursors), commit/heartbeat |
 | [Functions](functions.md) | `/20181201/…` | Applications, functions, real invocation via an `fnproject/fnserver` sidecar |
+| [Container Engine for Kubernetes (OKE)](containerengine.md) | `/20180222/…` | Clusters CRUD, Node Pools CRUD, Options, Kubeconfig generation, work requests, real k3s sidecar |
 
 ## Wire contract
 
@@ -33,6 +34,7 @@ FLOCI_OCI_SERVICES_KMS_ENABLED=false
 FLOCI_OCI_SERVICES_VAULT_ENABLED=false
 FLOCI_OCI_SERVICES_STREAMING_ENABLED=false
 FLOCI_OCI_SERVICES_FUNCTIONS_ENABLED=false
+FLOCI_OCI_SERVICES_OKE_ENABLED=false
 ```
 
 Disabled services answer `503 ServiceUnavailable`.

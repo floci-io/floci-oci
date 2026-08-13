@@ -14,12 +14,12 @@ It implements real OCI wire protocols so the official OCI SDKs, the OCI CLI, Ter
 
 ## The Floci family
 
-| Emulator | Cloud | Port |
-|---|---|---|
-| [floci](https://github.com/floci-io/floci) | AWS | 4566 |
-| [floci-az](https://github.com/floci-io/floci-az) | Azure | 4577 |
-| [floci-gcp](https://github.com/floci-io/floci-gcp) | GCP | 4588 |
-| **floci-oci** | **OCI** | **4599** |
+| Emulator                                               | Cloud | Port |
+|--------------------------------------------------------|---|---|
+| [floci](https://github.com/floci-io/floci)             | AWS | 4566 |
+| [floci-az](https://github.com/floci-io/floci-az)       | Azure | 4577 |
+| [floci-gcp](https://github.com/floci-io/floci-gcp)     | GCP | 4588 |
+| **[floci-oci](https://github.com/floci-io/floci-oci)** | **OCI** | **4599** |
 
 ## Supported services
 
@@ -31,6 +31,7 @@ It implements real OCI wire protocols so the official OCI SDKs, the OCI CLI, Ter
 | Vault, KMS & Secrets | `/20180608/…`, `/20190301/…` | Vaults, keys, real AES-GCM/RSA/ECDSA crypto, secrets and bundles |
 | Streaming | `/20180418/…` | Streams, partitions, cursors, consumer groups |
 | Functions | `/20181201/…` | Applications, functions, real invocation via an Fn Project sidecar |
+| Container Engine for Kubernetes (OKE) | `/20180222/…` | Clusters, node pools, options, kubeconfig generation, work requests, real k3s sidecar |
 
 ## Quick start
 

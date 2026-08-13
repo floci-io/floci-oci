@@ -8,7 +8,7 @@ _common_setup() {
     export TENANCY="ocid1.tenancy.oc1..flocilocaltenancy0000000000000000000000000000000000000000"
 
     # Route every SDK client the suite touches at the emulator.
-    export TF_VAR_CLIENT_HOST_OVERRIDES="oci_identity.IdentityClient=${ENDPOINT};oci_object_storage.ObjectStorageClient=${ENDPOINT};oci_queue.QueueAdminClient=${ENDPOINT};oci_kms.KmsVaultClient=${ENDPOINT};oci_vault.VaultsClient=${ENDPOINT};oci_secrets.SecretsClient=${ENDPOINT};oci_streaming.StreamAdminClient=${ENDPOINT};oci_functions.FunctionsManagementClient=${ENDPOINT}"
+    export TF_VAR_CLIENT_HOST_OVERRIDES="oci_identity.IdentityClient=${ENDPOINT};oci_object_storage.ObjectStorageClient=${ENDPOINT};oci_queue.QueueAdminClient=${ENDPOINT};oci_kms.KmsVaultClient=${ENDPOINT};oci_vault.VaultsClient=${ENDPOINT};oci_secrets.SecretsClient=${ENDPOINT};oci_streaming.StreamAdminClient=${ENDPOINT};oci_functions.FunctionsManagementClient=${ENDPOINT};oci_containerengine.ContainerEngineClient=${ENDPOINT}"
 
     # The provider needs a parseable API key; the emulator never verifies the signature.
     if [ ! -f "$BATS_TEST_DIRNAME/../test_key.pem" ]; then

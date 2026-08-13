@@ -52,7 +52,7 @@ refs: ## Download/refresh the OCI reference checkouts into local/oracle/
 COMPAT_NETWORK ?= floci_oci_default
 COMPAT_SUITES  ?= sdk-test-java sdk-test-python compat-terraform compat-opentofu
 LOCAL_ENDPOINT ?= http://localhost:4599
-HOST_OVERRIDES = oci_identity.IdentityClient=$(LOCAL_ENDPOINT);oci_object_storage.ObjectStorageClient=$(LOCAL_ENDPOINT)
+HOST_OVERRIDES = oci_identity.IdentityClient=$(LOCAL_ENDPOINT);oci_object_storage.ObjectStorageClient=$(LOCAL_ENDPOINT);oci_containerengine.ContainerEngineClient=$(LOCAL_ENDPOINT)
 
 .PHONY: compat-docker test-java-compat test-python-compat test-terraform-compat test-opentofu-compat
 
@@ -61,6 +61,12 @@ test-java-compat: ## Run the oci-java-sdk suite against a locally running emulat
 
 test-python-compat: ## Run the oci Python SDK suite against a locally running emulator (needs `pip install -r requirements.txt`)
 	cd compatibility-tests/sdk-test-python && FLOCI_OCI_ENDPOINT=$(LOCAL_ENDPOINT) python3 -m pytest --junitxml=/tmp/floci-oci-py-junit.xml
+
+test-go-compat: ## Run the oci-go-sdk suite against a locally running emulator
+	cd compatibility-tests/sdk-test-go && FLOCI_OCI_ENDPOINT=$(LOCAL_ENDPOINT) go test -v ./...
+
+test-cli-compat: ## Run the oci-cli suite against a locally running emulator
+	cd compatibility-tests/sdk-test-cli && FLOCI_OCI_ENDPOINT=$(LOCAL_ENDPOINT) bats test_oke.bats
 
 test-terraform-compat: ## Run the Terraform IaC suite against a locally running emulator
 	cd compatibility-tests/compat-terraform && FLOCI_OCI_ENDPOINT=$(LOCAL_ENDPOINT) TF_BIN=terraform bats test/
