@@ -140,4 +140,27 @@ class OkeServiceTest {
         service.clear();
         assertTrue(service.listClusters(COMPARTMENT).isEmpty());
     }
+
+    @Test
+    void startupReconstructsActiveClusterState() {
+        OkeClusterManager mockManager = mock(OkeClusterManager.class);
+        EmulatorConfig mockConfig = mock(EmulatorConfig.class);
+        EmulatorConfig.ServicesConfig mockServices = mock(EmulatorConfig.ServicesConfig.class);
+        EmulatorConfig.ServicesConfig.OkeServiceConfig mockOkeConfig = mock(EmulatorConfig.ServicesConfig.OkeServiceConfig.class);
+
+        lenient().when(mockConfig.services()).thenReturn(mockServices);
+        lenient().when(mockServices.oke()).thenReturn(mockOkeConfig);
+        lenient().when(mockOkeConfig.mock()).thenReturn(false);
+
+        OkeService persistentService = new OkeService(clusters, nodePools, mockConfig, null, mock(WorkRequestService.class), mockManager);
+
+        StoredOkeCluster cluster = new StoredOkeCluster();
+        cluster.setId("ocid1.cluster.oc1.iad.reconstruct");
+        cluster.setHostPort(16443);
+        clusters.put(cluster.getId(), cluster);
+
+        persistentService.reconstructClusterState();
+
+        org.mockito.Mockito.verify(mockManager).registerExistingCluster(cluster);
+    }
 }

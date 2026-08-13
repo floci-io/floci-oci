@@ -73,6 +73,17 @@ public class OkeService implements Resettable {
                     .resourceClasses(OkeController.class)
                     .build());
         }
+        reconstructClusterState();
+    }
+
+    void reconstructClusterState() {
+        if (clusterManager == null || config == null || config.services().oke().mock()) {
+            return;
+        }
+        List<StoredOkeCluster> existingClusters = clusters.scan(k -> true);
+        for (StoredOkeCluster cluster : existingClusters) {
+            clusterManager.registerExistingCluster(cluster);
+        }
     }
 
     @Override

@@ -96,6 +96,22 @@ public class OkeClusterManager implements Resettable {
         LOG.infof("Started k3s sidecar container '%s' bound to host port %d", containerName, hostPort);
     }
 
+    public void registerExistingCluster(StoredOkeCluster cluster) {
+        if (cluster == null || cluster.getId() == null || config.services().oke().mock()) {
+            return;
+        }
+        String nameSlug = cluster.getId();
+        String containerName = ContainerStorageHelper.dockerName(config, "oke-" + nameSlug);
+        String volumeName = ContainerStorageHelper.dockerName(config, "oke-vol-" + nameSlug);
+        int hostPort = cluster.getHostPort();
+
+        activeClusters.put(cluster.getId(), new ActiveClusterRef(containerName, volumeName, hostPort));
+        if (hostPort > 0) {
+            portAllocator.markReserved(hostPort);
+        }
+        LOG.infof("Reconstructed active cluster reference for cluster '%s' (container: '%s', port: %d)", cluster.getId(), containerName, hostPort);
+    }
+
     public void stopCluster(StoredOkeCluster cluster) {
         String nameSlug = cluster.getId();
         ActiveClusterRef ref = activeClusters.get(cluster.getId());
