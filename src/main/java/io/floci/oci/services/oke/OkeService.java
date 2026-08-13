@@ -168,6 +168,13 @@ public class OkeService implements Resettable {
         if (clusterManager != null) {
             clusterManager.stopCluster(cluster);
         }
+
+        List<StoredNodePool> dependentPools = listNodePools(null, clusterId);
+        for (StoredNodePool pool : dependentPools) {
+            pool.setLifecycleState("DELETED");
+            nodePools.delete(pool.getId());
+        }
+
         cluster.setLifecycleState("DELETED");
         clusters.delete(clusterId);
 

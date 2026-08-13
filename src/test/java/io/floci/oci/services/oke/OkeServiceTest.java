@@ -106,6 +106,21 @@ class OkeServiceTest {
     }
 
     @Test
+    void deleteClusterDeletesDependentNodePools() {
+        OkeService.CreateClusterResult cRes = service.createCluster(COMPARTMENT, "cluster-cascade", VCN, "v1.30.1", null, null, null);
+        String clusterId = cRes.cluster().getId();
+
+        OkeService.CreateNodePoolResult npRes = service.createNodePool(COMPARTMENT, clusterId, "pool-cascade", "v1.30.1", "VM.Standard.E4.Flex", 2, null, null);
+        String poolId = npRes.nodePool().getId();
+
+        service.deleteCluster(clusterId);
+
+        assertThrows(OciException.class, () -> service.getCluster(clusterId));
+        assertThrows(OciException.class, () -> service.getNodePool(poolId));
+        assertTrue(service.listNodePools(COMPARTMENT, clusterId).isEmpty());
+    }
+
+    @Test
     void createAndListNodePools() {
         service.createCluster(COMPARTMENT, "cluster-1", VCN, "v1.30.1", null, null, null);
         StoredOkeCluster cluster = service.listClusters(COMPARTMENT).get(0);
