@@ -59,6 +59,7 @@ class OkeClusterManagerTest {
         lenient().when(specBuilder.withEnv(anyString(), anyString())).thenReturn(specBuilder);
         lenient().when(specBuilder.withPortBinding(anyInt(), anyInt())).thenReturn(specBuilder);
         lenient().when(specBuilder.withNamedVolume(anyString(), anyString())).thenReturn(specBuilder);
+        lenient().when(specBuilder.withPrivileged(org.mockito.ArgumentMatchers.anyBoolean())).thenReturn(specBuilder);
         lenient().when(specBuilder.build()).thenReturn(new ContainerSpec("rancher/k3s:v1.30.1-k3s1"));
 
         manager = new OkeClusterManager(containerBuilder, lifecycleManager, portAllocator, config);
