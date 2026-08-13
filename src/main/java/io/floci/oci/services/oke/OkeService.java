@@ -188,6 +188,7 @@ public class OkeService implements Resettable {
         if (clusterId == null || clusterId.isBlank()) {
             throw OciException.missingParameter("Missing required parameter: clusterId");
         }
+        getCluster(clusterId);
         if (name == null || name.isBlank()) {
             throw OciException.missingParameter("Missing required parameter: name");
         }

@@ -85,6 +85,13 @@ class OkeServiceTest {
     }
 
     @Test
+    void createNodePoolNonexistentClusterThrowsOciException() {
+        assertThrows(OciException.class, () ->
+            service.createNodePool(COMPARTMENT, "ocid1.cluster.oc1.iad.nonexistent", "pool-1", "v1.30.1", "VM.Standard.E4.Flex", 2, null, null)
+        );
+    }
+
+    @Test
     void updateAndDeleteCluster() {
         service.createCluster(COMPARTMENT, "cluster-1", VCN, "v1.29.1", null, null, null);
         StoredOkeCluster cluster = service.listClusters(COMPARTMENT).get(0);
