@@ -1,5 +1,6 @@
 package io.floci.oci.services.oke.model;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import io.quarkus.runtime.annotations.RegisterForReflection;
 
 import java.time.Instant;
@@ -19,6 +20,7 @@ public class StoredNodePool {
     private String nodeShape;
     private int quantityPerSubnet;
     private String lifecycleState;
+    @JsonIgnore
     private Instant timeCreated;
     private Map<String, String> freeformTags;
     private Map<String, Map<String, Object>> definedTags;

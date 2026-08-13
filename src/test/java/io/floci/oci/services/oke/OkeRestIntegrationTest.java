@@ -45,7 +45,10 @@ class OkeRestIntegrationTest {
                 .statusCode(200)
                 .header("opc-request-id", notNullValue())
                 .body("id", equalTo(clusterId))
-                .body("name", equalTo("rest-cluster"));
+                .body("name", equalTo("rest-cluster"))
+                .body("metadata.timeCreated", notNullValue())
+                .body("hostPort", nullValue())
+                .body("timeCreated", nullValue());
 
         // 3. List Clusters
         given()
@@ -90,7 +93,8 @@ class OkeRestIntegrationTest {
             .then()
                 .statusCode(200)
                 .body("id", equalTo(nodePoolId))
-                .body("quantityPerSubnet", equalTo(2));
+                .body("quantityPerSubnet", equalTo(2))
+                .body("timeCreated", nullValue());
 
         // 7. Cluster and Node Pool Options
         given()

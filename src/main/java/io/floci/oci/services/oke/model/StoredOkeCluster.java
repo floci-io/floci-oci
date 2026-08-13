@@ -1,5 +1,6 @@
 package io.floci.oci.services.oke.model;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import io.quarkus.runtime.annotations.RegisterForReflection;
 
 import java.time.Instant;
@@ -20,8 +21,9 @@ public class StoredOkeCluster {
     private String lifecycleState;
     private String lifecycleDetails;
     private Map<String, String> endpoints;
+    @JsonIgnore
     private int hostPort;
-    private Instant timeCreated;
+    private ClusterMetadata metadata;
     private Map<String, String> freeformTags;
     private Map<String, Map<String, Object>> definedTags;
 
@@ -105,12 +107,12 @@ public class StoredOkeCluster {
         this.hostPort = hostPort;
     }
 
-    public Instant getTimeCreated() {
-        return timeCreated;
+    public ClusterMetadata getMetadata() {
+        return metadata;
     }
 
-    public void setTimeCreated(Instant timeCreated) {
-        this.timeCreated = timeCreated;
+    public void setMetadata(ClusterMetadata metadata) {
+        this.metadata = metadata;
     }
 
     public Map<String, String> getFreeformTags() {
@@ -127,5 +129,24 @@ public class StoredOkeCluster {
 
     public void setDefinedTags(Map<String, Map<String, Object>> definedTags) {
         this.definedTags = definedTags;
+    }
+
+    @RegisterForReflection
+    public static class ClusterMetadata {
+        private Instant timeCreated;
+
+        public ClusterMetadata() {}
+
+        public ClusterMetadata(Instant timeCreated) {
+            this.timeCreated = timeCreated;
+        }
+
+        public Instant getTimeCreated() {
+            return timeCreated;
+        }
+
+        public void setTimeCreated(Instant timeCreated) {
+            this.timeCreated = timeCreated;
+        }
     }
 }

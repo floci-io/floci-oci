@@ -124,7 +124,7 @@ public class OkeService implements Resettable {
         cluster.setKmsKeyId(kmsKeyId);
         cluster.setLifecycleState("CREATING");
         cluster.setLifecycleDetails(null);
-        cluster.setTimeCreated(Instant.now());
+        cluster.setMetadata(new StoredOkeCluster.ClusterMetadata(Instant.now()));
         cluster.setFreeformTags(freeformTags);
         cluster.setDefinedTags(definedTags);
 
