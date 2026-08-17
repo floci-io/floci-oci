@@ -195,6 +195,8 @@ public interface EmulatorConfig {
 
         FunctionsServiceConfig functions();
 
+        OkeServiceConfig oke();
+
         interface IdentityServiceConfig {
             @WithDefault("true")
             boolean enabled();
@@ -249,6 +251,27 @@ public interface EmulatorConfig {
 
             @WithDefault("120")
             int startupTimeoutSeconds();
+        }
+
+        interface OkeServiceConfig {
+            @WithDefault("true")
+            boolean enabled();
+
+            /**
+             * When {@code true}, no k3s Docker sidecar containers are started.
+             * Env: FLOCI_OCI_SERVICES_OKE_MOCK
+             */
+            @WithDefault("false")
+            boolean mock();
+
+            @WithDefault("rancher/k3s:v1.30.1-k3s1")
+            String defaultImage();
+
+            @WithDefault("6443")
+            int apiServerBasePort();
+
+            @WithDefault("6543")
+            int apiServerMaxPort();
         }
     }
 

@@ -13,6 +13,8 @@ floci-oci:
   services:
     functions:
       mock: true
+    oke:
+      mock: true
   init-hooks:
     shell-executable: /bin/sh
     timeout-seconds: 5

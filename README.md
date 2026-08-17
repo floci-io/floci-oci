@@ -34,12 +34,12 @@ It gives you OCI-shaped services on your machine without an Oracle Cloud account
 
 floci-oci is the OCI member of the [Floci](https://github.com/floci-io) emulator family — named after [floccus](https://en.wikipedia.org/wiki/Cirrocumulus_floccus), the cloud formation that looks like popcorn.
 
-| Emulator | Cloud | Port |
-|---|---|:---:|
-| [floci](https://github.com/floci-io/floci) | AWS | 4566 |
-| [floci-az](https://github.com/floci-io/floci-az) | Azure | 4577 |
-| [floci-gcp](https://github.com/floci-io/floci-gcp) | GCP | 4588 |
-| **floci-oci** | **OCI** | **4599** |
+| Emulator                                                           | Cloud | Port |
+|--------------------------------------------------------------------|---|:---:|
+| [floci](https://github.com/floci-io/floci)                         | AWS | 4566 |
+| [floci-az](https://github.com/floci-io/floci-az)                   | Azure | 4577 |
+| [floci-gcp](https://github.com/floci-io/floci-gcp)                 | GCP | 4588 |
+| **[floci-oci](https://github.com/floci-io/floci-oci)** | **OCI** | **4599** |
 
 ## Quick Start
 
@@ -162,6 +162,7 @@ flowchart LR
             A["Identity /20160918\nObject Storage /n/…\nQueue /20210201\nStreaming /20180418"]
             B["Vault · KMS · Secrets\n/20180608 · /20190301\nreal AES/RSA/ECDSA"]
             C["Functions /20181201"]
+            D["OKE Container Engine\n/20180222"]
         end
 
         WR["Work Requests\nasync-operation plane"]
@@ -176,6 +177,8 @@ flowchart LR
     Client -->|"HTTP :4599\nOCI wire protocol"| Router
     C -->|"invoke"| Fn["fnproject/fnserver\nsidecar"]
     Fn -->|"runs your image"| Docker
+    D -->|"startCluster"| K3s["rancher/k3s\nsidecar"]
+    K3s -->|"spawns cluster"| Docker
 ```
 
 ## Supported Services
@@ -187,7 +190,8 @@ flowchart LR
 | Messaging | Queue (visibility timeouts, dead-letter queues, channels), Streaming (partitioned log, cursors, consumer groups) |
 | Security | Vault + KMS (vaults, keys, key versions, **real** AES-GCM / RSA / ECDSA crypto), Secrets and secret bundles |
 | Serverless | Functions (applications, functions, real invocation through an Fn Project sidecar) |
-| Async operations | Work requests, partitioned per service (Identity/Queue/Streaming use `SUCCEEDED`, Object Storage uses `COMPLETED`) |
+| Kubernetes | Container Engine for Kubernetes (OKE): clusters, node pools, options, kubeconfig generation, work requests, real-mode k3s sidecar |
+| Async operations | Work requests, partitioned per service (Identity/Queue/Streaming use `SUCCEEDED`, Object Storage/OKE use `COMPLETED`) |
 
 For operation-level compatibility, see the [Services Overview](https://floci.io/floci-oci/services/).
 
@@ -203,7 +207,8 @@ For operation-level compatibility, see the [Services Overview](https://floci.io/
 | Vault + KMS | In-process, real crypto | Vaults and keys with schedule/cancel deletion (no DELETE verb), key rotation; AES-GCM encrypt/decrypt whose envelope survives rotation, RSA/ECDSA sign/verify via JCA, CRC32 `plaintextChecksum` |
 | Secrets | In-process | Secret versions with CURRENT/PREVIOUS/LATEST stages; the `Secret` shape never echoes content — retrieval is through `/20190301/secretbundles`, including the bodyless POST `getByName` |
 | Functions | Real Docker (Fn Project) | Applications and functions with deterministic image digests; invocation proxied to a shared `fnproject/fnserver` sidecar that runs your real FDK image. `mock: true` disables Docker entirely |
-| Work Requests | In-process | `202` + `opc-work-request-id` responses, pollable per service (`/20160918`, `/20210201`, `/20180418` and unversioned `/workRequests`) with errors/logs endpoints |
+| OKE (Container Engine) | Real Docker (k3s) / In-process | Control plane CRUD (`/20180222`), options, kubeconfig YAML generator, work requests tracking; real-mode k3s sidecar driver (`rancher/k3s:v1.30.1-k3s1`) binding dynamic host ports (`6443..6543`) and persistent volumes (`/var/lib/rancher/k3s`). `mock: true` disables sidecar |
+| Work Requests | In-process | `202` + `opc-work-request-id` responses, pollable per service (`/20160918`, `/20210201`, `/20180418`, `/20180222` and unversioned `/workRequests`) with errors/logs endpoints |
 
 Not implemented yet: identity domains, API keys/auth tokens, dynamic groups, tag namespaces, object versioning, retention rules (stubbed empty for Terraform compatibility), lifecycle policies, replication, the Amazon S3 Compatibility API, queue consumer groups, stream pools' Kafka settings and connect harnesses, KMS import/backup/replication, secret rotation, and pre-built functions (PBF).
 
@@ -216,6 +221,7 @@ floci-oci runs a real container where in-process emulation would not be faithful
 | Service | Default image | What is real |
 |---|---|---|
 | Functions | `fnproject/fnserver:latest` | The open-source engine OCI Functions is built on. Your function image runs for real — fnserver spawns it as a sibling container and speaks the FDK http-stream contract |
+| OKE | `rancher/k3s:v1.30.1-k3s1` | Real local Kubernetes cluster execution via a k3s sidecar container with dynamic host port mapping (`6443..6543`) and named data volume `/var/lib/rancher/k3s` |
 
 Docker-backed services need the Docker socket:
 
@@ -226,8 +232,8 @@ docker run -d --name floci-oci \
   floci/floci-oci:latest
 ```
 
-Set `FLOCI_OCI_SERVICES_FUNCTIONS_MOCK=true` to skip Docker entirely — the management
-plane stays fully usable and invocations return a synthetic body. That is the default in
+Set `FLOCI_OCI_SERVICES_FUNCTIONS_MOCK=true` or `FLOCI_OCI_SERVICES_OKE_MOCK=true` to skip Docker entirely — the management
+plane stays fully usable and invocations/cluster records return synthetic data. That is the default in
 the test suite, so `./mvnw test` never needs a Docker daemon.
 
 `services/functions/` is also the **reference implementation** for contributing a
@@ -318,6 +324,52 @@ print(client.get_object(namespace, "my-bucket", "hello.txt").data.content)
 </details>
 
 <details>
+<summary><strong>Go, oci-go-sdk</strong></summary>
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"github.com/oracle/oci-go-sdk/v65/common"
+	"github.com/oracle/oci-go-sdk/v65/containerengine"
+)
+
+func main() {
+	provider := common.NewRawConfigurationProvider(
+		"ocid1.tenancy.oc1..flocilocaltenancy0000000000000000000000000000000000000000",
+		"ocid1.user.oc1..anyuser",
+		"us-ashburn-1",
+		"aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99",
+		"-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----",
+		nil,
+	)
+
+	client, err := containerengine.NewContainerEngineClientWithConfigurationProvider(provider)
+	if err != nil {
+		panic(err)
+	}
+	client.Host = "http://localhost:4599"
+
+	resp, err := client.CreateCluster(context.Background(), containerengine.CreateClusterRequest{
+		CreateClusterDetails: containerengine.CreateClusterDetails{
+			CompartmentId:     common.String("ocid1.tenancy.oc1..flocilocaltenancy0000000000000000000000000000000000000000"),
+			Name:              common.String("go-demo-cluster"),
+			VcnId:             common.String("ocid1.vcn.oc1.iad.demovcn"),
+			KubernetesVersion: common.String("v1.30.1"),
+		},
+	})
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println("Cluster OCID:", *resp.Cluster.Id)
+}
+```
+
+</details>
+
+<details>
 <summary><strong>Bash, OCI CLI</strong></summary>
 
 ```bash
@@ -369,10 +421,15 @@ The [`compatibility-tests`](./compatibility-tests/) directory validates floci-oc
 
 | Module | Language / Tool | SDK / Client | Tests |
 |---|---|---|---:|
-| `sdk-test-java` | Java | oci-java-sdk | 18 |
+| `sdk-test-java` | Java | oci-java-sdk (incl. OKE integration) | 19 |
 | `sdk-test-python` | Python 3 | oci (incl. `UploadManager` streaming) | 20 |
-| `compat-terraform` | Terraform | oracle/oci provider (11 resources, zero-drift plan) | 6 |
-| `compat-opentofu` | OpenTofu | oracle/oci provider (11 resources, zero-drift plan) | 6 |
+| `sdk-test-go` | Go | oci-go-sdk (OKE container engine) | 1 |
+| `sdk-test-cli` | Bash / BATS | OCI CLI (`oci ce cluster …`) | 1 |
+| `compat-terraform` | Terraform | oracle/oci provider (12 resources, zero-drift plan) | 6 |
+| `compat-opentofu` | OpenTofu | oracle/oci provider (12 resources, zero-drift plan) | 6 |
+
+> [!NOTE]
+> `sdk-test-cli` and `sdk-test-go` currently focus on OKE (Container Engine for Kubernetes) compatibility verification; test coverage for additional OCI services will be added to these suites in future releases.
 
 Run everything in Docker against a compose-built emulator:
 

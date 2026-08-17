@@ -139,3 +139,24 @@ output "key_state" {
 output "stream_messages_endpoint" {
   value = oci_streaming_stream.tf_stream.messages_endpoint
 }
+
+# ── Container Engine for Kubernetes (OKE) ───────────────────────────────────
+
+resource "oci_containerengine_cluster" "tf_cluster" {
+  compartment_id     = var.tenancy_ocid
+  name               = "tf-compat-cluster"
+  vcn_id             = "ocid1.vcn.oc1.iad.tfvcn"
+  kubernetes_version = "v1.30.1"
+}
+
+resource "oci_containerengine_node_pool" "tf_node_pool" {
+  cluster_id         = oci_containerengine_cluster.tf_cluster.id
+  compartment_id     = var.tenancy_ocid
+  name               = "tf-compat-nodepool"
+  kubernetes_version = "v1.30.1"
+  node_shape         = "VM.Standard.E4.Flex"
+}
+
+output "cluster_id" {
+  value = oci_containerengine_cluster.tf_cluster.id
+}

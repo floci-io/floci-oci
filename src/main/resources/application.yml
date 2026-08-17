@@ -103,3 +103,10 @@ floci-oci:
       server-base-port: 8085
       server-max-port: 8095
       startup-timeout-seconds: 120
+    oke:
+      enabled: true
+      mock: false            # true = no Docker; cluster creation returns synthetic endpoints
+      default-image: "rancher/k3s:v1.30.1-k3s1"
+      api-server-base-port: 6443
+      api-server-max-port: 6543
+

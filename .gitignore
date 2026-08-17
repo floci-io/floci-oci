@@ -19,6 +19,8 @@ CLAUDE.md
 GEMINI.md
 COPILOT.md
 .claude
+.aid/
+.agent/
 
 posts
 local

@@ -62,6 +62,13 @@ public final class EmulatorFixture {
         return client;
     }
 
+    public static com.oracle.bmc.containerengine.ContainerEngineClient containerEngine() {
+        var client = com.oracle.bmc.containerengine.ContainerEngineClient.builder()
+                .region(Region.US_ASHBURN_1).build(AUTH);
+        client.setEndpoint(ENDPOINT);
+        return client;
+    }
+
     public static com.oracle.bmc.keymanagement.KmsManagementClient kmsManagement(String endpoint) {
         return com.oracle.bmc.keymanagement.KmsManagementClient.builder()
                 .endpoint(endpoint).build(AUTH);

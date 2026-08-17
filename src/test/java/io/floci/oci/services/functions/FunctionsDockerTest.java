@@ -39,9 +39,13 @@ class FunctionsDockerTest {
 
     @BeforeAll
     void requireDockerAndBuildFixture() throws Exception {
-        boolean dockerAvailable = Files.exists(Paths.get("/var/run/docker.sock"))
-                || System.getenv("DOCKER_HOST") != null;
-        assumeTrue(dockerAvailable, "Docker socket not available — skipping real fnserver tests");
+        boolean dockerAvailable = false;
+        try {
+            Process ping = new ProcessBuilder("docker", "info").redirectErrorStream(true).start();
+            dockerAvailable = ping.waitFor(5, java.util.concurrent.TimeUnit.SECONDS) && ping.exitValue() == 0;
+        } catch (Exception ignored) {
+        }
+        assumeTrue(dockerAvailable, "Docker engine / Podman machine not responding — skipping real fnserver tests");
 
         // Build the FDK fixture image (a current python FDK — old fnproject/hello images
         // predate the http-stream contract and fail against modern fnserver).
@@ -52,6 +56,11 @@ class FunctionsDockerTest {
                 .redirectErrorStream(true).start();
         String output = new String(build.getInputStream().readAllBytes());
         assumeTrue(build.waitFor() == 0, "fixture image build failed: " + output);
+
+        io.restassured.RestAssured.config = io.restassured.RestAssured.config()
+                .httpClient(io.restassured.config.HttpClientConfig.httpClientConfig()
+                        .setParam("http.socket.timeout", 90000)
+                        .setParam("http.connection.timeout", 90000));
     }
 
     @Test

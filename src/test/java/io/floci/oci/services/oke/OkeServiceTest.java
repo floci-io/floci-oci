@@ -1,0 +1,220 @@
+package io.floci.oci.services.oke;
+
+import io.floci.oci.config.EmulatorConfig;
+import io.floci.oci.core.common.OciException;
+import io.floci.oci.core.storage.InMemoryStorage;
+import io.floci.oci.core.storage.StorageBackend;
+import io.floci.oci.core.storage.TenancyAwareStorageBackend;
+import io.floci.oci.core.workrequest.WorkRequestService;
+import io.floci.oci.services.oke.model.StoredNodePool;
+import io.floci.oci.services.oke.model.StoredOkeCluster;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+
+import java.util.List;
+import java.util.Map;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.mock;
+
+class OkeServiceTest {
+
+    private static final String COMPARTMENT = "ocid1.compartment.oc1..oketestcompartment";
+    private static final String VCN = "ocid1.vcn.oc1.iad.testvcn";
+
+    private OkeService service;
+    private InMemoryStorage<String, StoredOkeCluster> clusters;
+    private InMemoryStorage<String, StoredNodePool> nodePools;
+
+    @BeforeEach
+    void setUp() {
+        EmulatorConfig config = mock(EmulatorConfig.class);
+        lenient().when(config.defaultRealm()).thenReturn("oc1");
+        lenient().when(config.defaultRegion()).thenReturn("us-ashburn-1");
+        WorkRequestService workRequests = mock(WorkRequestService.class);
+
+        clusters = new InMemoryStorage<>();
+        nodePools = new InMemoryStorage<>();
+
+        service = new OkeService(clusters, nodePools, config, null, workRequests, null);
+    }
+
+    @Test
+    void createAndGetCluster() {
+        OkeService.CreateClusterResult res = service.createCluster(COMPARTMENT, "my-cluster", VCN, "v1.30.1", null, Map.of("env", "test"), null);
+        assertNotNull(res.cluster());
+        assertNotNull(clusters);
+        List<StoredOkeCluster> list = service.listClusters(COMPARTMENT);
+        assertEquals(1, list.size());
+        StoredOkeCluster cluster = list.get(0);
+        assertEquals("my-cluster", cluster.getName());
+        assertEquals(COMPARTMENT, cluster.getCompartmentId());
+
+        StoredOkeCluster fetched = service.getCluster(cluster.getId());
+        assertEquals(cluster.getId(), fetched.getId());
+    }
+
+    @Test
+    void ocidUsesMappedRegionShortCode() {
+        OkeService.CreateClusterResult res = service.createCluster(COMPARTMENT, "region-cluster", VCN, "v1.30.1", null, null, null);
+        assertTrue(res.cluster().getId().startsWith("ocid1.cluster.oc1.iad."));
+    }
+
+    @Test
+    void createClusterWithDuplicateNameReturnsNewCluster() {
+        OkeService.CreateClusterResult res1 = service.createCluster(COMPARTMENT, "same-name", VCN, "v1.30.1", null, null, null);
+        OkeService.CreateClusterResult res2 = service.createCluster(COMPARTMENT, "same-name", VCN, "v1.30.1", null, null, null);
+
+        assertNotNull(res1.cluster().getId());
+        assertNotNull(res2.cluster().getId());
+        assertTrue(!res1.cluster().getId().equals(res2.cluster().getId()));
+    }
+
+    @Test
+    void createNodePoolWithDuplicateNameReturnsNewNodePool() {
+        OkeService.CreateClusterResult cRes = service.createCluster(COMPARTMENT, "cluster-dup", VCN, "v1.30.1", null, null, null);
+        String clusterId = cRes.cluster().getId();
+
+        OkeService.CreateNodePoolResult np1 = service.createNodePool(COMPARTMENT, clusterId, "pool-dup", "v1.30.1", "VM.Standard.E4.Flex", 2, null, null);
+        OkeService.CreateNodePoolResult np2 = service.createNodePool(COMPARTMENT, clusterId, "pool-dup", "v1.30.1", "VM.Standard.E4.Flex", 2, null, null);
+
+        assertNotNull(np1.nodePool().getId());
+        assertNotNull(np2.nodePool().getId());
+        assertTrue(!np1.nodePool().getId().equals(np2.nodePool().getId()));
+    }
+
+    @Test
+    void getClusterNotFoundThrowsOciException() {
+        assertThrows(OciException.class, () -> service.getCluster("ocid1.cluster.oc1.iad.nonexistent"));
+    }
+
+    @Test
+    void createNodePoolNonexistentClusterThrowsOciException() {
+        assertThrows(OciException.class, () ->
+            service.createNodePool(COMPARTMENT, "ocid1.cluster.oc1.iad.nonexistent", "pool-1", "v1.30.1", "VM.Standard.E4.Flex", 2, null, null)
+        );
+    }
+
+    @Test
+    void updateAndDeleteCluster() {
+        service.createCluster(COMPARTMENT, "cluster-1", VCN, "v1.29.1", null, null, null);
+        StoredOkeCluster cluster = service.listClusters(COMPARTMENT).get(0);
+
+        service.updateCluster(cluster.getId(), "updated-name", "v1.30.1");
+        StoredOkeCluster updated = service.getCluster(cluster.getId());
+        assertEquals("updated-name", updated.getName());
+        assertEquals("v1.30.1", updated.getKubernetesVersion());
+
+        service.deleteCluster(cluster.getId());
+        assertThrows(OciException.class, () -> service.getCluster(cluster.getId()));
+    }
+
+    @Test
+    void deleteClusterDeletesDependentNodePools() {
+        OkeService.CreateClusterResult cRes = service.createCluster(COMPARTMENT, "cluster-cascade", VCN, "v1.30.1", null, null, null);
+        String clusterId = cRes.cluster().getId();
+
+        OkeService.CreateNodePoolResult npRes = service.createNodePool(COMPARTMENT, clusterId, "pool-cascade", "v1.30.1", "VM.Standard.E4.Flex", 2, null, null);
+        String poolId = npRes.nodePool().getId();
+
+        service.deleteCluster(clusterId);
+
+        assertThrows(OciException.class, () -> service.getCluster(clusterId));
+        assertThrows(OciException.class, () -> service.getNodePool(poolId));
+        assertTrue(service.listNodePools(COMPARTMENT, clusterId).isEmpty());
+    }
+
+    @Test
+    void createAndListNodePools() {
+        service.createCluster(COMPARTMENT, "cluster-1", VCN, "v1.30.1", null, null, null);
+        StoredOkeCluster cluster = service.listClusters(COMPARTMENT).get(0);
+
+        service.createNodePool(COMPARTMENT, cluster.getId(), "pool-1", "v1.30.1", "VM.Standard.E4.Flex", 2, null, null);
+        List<StoredNodePool> pools = service.listNodePools(COMPARTMENT, cluster.getId());
+        assertEquals(1, pools.size());
+        StoredNodePool pool = pools.get(0);
+        assertEquals("pool-1", pool.getName());
+        assertEquals(cluster.getId(), pool.getClusterId());
+        assertEquals(2, pool.getQuantityPerSubnet());
+    }
+
+    @Test
+    void clearPurgesStorage() {
+        service.createCluster(COMPARTMENT, "cluster-1", VCN, "v1.30.1", null, null, null);
+        service.clear();
+        assertTrue(service.listClusters(COMPARTMENT).isEmpty());
+    }
+
+    @Test
+    void startupReconstructsActiveClusterState() {
+        OkeClusterManager mockManager = mock(OkeClusterManager.class);
+        EmulatorConfig mockConfig = mock(EmulatorConfig.class);
+        EmulatorConfig.ServicesConfig mockServices = mock(EmulatorConfig.ServicesConfig.class);
+        EmulatorConfig.ServicesConfig.OkeServiceConfig mockOkeConfig = mock(EmulatorConfig.ServicesConfig.OkeServiceConfig.class);
+
+        lenient().when(mockConfig.services()).thenReturn(mockServices);
+        lenient().when(mockServices.oke()).thenReturn(mockOkeConfig);
+        lenient().when(mockOkeConfig.mock()).thenReturn(false);
+
+        OkeService persistentService = new OkeService(clusters, nodePools, mockConfig, null, mock(WorkRequestService.class), mockManager);
+
+        StoredOkeCluster cluster = new StoredOkeCluster();
+        cluster.setId("ocid1.cluster.oc1.iad.reconstruct");
+        cluster.setHostPort(16443);
+        clusters.put(cluster.getId(), cluster);
+
+        persistentService.reconstructClusterState();
+
+        org.mockito.Mockito.verify(mockManager).registerExistingCluster(cluster);
+    }
+
+    @Test
+    void startupReconstructsActiveClusterStateAcrossTenancies() {
+        OkeClusterManager mockManager = mock(OkeClusterManager.class);
+        EmulatorConfig mockConfig = mock(EmulatorConfig.class);
+        EmulatorConfig.ServicesConfig mockServices = mock(EmulatorConfig.ServicesConfig.class);
+        EmulatorConfig.ServicesConfig.OkeServiceConfig mockOkeConfig = mock(EmulatorConfig.ServicesConfig.OkeServiceConfig.class);
+
+        lenient().when(mockConfig.services()).thenReturn(mockServices);
+        lenient().when(mockServices.oke()).thenReturn(mockOkeConfig);
+        lenient().when(mockOkeConfig.mock()).thenReturn(false);
+
+        StorageBackend<String, StoredOkeCluster> rawBackend = new InMemoryStorage<>();
+        TenancyAwareStorageBackend<StoredOkeCluster> taClusters = new TenancyAwareStorageBackend<>(rawBackend, null, "ocid1.tenancy.oc1..flocitesttenancy");
+
+        OkeService persistentService = new OkeService(taClusters, nodePools, mockConfig, null, mock(WorkRequestService.class), mockManager);
+
+        StoredOkeCluster otherTenancyCluster = new StoredOkeCluster();
+        otherTenancyCluster.setId("ocid1.cluster.oc1.iad.othertenancy");
+        otherTenancyCluster.setHostPort(16444);
+
+        rawBackend.put("ocid1.tenancy.oc1..customtenancy/ocid1.cluster.oc1.iad.othertenancy", otherTenancyCluster);
+
+        persistentService.reconstructClusterState();
+
+        org.mockito.Mockito.verify(mockManager).registerExistingCluster(otherTenancyCluster);
+    }
+
+    @Test
+    void storedOkeClusterPersistsHostPortToStorageAndExcludesFromWire() throws Exception {
+        StoredOkeCluster cluster = new StoredOkeCluster();
+        cluster.setId("ocid1.cluster.oc1.iad.test1234");
+        cluster.setName("test-cluster");
+        cluster.setHostPort(16443);
+
+        com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+        String json = mapper.writeValueAsString(cluster);
+        assertTrue(json.contains("\"hostPort\":16443"), "Jackson storage serialization must include hostPort");
+
+        StoredOkeCluster deserialized = mapper.readValue(json, StoredOkeCluster.class);
+        assertEquals(16443, deserialized.getHostPort(), "Jackson deserialization must restore hostPort");
+
+        Map<String, Object> wire = cluster.toWire();
+        assertFalse(wire.containsKey("hostPort"));
+    }
+}
