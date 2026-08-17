@@ -58,7 +58,7 @@ public class OkeController {
 
         return Response.status(Response.Status.ACCEPTED)
                 .header("opc-work-request-id", result.workRequestId())
-                .entity(result.cluster())
+                .entity(result.cluster().toWire())
                 .build();
     }
 
@@ -66,13 +66,15 @@ public class OkeController {
     @Path("/clusters/{clusterId}")
     public Response getCluster(@PathParam("clusterId") String clusterId) {
         StoredOkeCluster cluster = service.getCluster(clusterId);
-        return Response.ok(cluster).build();
+        return Response.ok(cluster.toWire()).build();
     }
 
     @GET
     @Path("/clusters")
     public Response listClusters(@QueryParam("compartmentId") String compartmentId) {
-        List<StoredOkeCluster> clusters = service.listClusters(compartmentId);
+        List<Map<String, Object>> clusters = service.listClusters(compartmentId).stream()
+                .map(StoredOkeCluster::toWire)
+                .toList();
         return Response.ok(clusters).build();
     }
 

@@ -1,9 +1,9 @@
 package io.floci.oci.services.oke.model;
 
-import com.fasterxml.jackson.annotation.JsonIgnore;
 import io.quarkus.runtime.annotations.RegisterForReflection;
 
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
@@ -21,11 +21,42 @@ public class StoredOkeCluster {
     private String lifecycleState;
     private String lifecycleDetails;
     private Map<String, String> endpoints;
-    @JsonIgnore
     private int hostPort;
     private ClusterMetadata metadata;
     private Map<String, String> freeformTags;
     private Map<String, Map<String, Object>> definedTags;
+
+    /**
+     * The OCI wire shape: excludes internal properties like {@code hostPort}.
+     */
+    public Map<String, Object> toWire() {
+        Map<String, Object> wire = new LinkedHashMap<>();
+        wire.put("id", id);
+        wire.put("name", name);
+        wire.put("compartmentId", compartmentId);
+        wire.put("vcnId", vcnId);
+        wire.put("kubernetesVersion", kubernetesVersion);
+        if (kmsKeyId != null) {
+            wire.put("kmsKeyId", kmsKeyId);
+        }
+        wire.put("lifecycleState", lifecycleState);
+        if (lifecycleDetails != null) {
+            wire.put("lifecycleDetails", lifecycleDetails);
+        }
+        if (endpoints != null) {
+            wire.put("endpoints", endpoints);
+        }
+        if (metadata != null) {
+            wire.put("metadata", metadata);
+        }
+        if (freeformTags != null) {
+            wire.put("freeformTags", freeformTags);
+        }
+        if (definedTags != null) {
+            wire.put("definedTags", definedTags);
+        }
+        return wire;
+    }
 
     public String getId() {
         return id;

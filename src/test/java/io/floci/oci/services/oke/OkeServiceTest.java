@@ -198,4 +198,22 @@ class OkeServiceTest {
 
         org.mockito.Mockito.verify(mockManager).registerExistingCluster(otherTenancyCluster);
     }
+
+    @Test
+    void storedOkeClusterPersistsHostPortToStorageAndExcludesFromWire() throws Exception {
+        StoredOkeCluster cluster = new StoredOkeCluster();
+        cluster.setId("ocid1.cluster.oc1.iad.test1234");
+        cluster.setName("test-cluster");
+        cluster.setHostPort(16443);
+
+        com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+        String json = mapper.writeValueAsString(cluster);
+        assertTrue(json.contains("\"hostPort\":16443"), "Jackson storage serialization must include hostPort");
+
+        StoredOkeCluster deserialized = mapper.readValue(json, StoredOkeCluster.class);
+        assertEquals(16443, deserialized.getHostPort(), "Jackson deserialization must restore hostPort");
+
+        Map<String, Object> wire = cluster.toWire();
+        assertFalse(wire.containsKey("hostPort"), "toWire() response must exclude hostPort");
+    }
 }
