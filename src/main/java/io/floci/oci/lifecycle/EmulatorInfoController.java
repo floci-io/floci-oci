@@ -1,18 +1,17 @@
 package io.floci.oci.lifecycle;
 
+import io.floci.oci.core.common.Resettable;
 import io.floci.oci.core.common.ServiceRegistry;
+import io.floci.oci.core.storage.StorageFactory;
 import io.floci.oci.lifecycle.inithook.InitializationHook;
+import jakarta.enterprise.inject.Instance;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.GET;
+import jakarta.ws.rs.POST;
 import jakarta.ws.rs.Path;
 import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
-
-import io.floci.oci.core.storage.StorageFactory;
-import io.floci.oci.core.common.Resettable;
-import jakarta.enterprise.inject.Instance;
-import jakarta.ws.rs.POST;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
