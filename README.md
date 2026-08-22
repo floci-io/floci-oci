@@ -10,7 +10,9 @@
 
 <p align="center">
   <a href="https://github.com/floci-io/floci-oci/releases/latest"><img src="https://img.shields.io/github/v/release/floci-io/floci-oci?label=latest%20release&color=blue" alt="Latest Release"></a>
-  <a href="https://github.com/floci-io/floci-oci/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/floci-io/floci-oci/ci.yml?label=build" alt="Build Status"></a>
+  <a href="https://github.com/floci-io/floci-oci/actions/workflows/release.yml"><img src="https://img.shields.io/github/actions/workflow/status/floci-io/floci-oci/release.yml?label=build" alt="Build Status"></a>
+  <a href="https://hub.docker.com/r/floci/floci-oci"><img src="https://img.shields.io/docker/pulls/floci/floci-oci?label=docker%20pulls" alt="Docker Pulls"></a>
+  <a href="https://hub.docker.com/r/floci/floci-oci"><img src="https://img.shields.io/docker/image-size/floci/floci-oci/latest?label=image%20size" alt="Docker Image Size"></a>
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/license-MIT-green" alt="License: MIT"></a>
   <a href="https://github.com/floci-io/floci-oci/stargazers"><img src="https://img.shields.io/github/stars/floci-io/floci-oci?style=flat" alt="GitHub Stars"></a>
 </p>
