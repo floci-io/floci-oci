@@ -652,7 +652,6 @@ public class ObjectStorageController {
             return List.of();
         }
         return list.stream()
-                .filter(Objects::nonNull)
                 .map(entry -> {
                     if (!(entry instanceof Map<?, ?>)) {
                         throw OciException.invalidParameter("each object must be an object");
