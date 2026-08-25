@@ -188,7 +188,7 @@ flowchart LR
 | Category | Services |
 |---|---|
 | Identity | Compartments, users, groups, user-group memberships, policies, availability domains, regions, region subscriptions, tenancies |
-| Storage | Object Storage: namespaces, buckets, objects, listing, rename, copy, multipart uploads, pre-authenticated requests |
+| Storage | Object Storage: namespaces, buckets, objects, listing, rename, copy, batch delete, multipart uploads, pre-authenticated requests |
 | Messaging | Queue (visibility timeouts, dead-letter queues, channels), Streaming (partitioned log, cursors, consumer groups) |
 | Security | Vault + KMS (vaults, keys, key versions, **real** AES-GCM / RSA / ECDSA crypto), Secrets and secret bundles |
 | Serverless | Functions (applications, functions, real invocation through an Fn Project sidecar) |
@@ -203,7 +203,7 @@ For operation-level compatibility, see the [Services Overview](https://floci.io/
 | Service | How it works | Notable features |
 |---|---|---|
 | Identity (IAM) | In-process | Compartment CRUD incl. `compartmentIdInSubtree` listing and async delete via work request; users, groups, memberships; policies (statements stored verbatim); reference data (3 ADs, regions, tenancy); etag concurrency on every mutation |
-| Object Storage | In-process | Bucket CRUD (delete requires empty); objects with `Content-MD5` verification, `opc-meta-*` metadata, Range/206 reads, conditional headers; ListObjects with `prefix`/`start`/`end`/`delimiter`/`fields` and `nextStartWith` truncation; rename; async copy via work request; multipart uploads (per-part `etag` + `opc-content-md5`); pre-authenticated requests with anonymous `/p/{token}/…` data path |
+| Object Storage | In-process | Bucket CRUD (delete requires empty); objects with `Content-MD5` verification, `opc-meta-*` metadata, Range/206 reads, conditional headers; ListObjects with `prefix`/`start`/`end`/`delimiter`/`fields` and `nextStartWith` truncation; rename; async copy via work request; batch delete with per-object success/failure results; multipart uploads (per-part `etag` + `opc-content-md5`); pre-authenticated requests with anonymous `/p/{token}/…` data path |
 | Queue | In-process | Work-request-driven control plane (mutations return no body); data plane with visibility timeouts, `0`-visibility peeks, long polling, dead-letter queues, per-channel filtering, stats; wrapped `{"items":[…]}` list shape |
 | Streaming | In-process | Partitioned append-only log with key-hash placement; opaque cursors (`TRIM_HORIZON`/`LATEST`/`AT_OFFSET`/`AFTER_OFFSET`/`AT_TIME`), group cursors with commit + resume, `opc-next-cursor` paging; CreateStream returns body *and* work request |
 | Vault + KMS | In-process, real crypto | Vaults and keys with schedule/cancel deletion (no DELETE verb), key rotation; AES-GCM encrypt/decrypt whose envelope survives rotation, RSA/ECDSA sign/verify via JCA, CRC32 `plaintextChecksum` |
