@@ -241,8 +241,7 @@ public class ObjectStorageService {
         }
     }
 
-    /** Per-object failures land in the result, not thrown; only a missing bucket fails the batch. */
-    public BatchDeleteResult batchDeleteObjects(String namespaceName, String bucketName,
+    BatchDeleteResult batchDeleteObjects(String namespaceName, String bucketName,
                                                 List<BatchDeleteItem> items) {
         getBucket(namespaceName, bucketName);
         List<BatchDeleteResult.DeletedObject> deleted = new ArrayList<>();

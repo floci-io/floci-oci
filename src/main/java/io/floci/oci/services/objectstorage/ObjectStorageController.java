@@ -649,6 +649,7 @@ public class ObjectStorageController {
             return List.of();
         }
         return ((List<Map<String, Object>>) list).stream()
+                .filter(entry -> entry != null && !entry.isEmpty())
                 .map(entry -> {
                     String objectName = str(entry, "objectName");
                     if (objectName == null) {
