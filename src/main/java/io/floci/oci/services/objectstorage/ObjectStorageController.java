@@ -1,5 +1,6 @@
 package io.floci.oci.services.objectstorage;
 
+import com.google.common.annotations.VisibleForTesting;
 import io.floci.oci.core.common.OciException;
 import io.floci.oci.core.common.OciPage;
 import io.floci.oci.core.workrequest.StoredWorkRequest;
@@ -25,6 +26,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * OCI Object Storage API. Unversioned paths: {@code /n/{namespace}/b/{bucket}/o/{object}}.
@@ -644,18 +646,23 @@ public class ObjectStorageController {
     }
 
     @SuppressWarnings("unchecked")
-    private static List<ObjectStorageService.BatchDeleteItem> batchDeleteItems(Map<String, Object> body) {
+    @VisibleForTesting
+    static List<ObjectStorageService.BatchDeleteItem> batchDeleteItems(Map<String, Object> body) {
         if (body == null || !(body.get("objects") instanceof List<?> list)) {
             return List.of();
         }
-        return ((List<Map<String, Object>>) list).stream()
-                .filter(entry -> entry != null && !entry.isEmpty())
+        return list.stream()
+                .filter(Objects::nonNull)
                 .map(entry -> {
-                    String objectName = str(entry, "objectName");
+                    if (!(entry instanceof Map<?, ?>)) {
+                        throw OciException.invalidParameter("each object must be an object");
+                    }
+                    Map<String, Object> object = (Map<String, Object>) entry;
+                    String objectName = str(object, "objectName");
                     if (objectName == null) {
                         throw OciException.missingParameter("objectName is required for each object");
                     }
-                    return new ObjectStorageService.BatchDeleteItem(objectName, str(entry, "ifMatch"));
+                    return new ObjectStorageService.BatchDeleteItem(objectName, str(object, "ifMatch"));
                 })
                 .toList();
     }

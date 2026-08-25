@@ -13,9 +13,11 @@ import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import static io.floci.oci.services.objectstorage.ObjectStorageController.batchDeleteItems;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
@@ -96,6 +98,16 @@ class ObjectStorageServiceTest {
         OciException e = assertThrows(OciException.class,
                 () -> service.getObject(NS, "data", "hello.txt"));
         assertEquals("ObjectNotFound", e.getCode());
+    }
+
+    @Test
+    void test_batchDeleteItems_with_invalid_list(){
+        var invalidObjects = new HashMap<String, Object>() {{
+            put("namespaceName", NS);
+            put("bucketName", "data");
+            put("objects", List.of("s"));
+        }};
+        assertThrows(OciException.class, () -> batchDeleteItems(invalidObjects));
     }
 
     @Test
