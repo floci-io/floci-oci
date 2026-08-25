@@ -649,7 +649,7 @@ public class ObjectStorageController {
     @VisibleForTesting
     static List<ObjectStorageService.BatchDeleteItem> batchDeleteItems(Map<String, Object> body) {
         if (body == null || !(body.get("objects") instanceof List<?> list)) {
-            return List.of();
+            throw OciException.invalidParameter("malformed objects");
         }
         return list.stream()
                 .map(entry -> {
@@ -661,7 +661,11 @@ public class ObjectStorageController {
                     if (objectName == null) {
                         throw OciException.missingParameter("objectName is required for each object");
                     }
-                    return new ObjectStorageService.BatchDeleteItem(objectName, str(object, "ifMatch"));
+                    String ifMatch = str(object, "ifMatch");
+                    if (object.containsKey("ifMatch") && ifMatch == null) {
+                        throw OciException.invalidParameter("ifMatch must be a non-blank string");
+                    }
+                    return new ObjectStorageService.BatchDeleteItem(objectName, ifMatch);
                 })
                 .toList();
     }

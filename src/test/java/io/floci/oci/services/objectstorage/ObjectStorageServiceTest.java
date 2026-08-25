@@ -13,6 +13,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.NullSource;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
@@ -115,6 +116,14 @@ class ObjectStorageServiceTest {
                                 put("objects", List.of("foo"));
                             }}
                 ),
+                argumentSet("invalid objects - not a list",
+                        new HashMap<String, Object>() {
+                            {
+                                put("namespaceName", NS);
+                                put("bucketName", "data");
+                                put("objects", "not a list");
+                            }}
+                ),
                 argumentSet("missing object name",
                         new HashMap<String, Object>() {{
                             put("namespaceName", NS);
@@ -124,12 +133,22 @@ class ObjectStorageServiceTest {
                                     Map.of("name", "world.txt")
                             ));
                         }}
+                ),
+                argumentSet("invalid ifMatch",
+                        new HashMap<String, Object>() {{
+                            put("namespaceName", NS);
+                            put("bucketName", "data");
+                            put("objects", List.of(
+                                    Map.of("objectName", "hello.txt", "ifMatch", 2137)
+                            ));
+                        }}
                 )
         );
     }
 
     @ParameterizedTest
     @MethodSource("invalidBatchDeleteItems")
+    @NullSource
     void test_batchDeleteItems_with_invalid_list(Map<String, Object> invalidObjects) {
         assertThrows(OciException.class, () -> batchDeleteItems(invalidObjects));
     }
