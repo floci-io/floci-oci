@@ -230,6 +230,38 @@ public class ObjectStorageService {
         objects.delete(objectKey(bucketName, objectName));
     }
 
+    record BatchDeleteItem(String objectName, String ifMatch) {
+    }
+
+    record BatchDeleteResult(List<DeletedObject> deleted, List<FailedDelete> failed) {
+        record DeletedObject(String objectName, String timeDeleted) {
+        }
+
+        record FailedDelete(String objectName, int statusCode, String errorMessage) {
+        }
+    }
+
+    /** Per-object failures land in the result, not thrown; only a missing bucket fails the batch. */
+    public BatchDeleteResult batchDeleteObjects(String namespaceName, String bucketName,
+                                                List<BatchDeleteItem> items) {
+        getBucket(namespaceName, bucketName);
+        List<BatchDeleteResult.DeletedObject> deleted = new ArrayList<>();
+        List<BatchDeleteResult.FailedDelete> failed = new ArrayList<>();
+        for (BatchDeleteItem item : items) {
+            try {
+                StoredOsObject o = getObject(namespaceName, bucketName, item.objectName());
+                Etags.checkIfMatch(item.ifMatch(), o.getEtag());
+                objects.delete(objectKey(bucketName, item.objectName()));
+                deleted.add(new BatchDeleteResult.DeletedObject(
+                        item.objectName(), Instant.now().toString()));
+            } catch (OciException e) {
+                failed.add(new BatchDeleteResult.FailedDelete(
+                        item.objectName(), e.getHttpStatus(), e.getMessage()));
+            }
+        }
+        return new BatchDeleteResult(deleted, failed);
+    }
+
     public record ObjectListing(List<StoredOsObject> objects, List<String> prefixes, String nextStartWith) {
     }
 

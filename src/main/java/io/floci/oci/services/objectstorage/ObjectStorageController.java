@@ -255,6 +255,41 @@ public class ObjectStorageController {
         return Response.accepted().header("opc-work-request-id", workRequestId).build();
     }
 
+    @POST
+    @Path("/n/{namespaceName}/b/{bucketName}/actions/batchDeleteObjects")
+    public Response batchDeleteObjects(@PathParam("namespaceName") String namespaceName,
+                                       @PathParam("bucketName") String bucketName,
+                                       Map<String, Object> body) {
+        List<ObjectStorageService.BatchDeleteItem> items = batchDeleteItems(body);
+        if (items.isEmpty()) {
+            throw OciException.missingParameter("objects is required");
+        }
+        boolean skipDeletedResult = body.get("isSkipDeletedResult") instanceof Boolean b && b;
+        ObjectStorageService.BatchDeleteResult batchDeleteResult =
+                service.batchDeleteObjects(namespaceName, bucketName, items);
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("deleted", skipDeletedResult ? List.of() : batchDeleteResult.deleted().stream()
+                .map(d -> {
+                    Map<String, Object> entry = new LinkedHashMap<>();
+                    entry.put("objectName", d.objectName());
+                    entry.put("timeLastModified", RFC_1123.format(Instant.parse(d.timeDeleted())));
+                    return entry;
+                })
+                .toList());
+        if (!batchDeleteResult.failed().isEmpty()) {
+            result.put("failed", batchDeleteResult.failed().stream()
+                    .map(f -> {
+                        Map<String, Object> entry = new LinkedHashMap<>();
+                        entry.put("objectName", f.objectName());
+                        entry.put("statusCode", f.statusCode());
+                        entry.put("errorMessage", f.errorMessage());
+                        return entry;
+                    })
+                    .toList());
+        }
+        return Response.ok(result).build();
+    }
+
     // ── Multipart uploads ──────────────────────────────────────────────────────
 
     @POST
@@ -606,5 +641,21 @@ public class ObjectStorageController {
             return null;
         }
         return (List<Map<String, Object>>) list;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<ObjectStorageService.BatchDeleteItem> batchDeleteItems(Map<String, Object> body) {
+        if (body == null || !(body.get("objects") instanceof List<?> list)) {
+            return List.of();
+        }
+        return ((List<Map<String, Object>>) list).stream()
+                .map(entry -> {
+                    String objectName = str(entry, "objectName");
+                    if (objectName == null) {
+                        throw OciException.missingParameter("objectName is required for each object");
+                    }
+                    return new ObjectStorageService.BatchDeleteItem(objectName, str(entry, "ifMatch"));
+                })
+                .toList();
     }
 }
