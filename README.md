@@ -423,7 +423,7 @@ The [`compatibility-tests`](./compatibility-tests/) directory validates floci-oc
 
 | Module | Language / Tool | SDK / Client | Tests |
 |---|---|---|---:|
-| `sdk-test-java` | Java | oci-java-sdk (incl. OKE integration) | 19 |
+| `sdk-test-java` | Java | oci-java-sdk (incl. OKE integration) | 20 |
 | `sdk-test-python` | Python 3 | oci (incl. `UploadManager` streaming) | 20 |
 | `sdk-test-go` | Go | oci-go-sdk (OKE container engine) | 1 |
 | `sdk-test-cli` | Bash / BATS | OCI CLI (`oci ce cluster …`) | 1 |
