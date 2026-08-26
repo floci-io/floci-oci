@@ -74,6 +74,7 @@ jobs:
         test:
           - sdk-test-java
           - sdk-test-python
+          - sdk-test-cli
           - compat-terraform
           - compat-opentofu
 

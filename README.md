@@ -426,12 +426,12 @@ The [`compatibility-tests`](./compatibility-tests/) directory validates floci-oc
 | `sdk-test-java` | Java | oci-java-sdk (incl. OKE integration) | 19 |
 | `sdk-test-python` | Python 3 | oci (incl. `UploadManager` streaming) | 20 |
 | `sdk-test-go` | Go | oci-go-sdk (OKE container engine) | 1 |
-| `sdk-test-cli` | Bash / BATS | OCI CLI (`oci ce cluster …`) | 1 |
+| `sdk-test-cli` | Bash / BATS | OCI CLI 3.89.3 (all 8 services, incl. error codes and PAR access) | 54 |
 | `compat-terraform` | Terraform | oracle/oci provider (12 resources, zero-drift plan) | 6 |
 | `compat-opentofu` | OpenTofu | oracle/oci provider (12 resources, zero-drift plan) | 6 |
 
 > [!NOTE]
-> `sdk-test-cli` and `sdk-test-go` currently focus on OKE (Container Engine for Kubernetes) compatibility verification; test coverage for additional OCI services will be added to these suites in future releases.
+> `sdk-test-go` currently focuses on OKE (Container Engine for Kubernetes) compatibility verification; coverage for additional OCI services will be added in future releases.
 
 Run everything in Docker against a compose-built emulator:
 

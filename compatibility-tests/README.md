@@ -7,10 +7,11 @@ protocol adherence.
 |---|---|---|
 | `sdk-test-java` | oci-java-sdk (default suite) | Identity + Object Storage, incl. multipart and work requests |
 | `sdk-test-python` | oci (Python SDK) | Identity + Object Storage, incl. `UploadManager` streaming |
+| `sdk-test-cli` | oci-cli 3.89.3 (official CLI) + bats | Smoke CRUD across all 8 services, incl. error codes and PAR access |
 | `compat-terraform` | Terraform + oracle/oci provider + bats | Full apply → no-drift plan → destroy cycle |
 | `compat-opentofu` | OpenTofu + oracle/oci provider + bats | Same cycle as Terraform |
 
-Planned: `sdk-test-go` (oci-go-sdk), `sdk-test-oci-cli` (bats).
+Planned: `sdk-test-go` (oci-go-sdk).
 
 ## How the IaC suites reach the emulator
 
@@ -31,6 +32,7 @@ Against a locally running emulator (`make run` in the repo root):
 ```bash
 make test-java-compat
 make test-python-compat      # needs: pip install -r sdk-test-python/requirements.txt
+make test-cli-compat         # needs: pip install oci-cli, bats, jq
 make test-terraform-compat   # needs: terraform, bats
 make test-opentofu-compat    # needs: tofu, bats
 ```
