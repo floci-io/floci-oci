@@ -1,10 +1,10 @@
 package io.floci.oci.services.objectstorage;
 
-import com.google.common.annotations.VisibleForTesting;
 import io.floci.oci.core.common.OciException;
 import io.floci.oci.core.common.OciPage;
 import io.floci.oci.core.workrequest.StoredWorkRequest;
 import io.floci.oci.core.workrequest.WorkRequestService;
+import io.floci.oci.services.objectstorage.ObjectStorageService.BatchDeleteResult;
 import io.floci.oci.services.objectstorage.model.StoredBucket;
 import io.floci.oci.services.objectstorage.model.StoredMultipartUpload;
 import io.floci.oci.services.objectstorage.model.StoredOsObject;
@@ -26,7 +26,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Objects;
 
 /**
  * OCI Object Storage API. Unversioned paths: {@code /n/{namespace}/b/{bucket}/o/{object}}.
@@ -267,14 +266,13 @@ public class ObjectStorageController {
             throw OciException.missingParameter("objects is required");
         }
         boolean skipDeletedResult = body.get("isSkipDeletedResult") instanceof Boolean b && b;
-        ObjectStorageService.BatchDeleteResult batchDeleteResult =
-                service.batchDeleteObjects(namespaceName, bucketName, items);
+        BatchDeleteResult batchDeleteResult = service.batchDeleteObjects(namespaceName, bucketName, items);
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("deleted", skipDeletedResult ? List.of() : batchDeleteResult.deleted().stream()
                 .map(d -> {
                     Map<String, Object> entry = new LinkedHashMap<>();
                     entry.put("objectName", d.objectName());
-                    entry.put("timeLastModified", RFC_1123.format(Instant.parse(d.timeDeleted())));
+                    entry.put("timeLastModified", Instant.parse(d.timeDeleted()).toString());
                     return entry;
                 })
                 .toList());
@@ -646,7 +644,6 @@ public class ObjectStorageController {
     }
 
     @SuppressWarnings("unchecked")
-    @VisibleForTesting
     static List<ObjectStorageService.BatchDeleteItem> batchDeleteItems(Map<String, Object> body) {
         if (body == null || !(body.get("objects") instanceof List<?> list)) {
             throw OciException.invalidParameter("malformed objects");

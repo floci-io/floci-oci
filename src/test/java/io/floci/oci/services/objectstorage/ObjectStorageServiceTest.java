@@ -13,7 +13,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
-import org.junit.jupiter.params.provider.NullSource;
+import org.junit.jupiter.params.provider.NullAndEmptySource;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
@@ -148,7 +148,7 @@ class ObjectStorageServiceTest {
 
     @ParameterizedTest
     @MethodSource("invalidBatchDeleteItems")
-    @NullSource
+    @NullAndEmptySource
     void test_batchDeleteItems_with_invalid_list(Map<String, Object> invalidObjects) {
         assertThrows(OciException.class, () -> batchDeleteItems(invalidObjects));
     }
