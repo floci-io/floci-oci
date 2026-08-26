@@ -35,12 +35,10 @@ teardown_file() {
     [ -n "$cluster_id" ]
     echo "$cluster_id" > "$BATS_FILE_TMPDIR/cluster_id"
 
-    # Real mode pulls the k3s image on first use; be generous.
-    if wait_for_state ACTIVE '.data."lifecycle-state"' 180 ce cluster get --cluster-id "$cluster_id"; then
-        touch "$BATS_FILE_TMPDIR/cluster_active"
-    else
-        skip "cluster did not reach ACTIVE (sidecar unavailable?)"
-    fi
+    # Real mode pulls the k3s image on first use; be generous. A cluster that
+    # never activates is a failure, not a skip: mock mode activates instantly
+    # and in real mode CI mounts docker.sock, so there is no legitimate skip case.
+    wait_for_state ACTIVE '.data."lifecycle-state"' 180 ce cluster get --cluster-id "$cluster_id"
 }
 
 @test "ce: work-request list shows the cluster creation" {
@@ -50,7 +48,6 @@ teardown_file() {
 }
 
 @test "ce: create-kubeconfig returns a kubeconfig" {
-    [ -f "$BATS_FILE_TMPDIR/cluster_active" ] || skip "cluster never reached ACTIVE"
     run oci_json ce cluster create-kubeconfig --cluster-id "$CLUSTER_ID" --file -
     [ "$status" -eq 0 ]
     [[ "$output" == *apiVersion* ]]
