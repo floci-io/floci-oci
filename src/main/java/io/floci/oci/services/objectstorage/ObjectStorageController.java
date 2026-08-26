@@ -272,7 +272,7 @@ public class ObjectStorageController {
                 .map(d -> {
                     Map<String, Object> entry = new LinkedHashMap<>();
                     entry.put("objectName", d.objectName());
-                    entry.put("timeLastModified", Instant.parse(d.timeDeleted()).toString());
+                    entry.put("timeLastModified", d.timeDeleted().toString());
                     return entry;
                 })
                 .toList());

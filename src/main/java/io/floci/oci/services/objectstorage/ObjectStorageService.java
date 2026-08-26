@@ -234,7 +234,7 @@ public class ObjectStorageService {
     }
 
     record BatchDeleteResult(List<DeletedObject> deleted, List<FailedDelete> failed) {
-        record DeletedObject(String objectName, String timeDeleted) {
+        record DeletedObject(String objectName, Instant timeDeleted) {
         }
 
         record FailedDelete(String objectName, int statusCode, String errorMessage) {
@@ -252,7 +252,7 @@ public class ObjectStorageService {
                 Etags.checkIfMatch(item.ifMatch(), o.getEtag());
                 objects.delete(objectKey(bucketName, item.objectName()));
                 deleted.add(new BatchDeleteResult.DeletedObject(
-                        item.objectName(), Instant.now().toString()));
+                        item.objectName(), Instant.now()));
             } catch (OciException e) {
                 failed.add(new BatchDeleteResult.FailedDelete(
                         item.objectName(), e.getHttpStatus(), e.getMessage()));
