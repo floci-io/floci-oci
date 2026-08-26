@@ -147,7 +147,7 @@ public class OkeService implements Resettable {
         StoredWorkRequest.Resource res = WorkRequestService.resource(
             "cluster", "CREATED", clusterId, "/20180222/clusters/" + clusterId
         );
-        String workRequestId = workRequests.succeeded("oke", "CREATE_CLUSTER", compartmentId, List.of(res));
+        String workRequestId = workRequests.succeeded("oke", "CLUSTER_CREATE", compartmentId, List.of(res));
         return new CreateClusterResult(workRequestId, cluster);
     }
 
@@ -175,7 +175,7 @@ public class OkeService implements Resettable {
         StoredWorkRequest.Resource res = WorkRequestService.resource(
             "cluster", "UPDATED", clusterId, "/20180222/clusters/" + clusterId
         );
-        return workRequests.succeeded("oke", "UPDATE_CLUSTER", cluster.getCompartmentId(), List.of(res));
+        return workRequests.succeeded("oke", "CLUSTER_UPDATE", cluster.getCompartmentId(), List.of(res));
     }
 
     public String deleteCluster(String clusterId) {
@@ -196,7 +196,7 @@ public class OkeService implements Resettable {
         StoredWorkRequest.Resource res = WorkRequestService.resource(
             "cluster", "DELETED", clusterId, "/20180222/clusters/" + clusterId
         );
-        return workRequests.succeeded("oke", "DELETE_CLUSTER", cluster.getCompartmentId(), List.of(res));
+        return workRequests.succeeded("oke", "CLUSTER_DELETE", cluster.getCompartmentId(), List.of(res));
     }
 
     public CreateNodePoolResult createNodePool(String compartmentId, String clusterId, String name,
@@ -234,7 +234,7 @@ public class OkeService implements Resettable {
         StoredWorkRequest.Resource res = WorkRequestService.resource(
             "nodepool", "CREATED", nodePoolId, "/20180222/nodePools/" + nodePoolId
         );
-        String workRequestId = workRequests.succeeded("oke", "CREATE_NODEPOOL", compartmentId, List.of(res));
+        String workRequestId = workRequests.succeeded("oke", "NODEPOOL_CREATE", compartmentId, List.of(res));
         return new CreateNodePoolResult(workRequestId, pool);
     }
 
@@ -266,7 +266,7 @@ public class OkeService implements Resettable {
         StoredWorkRequest.Resource res = WorkRequestService.resource(
             "nodepool", "UPDATED", nodePoolId, "/20180222/nodePools/" + nodePoolId
         );
-        return workRequests.succeeded("oke", "UPDATE_NODEPOOL", pool.getCompartmentId(), List.of(res));
+        return workRequests.succeeded("oke", "NODEPOOL_UPDATE", pool.getCompartmentId(), List.of(res));
     }
 
     public String deleteNodePool(String nodePoolId) {
@@ -277,7 +277,7 @@ public class OkeService implements Resettable {
         StoredWorkRequest.Resource res = WorkRequestService.resource(
             "nodepool", "DELETED", nodePoolId, "/20180222/nodePools/" + nodePoolId
         );
-        return workRequests.succeeded("oke", "DELETE_NODEPOOL", pool.getCompartmentId(), List.of(res));
+        return workRequests.succeeded("oke", "NODEPOOL_DELETE", pool.getCompartmentId(), List.of(res));
     }
 
     String regionShort() {
