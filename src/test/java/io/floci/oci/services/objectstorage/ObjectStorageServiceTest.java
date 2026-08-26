@@ -10,13 +10,21 @@ import io.floci.oci.services.objectstorage.model.StoredOsObject;
 import io.floci.oci.services.objectstorage.model.StoredPar;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.NullAndEmptySource;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Stream;
 
+import static io.floci.oci.services.objectstorage.ObjectStorageController.batchDeleteItems;
 import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.params.provider.Arguments.argumentSet;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 
@@ -96,6 +104,53 @@ class ObjectStorageServiceTest {
         OciException e = assertThrows(OciException.class,
                 () -> service.getObject(NS, "data", "hello.txt"));
         assertEquals("ObjectNotFound", e.getCode());
+    }
+
+    public static Stream<Arguments> invalidBatchDeleteItems() {
+        return Stream.of(
+                argumentSet("invalid objects",
+                        new HashMap<String, Object>() {
+                            {
+                                put("namespaceName", NS);
+                                put("bucketName", "data");
+                                put("objects", List.of("foo"));
+                            }}
+                ),
+                argumentSet("invalid objects - not a list",
+                        new HashMap<String, Object>() {
+                            {
+                                put("namespaceName", NS);
+                                put("bucketName", "data");
+                                put("objects", "not a list");
+                            }}
+                ),
+                argumentSet("missing object name",
+                        new HashMap<String, Object>() {{
+                            put("namespaceName", NS);
+                            put("bucketName", "data");
+                            put("objects", List.of(
+                                    Map.of("objectName", "hello.txt"),
+                                    Map.of("name", "world.txt")
+                            ));
+                        }}
+                ),
+                argumentSet("invalid ifMatch",
+                        new HashMap<String, Object>() {{
+                            put("namespaceName", NS);
+                            put("bucketName", "data");
+                            put("objects", List.of(
+                                    Map.of("objectName", "hello.txt", "ifMatch", 2137)
+                            ));
+                        }}
+                )
+        );
+    }
+
+    @ParameterizedTest
+    @MethodSource("invalidBatchDeleteItems")
+    @NullAndEmptySource
+    void test_batchDeleteItems_with_invalid_list(Map<String, Object> invalidObjects) {
+        assertThrows(OciException.class, () -> batchDeleteItems(invalidObjects));
     }
 
     @Test

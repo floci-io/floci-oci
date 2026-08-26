@@ -10,7 +10,7 @@ OCI Object Storage — unversioned paths under `/n/{namespace}/b/{bucket}/o/{obj
 | Buckets | Create, Get, Head, List, Update, Delete (must be empty) |
 | Objects | Put (Content-MD5 check, `opc-meta-*`, conditional headers), Get (Range → 206), Head, Delete |
 | Listing | ListObjects with `prefix`/`start`/`end`/`delimiter`/`limit`/`fields`, `nextStartWith` truncation |
-| Actions | RenameObject; CopyObject (async, work request, terminal status `COMPLETED`) |
+| Actions | RenameObject; CopyObject (async, work request, terminal status `COMPLETED`); BatchDeleteObjects (per-object success/failure results, optional per-entry `ifMatch`, `isSkipDeletedResult`) |
 | Multipart | CreateMultipartUpload, UploadPart, Commit, Abort, List |
 | Pre-authenticated requests | Create, Get, List, Delete; anonymous data path via `/p/{token}/…` |
 | Work requests | Get, List, errors, logs (unversioned at `/workRequests`) |

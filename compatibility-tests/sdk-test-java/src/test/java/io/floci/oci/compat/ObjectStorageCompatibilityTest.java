@@ -2,13 +2,18 @@ package io.floci.oci.compat;
 
 import com.oracle.bmc.model.BmcException;
 import com.oracle.bmc.objectstorage.ObjectStorageClient;
+import com.oracle.bmc.objectstorage.model.BatchDeleteObjectIdentifier;
+import com.oracle.bmc.objectstorage.model.BatchDeleteObjectsDetails;
 import com.oracle.bmc.objectstorage.model.Bucket;
 import com.oracle.bmc.objectstorage.model.CommitMultipartUploadDetails;
 import com.oracle.bmc.objectstorage.model.CommitMultipartUploadPartDetails;
 import com.oracle.bmc.objectstorage.model.CopyObjectDetails;
 import com.oracle.bmc.objectstorage.model.CreateBucketDetails;
 import com.oracle.bmc.objectstorage.model.CreateMultipartUploadDetails;
+import com.oracle.bmc.objectstorage.model.DeletedObjectResult;
+import com.oracle.bmc.objectstorage.model.FailedObjectResult;
 import com.oracle.bmc.objectstorage.model.RenameObjectDetails;
+import com.oracle.bmc.objectstorage.requests.BatchDeleteObjectsRequest;
 import com.oracle.bmc.objectstorage.requests.CommitMultipartUploadRequest;
 import com.oracle.bmc.objectstorage.requests.CopyObjectRequest;
 import com.oracle.bmc.objectstorage.requests.CreateBucketRequest;
@@ -38,6 +43,7 @@ import java.util.Map;
 import static io.floci.oci.compat.EmulatorFixture.TENANCY;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.tuple;
 
 /** Validates the Object Storage API against the real oci-java-sdk. */
 class ObjectStorageCompatibilityTest {
@@ -194,6 +200,59 @@ class ObjectStorageCompatibilityTest {
             client.deleteObject(DeleteObjectRequest.builder()
                     .namespaceName(namespace).bucketName(bucket).objectName(name).build());
         }
+        client.deleteBucket(DeleteBucketRequest.builder()
+                .namespaceName(namespace).bucketName(bucket).build());
+    }
+
+    @Test
+    void batchDeleteObjectsWithPartialFailures() {
+        String bucket = createBucket("sdk-batch-delete");
+        for (String name : List.of("a.txt", "b.txt", "c.txt")) {
+            byte[] data = "x".getBytes(StandardCharsets.UTF_8);
+            client.putObject(PutObjectRequest.builder()
+                    .namespaceName(namespace).bucketName(bucket).objectName(name)
+                    .putObjectBody(new ByteArrayInputStream(data))
+                    .contentLength((long) data.length)
+                    .build());
+        }
+
+        // Mixed batch: two plain deletes succeed, a missing object and a stale ifMatch fail per-entry.
+        var result = client.batchDeleteObjects(BatchDeleteObjectsRequest.builder()
+                .namespaceName(namespace).bucketName(bucket)
+                .batchDeleteObjectsDetails(BatchDeleteObjectsDetails.builder()
+                        .objects(List.of(
+                                BatchDeleteObjectIdentifier.builder().objectName("a.txt").build(),
+                                BatchDeleteObjectIdentifier.builder().objectName("b.txt").build(),
+                                BatchDeleteObjectIdentifier.builder().objectName("missing.txt").build(),
+                                BatchDeleteObjectIdentifier.builder()
+                                        .objectName("c.txt").ifMatch("stale-etag").build()))
+                        .build())
+                .build()).getBatchDeleteObjectsResult();
+
+        assertThat(result.getDeleted())
+                .extracting(DeletedObjectResult::getObjectName)
+                .containsExactly("a.txt", "b.txt");
+        assertThat(result.getDeleted().getFirst().getTimeLastModified()).isNotNull();
+        assertThat(result.getFailed())
+                .extracting(FailedObjectResult::getObjectName, FailedObjectResult::getStatusCode)
+                .containsExactly(tuple("missing.txt", 404), tuple("c.txt", 412));
+
+        assertThatThrownBy(() -> client.getObject(GetObjectRequest.builder()
+                .namespaceName(namespace).bucketName(bucket).objectName("a.txt").build()))
+                .isInstanceOfSatisfying(BmcException.class,
+                        e -> assertThat(e.getStatusCode()).isEqualTo(404));
+
+        // isSkipDeletedResult suppresses the per-object success details.
+        var skipped = client.batchDeleteObjects(BatchDeleteObjectsRequest.builder()
+                .namespaceName(namespace).bucketName(bucket)
+                .batchDeleteObjectsDetails(BatchDeleteObjectsDetails.builder()
+                        .isSkipDeletedResult(true)
+                        .objects(List.of(BatchDeleteObjectIdentifier.builder()
+                                .objectName("c.txt").build()))
+                        .build())
+                .build()).getBatchDeleteObjectsResult();
+        assertThat(skipped.getDeleted()).isEmpty();
+
         client.deleteBucket(DeleteBucketRequest.builder()
                 .namespaceName(namespace).bucketName(bucket).build());
     }

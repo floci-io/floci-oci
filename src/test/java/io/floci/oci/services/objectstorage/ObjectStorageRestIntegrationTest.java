@@ -214,6 +214,63 @@ class ObjectStorageRestIntegrationTest {
     }
 
     @Test
+    void batchDeleteObjectsAction() {
+        String bucket = uniqueBucket("it-batch-delete");
+        createBucket(bucket);
+        for (String name : List.of("a.txt", "b.txt", "c.txt")) {
+            given().contentType("text/plain").body("payload")
+                .when().put("/n/" + NS + "/b/" + bucket + "/o/" + name)
+                .then().statusCode(200);
+        }
+
+        // Mixed batch: two deletes succeed, a missing object and a stale ifMatch fail per-entry.
+        given()
+            .contentType("application/json")
+            .body(Map.of("objects", List.of(
+                    Map.of("objectName", "a.txt"),
+                    Map.of("objectName", "b.txt"),
+                    Map.of("objectName", "missing.txt"),
+                    Map.of("objectName", "c.txt", "ifMatch", "stale-etag"))))
+            .when().post("/n/" + NS + "/b/" + bucket + "/actions/batchDeleteObjects")
+            .then().statusCode(200)
+                .body("deleted.objectName", contains("a.txt", "b.txt"))
+                .body("deleted[0].timeLastModified", notNullValue())
+                .body("failed.objectName", contains("missing.txt", "c.txt"))
+                .body("failed[0].statusCode", equalTo(404))
+                .body("failed[1].statusCode", equalTo(412));
+
+        given()
+            .when().get("/n/" + NS + "/b/" + bucket + "/o/a.txt")
+            .then().statusCode(404);
+
+        // isSkipDeletedResult suppresses the deleted details; failed is omitted when empty.
+        given()
+            .contentType("application/json")
+            .body(Map.of("isSkipDeletedResult", true,
+                    "objects", List.of(Map.of("objectName", "c.txt"))))
+            .when().post("/n/" + NS + "/b/" + bucket + "/actions/batchDeleteObjects")
+            .then().statusCode(200)
+                .body("deleted", empty())
+                .body("$", not(hasKey("failed")));
+
+        given()
+            .contentType("application/json")
+            .body(Map.of("objects", List.of()))
+            .when().post("/n/" + NS + "/b/" + bucket + "/actions/batchDeleteObjects")
+            .then().statusCode(400)
+                .body("code", equalTo("MissingParameter"));
+
+        given()
+            .contentType("application/json")
+            .body(Map.of("objects", List.of(Map.of("objectName", "x.txt"))))
+            .when().post("/n/" + NS + "/b/no-such-bucket/actions/batchDeleteObjects")
+            .then().statusCode(404)
+                .body("code", equalTo("BucketNotFound"));
+
+        given().when().delete("/n/" + NS + "/b/" + bucket).then().statusCode(204);
+    }
+
+    @Test
     void multipartUploadRoundtrip() {
         String bucket = uniqueBucket("it-multipart");
         createBucket(bucket);
