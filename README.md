@@ -526,9 +526,34 @@ Join the Floci community on [Slack](https://join.slack.com/t/floci/shared_invite
 
 ## Sponsors
 
-Floci is independent open source, funded by its users. If floci-oci saves you time,
-consider [sponsoring the project](https://github.com/sponsors/floci-io) — every
-tier keeps the emulators fast, light, and free.
+Floci is independent open source, funded by the people and companies who use it.
+Sponsorship buys gratitude and nothing else: every emulated service is free for
+everyone, forever, and no sponsor gets features, priority, or roadmap influence
+that the rest of the Flock does not.
+
+### 🥇 Gold
+
+Large logo with top placement in the emulator READMEs and on floci.io, plus a
+mention in release notes.
+
+[IceGuard](https://github.com/iceguard) · [Softmax](https://softmax.com/)
+
+### 🥈 Silver
+
+Logo in the emulator READMEs and on floci.io, plus a mention in release notes.
+
+*Your logo here. [Become a sponsor](https://github.com/sponsors/floci-io).*
+
+### 🥉 Community
+
+Name in the emulator READMEs, a sponsor badge on GitHub, and our sincere thanks.
+
+[AutoScout24](https://www.autoscout24.com) · [Nexxion AI](https://nexxion.ai/)
+
+Every sponsor, including the Friends of the Flock who support Floci outside these
+tiers, is listed in [THANKS.md](https://github.com/floci-io/.github/blob/main/THANKS.md).
+
+**[Sponsor Floci](https://github.com/sponsors/floci-io)**
 
 ## Star History
 
