@@ -14,7 +14,7 @@ assignees: ''
 
 <!-- e.g. ObjectStorage Batch Deletetion -->
 
-## AWS Documentation
+## OCI Documentation
 
 <!-- Link to the OCI API reference for this action -->
 
