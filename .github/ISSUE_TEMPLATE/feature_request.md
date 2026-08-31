@@ -12,7 +12,7 @@ assignees: ''
 
 ## API Action / Feature
 
-<!-- e.g. ObjectStorage Batch Deletetion -->
+<!-- e.g. ObjectStorage Batch Deletion -->
 
 ## OCI Documentation
 
