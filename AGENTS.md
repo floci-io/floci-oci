@@ -156,6 +156,10 @@ contract; use a current FDK image (see `src/test/resources/fn-hello/`).
 - Self-explanatory code over comments; always use braces
 - JBoss Logging, structured, no noise in hot paths
 
+## Documentation Style
+
+- No em-dashes anywhere, in any content. Use colons, commas, or periods.
+
 ## Pull Request Guidelines
 
 - Conventional commits: `feat:`, `fix:`, `perf:`, `docs:`, `chore:`
