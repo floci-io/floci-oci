@@ -1,6 +1,6 @@
 ---
 name: Feature request
-about: Missing AWS API action or service
+about: Missing OCI API action or service
 title: '[FEAT] '
 labels: enhancement
 assignees: ''
@@ -8,15 +8,15 @@ assignees: ''
 
 ## Service
 
-<!-- e.g. S3, Kinesis, CloudWatch -->
+<!-- e.g. ObjectStorage, Queue, OKE -->
 
 ## API Action / Feature
 
-<!-- e.g. S3 Object Tagging, Kinesis GetShardIterator -->
+<!-- e.g. ObjectStorage Batch Deletetion -->
 
 ## AWS Documentation
 
-<!-- Link to the AWS API reference for this action -->
+<!-- Link to the OCI API reference for this action -->
 
 ## Why is this needed?
 
