@@ -1,7 +1,9 @@
 name: Nightly
 
 # Builds and publishes native images from the tip of main as nightly Docker tags.
-# Runs every night at 22:00 CT (03:00 UTC, approximate — shifts 1 h in CST winter).
+# Runs every night at 23:00 America/Chicago (04:00 UTC in CDT, 05:00 UTC in CST).
+# GitHub may delay scheduled runs on low-activity repositories; observed delays on this
+# org have reached several hours. The schedule is a target, not a guarantee.
 # Can also be triggered manually.
 #
 # Published tags:
@@ -37,7 +39,7 @@ jobs:
         id: date
         run: echo "version=$(TZ='America/Chicago' date +'%m%d%Y')" >> "$GITHUB_OUTPUT"
 
-  # ── Build native artifact — amd64 ────────────────────────────────────────
+  # ── Build native artifact: amd64 ─────────────────────────────────────────
   build-native-amd64:
     name: Build native artifact (amd64)
     needs: prepare
@@ -85,7 +87,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 1
 
-  # ── Build native artifact — arm64 ────────────────────────────────────────
+  # ── Build native artifact: arm64 ─────────────────────────────────────────
   build-native-arm64:
     name: Build native artifact (arm64)
     needs: prepare
