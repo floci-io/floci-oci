@@ -33,7 +33,7 @@ io.floci.oci
 ## Adding a new OCI service
 
 1. Create `services/<svc>/` with `<Svc>Controller`, `<Svc>Service`, `model/`
-2. The service registers its own `ServiceDescriptor` in an `@Observes StartupEvent` method —
+2. The service registers its own `ServiceDescriptor` in an `@Observes StartupEvent` method,
    adding a service must never require a service-keyed switch in core
 3. Add `<Svc>ServiceConfig { enabled(); }` to `EmulatorConfig.ServicesConfig` + the YAML block
 4. Wire storage through `StorageFactory`
@@ -42,7 +42,7 @@ io.floci.oci
 6. Validate against the real SDK in `compatibility-tests/`
 7. Add `docs/services/<svc>.md` and the mkdocs nav entry
 
-**Never invent protocol behavior** — check the wire contract against the OCI SDK sources
+**Never invent protocol behavior.** Check the wire contract against the OCI SDK sources
 (the `oci-go-sdk` generated models are the closest thing OCI has to a machine-readable
 wire model).
 
@@ -52,3 +52,9 @@ wire model).
 - Keep changes focused; behaviour changes come with a test
 - See [AGENTS.md](https://github.com/floci-io/floci-oci/blob/main/AGENTS.md) for the full
   operating rules
+
+## Releases
+
+Stable releases ship on the **1st and 3rd Tuesday of each month**. Merging to `main` does not cut a release: the change rides the next train, and reaches the `nightly` image on the next nightly build.
+
+Maintainers cut releases from `main` with the Release Cut workflow, which runs semantic-release over the Conventional Commits since the last tag. That is why the commit type matters: `feat:` and `fix:` move the version, `docs:` and `chore:` do not. `CHANGELOG.md` is generated from those messages and is not edited by hand; a genuine correction goes in a PR carrying the `changelog-edit` label.
