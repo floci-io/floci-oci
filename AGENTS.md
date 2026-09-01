@@ -1,4 +1,4 @@
-# Agent Guide — floci-oci
+# Agent Guide: floci-oci
 
 Guidance for AI coding agents working in the floci-oci repository.
 
@@ -26,7 +26,7 @@ Critical rules:
 
 - Do not introduce custom endpoint shapes
 - Do not change request or response formats for convenience
-- Never invent protocol behavior — consult the reference sources under `local/oracle/`
+- Never invent protocol behavior: consult the reference sources under `local/oracle/`
   (see "OCI Source as Reference" below; `make refs` downloads them)
 
 ## Architecture
@@ -36,26 +36,26 @@ Layered: **Controller** (JAX-RS, parses OCI REST input) → **Service** (busines
 
 Core infrastructure (`io.floci.oci.*`):
 
-- `config/EmulatorConfig` — single `@ConfigMapping(prefix = "floci-oci")` interface
-- `core/common/` — `OciException` + `OciExceptionMapper` (error shape
+- `config/EmulatorConfig`: single `@ConfigMapping(prefix = "floci-oci")` interface
+- `core/common/`: `OciException` + `OciExceptionMapper` (error shape
   `{"code":"...","message":"..."}` + `opc-request-id` header), `ServiceRegistry` +
   `ServiceDescriptor` (self-registering), `ServiceEnabledFilter` (503 for disabled services),
   `RequestContext` (tenancy/user/region)
-- `core/storage/` — `StorageBackend` (memory/persistent/hybrid/wal via `StorageFactory`),
+- `core/storage/`: `StorageBackend` (memory/persistent/hybrid/wal via `StorageFactory`),
   `TenancyAwareStorageBackend` (keys prefixed by tenancy OCID)
-- `core/common/docker/` — sidecar container management
-- `lifecycle/` — `EmulatorLifecycle`, init hooks, `/health` + `/_floci-oci/*` endpoints
+- `core/common/docker/`: sidecar container management
+- `lifecycle/`: `EmulatorLifecycle`, init hooks, `/health` + `/_floci-oci/*` endpoints
 
 ## OCI Protocol Rules
 
 - Every service except Object Storage uses a date-versioned path prefix
   (Identity `/20160918/…`); Object Storage uses `/n/{namespace}/b/{bucket}/o/{object}`.
-  JAX-RS `@Path` matching dispatches directly — there is no routing filter.
+  JAX-RS `@Path` matching dispatches directly: there is no routing filter.
 - Errors: `{"code": "...", "message": "..."}` body + correct HTTP status. 404 is
   `NotAuthorizedOrNotFound` (OCI deliberately conflates the two).
 - Every response carries an `opc-request-id` header.
 - Pagination: `limit`/`page` query params in, `opc-next-page` response header out.
-  Some list APIs return a bare JSON array — verify each against the SDK model.
+  Some list APIs return a bare JSON array: verify each against the SDK model.
 - OCIDs: `ocid1.<type>.<realm>.<region>.<unique>` (region omitted for global resources).
 - Auth: the `Authorization: Signature …` header is parsed for tenancy/user context only;
   the RSA signature is never verified.
@@ -83,7 +83,7 @@ metadata through descriptors. Adding a service must never require editing a swit
 ## Services with Container Sidecars
 
 Some services launch real Docker containers (sidecars). **`services/functions/` is the
-reference implementation** — copy its shape:
+reference implementation**: copy its shape:
 
 1. **One `mock()` flag is the only container toggle** on the service's config
    (`@WithDefault("false")`, env `FLOCI_OCI_SERVICES_<SVC>_MOCK`). No separate opt-in.
@@ -92,22 +92,22 @@ reference implementation** — copy its shape:
 2. **The Manager (driver) is flag-free** and owns only mechanics: lazy idempotent
    `ensureStarted()` (self-healing via `isContainerRunning`), a single cheap
    `boolean isReady()` probe, `stop()`. It goes through `ContainerBuilder` /
-   `ContainerLifecycleManager` — never raw `dockerClient` calls — and MUST
+   `ContainerLifecycleManager`, never raw `dockerClient` calls, and MUST
    `portAllocator.release(port)` in the stop path (leaked ports exhaust the range).
 3. **The service owns the gate**: every container interaction sits behind `!mock()`;
    mock mode keeps the management plane fully usable with synthetic data-plane results.
-4. **Never block a request thread on readiness** — poll asynchronously or bound the wait
+4. **Never block a request thread on readiness**: poll asynchronously or bound the wait
    to the data-plane call that actually needs the sidecar (Functions bounds it to invoke).
 5. **Teardown**: `@PreDestroy` stops the sidecar, and the service implements
    `Resettable` so `POST /_floci-oci/state/reset` also removes containers/volumes.
 6. **Tests**: the standard trio runs in mock mode; add a `<Svc>DockerTest` with
    `@TestProfile` flipping `mock=false`, `assumeTrue(docker socket)` in `@BeforeAll`,
-   `PER_CLASS` + ordered methods, and a final cleanup test (not `@AfterAll` — the
+   `PER_CLASS` + ordered methods, and a final cleanup test (not `@AfterAll`, because the
    server port is gone by then).
 7. Container/volume names go through `ContainerStorageHelper.dockerName()`.
 
 Fn-specific: fnserver shares its iofs unix-socket directory with function containers via
-a **named volume** (`FN_IOFS_DOCKER_PATH=<volumeName>`) — host bind mounts break unix
+a **named volume** (`FN_IOFS_DOCKER_PATH=<volumeName>`): host bind mounts break unix
 sockets on Docker Desktop. Old `fnproject/hello` images predate the http-stream FDK
 contract; use a current FDK image (see `src/test/resources/fn-hello/`).
 
@@ -156,6 +156,10 @@ contract; use a current FDK image (see `src/test/resources/fn-hello/`).
 - Self-explanatory code over comments; always use braces
 - JBoss Logging, structured, no noise in hot paths
 
+## Documentation Style
+
+- No em-dashes anywhere, in any content. Use colons, commas, or periods.
+
 ## Pull Request Guidelines
 
 - Conventional commits: `feat:`, `fix:`, `perf:`, `docs:`, `chore:`
@@ -164,7 +168,7 @@ contract; use a current FDK image (see `src/test/resources/fn-hello/`).
 
 ## OCI Source as Reference
 
-Never invent protocol behavior — verify request/response shapes, field casing, headers,
+Never invent protocol behavior. Verify request/response shapes, field casing, headers,
 status codes and enums against the real OCI sources before implementing anything.
 Do not read jars from `~/.m2` as protocol reference.
 
@@ -173,16 +177,16 @@ fetch or refresh them all with `make refs`):
 
 | Checkout | Use it for |
 |---|---|
-| `local/oracle/oci-go-sdk` | **Primary wire model.** Generated Go structs carry `json:"…"` tags, `mandatory:"true"`, enum constants, and `*_request_response.go` files declare every request/response header (`presentIn:"header"`) and body shape (`presentIn:"body"` — bare-array lists, binary bodies). `*_client.go` has the exact method + path per operation and the client `BasePath` (API version prefix). |
+| `local/oracle/oci-go-sdk` | **Primary wire model.** Generated Go structs carry `json:"…"` tags, `mandatory:"true"`, enum constants, and `*_request_response.go` files declare every request/response header (`presentIn:"header"`) and body shape (`presentIn:"body"`, covering bare-array lists and binary bodies). `*_client.go` has the exact method + path per operation and the client `BasePath` (API version prefix). |
 | `local/oracle/oci-java-sdk` | Cross-check for the Go model, and the client used by the default compat suite. Prefer the Go model on any disagreement. |
-| `local/oracle/oci-python-sdk` | Python client behavior — e.g. `UploadManager`'s multipart flow, which required `opc-content-md5` on UploadPart responses. |
+| `local/oracle/oci-python-sdk` | Python client behavior, e.g. `UploadManager`'s multipart flow, which required `opc-content-md5` on UploadPart responses. |
 | `local/oracle/oci-typescript-sdk` | TypeScript client cross-check. |
 | `local/oracle/oci-cli` | CLI-level behavior and parameter mapping (generated from the same specs). |
 | `local/oracle/terraform-provider-oci` | Exactly which API calls and read-backs IaC performs. Bucket Read calling `ListRetentionRules` came from here. Client-name keys for `CLIENT_HOST_OVERRIDES` are the `RegisterOracleClient` names in `internal/client/*.go`. |
 
 Precedence when sources disagree: **oci-go-sdk → oci-java-sdk → published API reference**.
 There is no botocore equivalent and no reference implementation (no LocalStack/moto/Azurite
-analog) — the generated SDK models are the closest thing OCI has to a wire contract.
+analog): the generated SDK models are the closest thing OCI has to a wire contract.
 
 Typical lookups:
 
@@ -200,4 +204,4 @@ grep -n 'func (s \*.*ResourceCrud) Get' local/oracle/terraform-provider-oci/inte
 ## Do not
 
 - Do not execute `git add` or `git commit`; do not commit any changes
-- Do not read jars from `~/.m2` as protocol reference — use `local/oracle/` checkouts
+- Do not read jars from `~/.m2` as protocol reference: use `local/oracle/` checkouts

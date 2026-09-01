@@ -4,7 +4,8 @@
 </p>
 
 <p align="center">
-  <strong>Light, fluffy, and always free — now for Oracle Cloud</strong><br />
+  <strong>Any Cloud. Locally.</strong><br />
+  Light, fluffy, and always free, now for Oracle Cloud<br />
   No account. No API key ceremony. No feature gates. Just <code>docker compose up</code>.
 </p>
 
@@ -34,7 +35,7 @@ floci-oci is a free, open-source local **Oracle Cloud Infrastructure (OCI)** emu
 
 It gives you OCI-shaped services on your machine without an Oracle Cloud account, uploaded API keys, or paid feature gates. Point the OCI SDKs, the OCI CLI, Terraform, or OpenTofu at `http://localhost:4599` and keep your existing workflows.
 
-floci-oci is the OCI member of the [Floci](https://github.com/floci-io) emulator family — named after [floccus](https://en.wikipedia.org/wiki/Cirrocumulus_floccus), the cloud formation that looks like popcorn.
+floci-oci is the OCI member of the [Floci](https://github.com/floci-io) emulator family, named after [floccus](https://en.wikipedia.org/wiki/Cirrocumulus_floccus), the cloud formation that looks like popcorn.
 
 | Emulator                                                           | Cloud | Port |
 |--------------------------------------------------------------------|---|:---:|
@@ -74,7 +75,7 @@ oci iam compartment list --endpoint http://localhost:4599 \
   --compartment-id ocid1.tenancy.oc1..flocilocaltenancy0000000000000000000000000000000000000000
 ```
 
-Any locally generated API key works — floci-oci parses the request signature for tenancy and user context but never verifies it. See [OCI CLI & SDK Setup](https://floci.io/floci-oci/getting-started/oci-setup/) for a one-time throwaway config.
+Any locally generated API key works: floci-oci parses the request signature for tenancy and user context but never verifies it. See [OCI CLI & SDK Setup](https://floci.io/floci-oci/getting-started/oci-setup/) for a one-time throwaway config.
 
 <details>
 <summary>Prefer building from source?</summary>
@@ -127,7 +128,7 @@ Real request and response shapes: `opc-request-id` on every response, `opc-next-
 <details>
 <summary><strong>Drop-in SDK, CLI, and IaC compatibility</strong></summary>
 
-The official oci-java-sdk, Python SDK, OCI CLI, and the `oracle/oci` Terraform provider work unchanged — validated continuously by the [compatibility suite](#compatibility-testing).
+The official oci-java-sdk, Python SDK, OCI CLI, and the `oracle/oci` Terraform provider work unchanged, validated continuously by the [compatibility suite](#compatibility-testing).
 
 </details>
 
@@ -147,7 +148,7 @@ Choose from in-memory, persistent, hybrid, and write-ahead log storage depending
 
 ## Why floci-oci?
 
-Oracle Cloud has no official local emulator — no LocalStack equivalent, no all-in-one dev container. Testing OCI integrations means a real tenancy, real credentials, and real network round-trips, even in CI.
+Oracle Cloud has no official local emulator: no LocalStack equivalent, no all-in-one dev container. Testing OCI integrations means a real tenancy, real credentials, and real network round-trips, even in CI.
 
 floci-oci fills that gap the same way its siblings do for AWS, Azure, and GCP: one container, one port, real wire protocols, MIT licensed, free forever.
 
@@ -207,7 +208,7 @@ For operation-level compatibility, see the [Services Overview](https://floci.io/
 | Queue | In-process | Work-request-driven control plane (mutations return no body); data plane with visibility timeouts, `0`-visibility peeks, long polling, dead-letter queues, per-channel filtering, stats; wrapped `{"items":[…]}` list shape |
 | Streaming | In-process | Partitioned append-only log with key-hash placement; opaque cursors (`TRIM_HORIZON`/`LATEST`/`AT_OFFSET`/`AFTER_OFFSET`/`AT_TIME`), group cursors with commit + resume, `opc-next-cursor` paging; CreateStream returns body *and* work request |
 | Vault + KMS | In-process, real crypto | Vaults and keys with schedule/cancel deletion (no DELETE verb), key rotation; AES-GCM encrypt/decrypt whose envelope survives rotation, RSA/ECDSA sign/verify via JCA, CRC32 `plaintextChecksum` |
-| Secrets | In-process | Secret versions with CURRENT/PREVIOUS/LATEST stages; the `Secret` shape never echoes content — retrieval is through `/20190301/secretbundles`, including the bodyless POST `getByName` |
+| Secrets | In-process | Secret versions with CURRENT/PREVIOUS/LATEST stages; the `Secret` shape never echoes content: retrieval is through `/20190301/secretbundles`, including the bodyless POST `getByName` |
 | Functions | Real Docker (Fn Project) | Applications and functions with deterministic image digests; invocation proxied to a shared `fnproject/fnserver` sidecar that runs your real FDK image. `mock: true` disables Docker entirely |
 | OKE (Container Engine) | Real Docker (k3s) / In-process | Control plane CRUD (`/20180222`), options, kubeconfig YAML generator, work requests tracking; real-mode k3s sidecar driver (`rancher/k3s:v1.30.1-k3s1`) binding dynamic host ports (`6443..6543`) and persistent volumes (`/var/lib/rancher/k3s`). `mock: true` disables sidecar |
 | Work Requests | In-process | `202` + `opc-work-request-id` responses, pollable per service (`/20160918`, `/20210201`, `/20180418`, `/20180222` and unversioned `/workRequests`) with errors/logs endpoints |
@@ -222,7 +223,7 @@ floci-oci runs a real container where in-process emulation would not be faithful
 
 | Service | Default image | What is real |
 |---|---|---|
-| Functions | `fnproject/fnserver:latest` | The open-source engine OCI Functions is built on. Your function image runs for real — fnserver spawns it as a sibling container and speaks the FDK http-stream contract |
+| Functions | `fnproject/fnserver:latest` | The open-source engine OCI Functions is built on. Your function image runs for real: fnserver spawns it as a sibling container and speaks the FDK http-stream contract |
 | OKE | `rancher/k3s:v1.30.1-k3s1` | Real local Kubernetes cluster execution via a k3s sidecar container with dynamic host port mapping (`6443..6543`) and named data volume `/var/lib/rancher/k3s` |
 
 Docker-backed services need the Docker socket:
@@ -234,7 +235,7 @@ docker run -d --name floci-oci \
   floci/floci-oci:latest
 ```
 
-Set `FLOCI_OCI_SERVICES_FUNCTIONS_MOCK=true` or `FLOCI_OCI_SERVICES_OKE_MOCK=true` to skip Docker entirely — the management
+Set `FLOCI_OCI_SERVICES_FUNCTIONS_MOCK=true` or `FLOCI_OCI_SERVICES_OKE_MOCK=true` to skip Docker entirely. The management
 plane stays fully usable and invocations/cluster records return synthetic data. That is the default in
 the test suite, so `./mvnw test` never needs a Docker daemon.
 
@@ -259,7 +260,7 @@ For more detail, see the [Storage Configuration documentation](https://floci.io/
 
 ## Multi-Tenancy Isolation
 
-floci-oci supports per-tenancy resource isolation with no extra setup. The tenancy OCID in your signing key's `keyId` is the storage partition — requests signed with different tenancy OCIDs see fully isolated resources.
+floci-oci supports per-tenancy resource isolation with no extra setup. The tenancy OCID in your signing key's `keyId` is the storage partition: requests signed with different tenancy OCIDs see fully isolated resources.
 
 ```bash
 # Two profiles with different tenancy OCIDs see independent worlds
@@ -267,11 +268,11 @@ oci --profile TENANCY_A iam user list --endpoint http://localhost:4599
 oci --profile TENANCY_B iam user list --endpoint http://localhost:4599
 ```
 
-Unsigned requests fall back to `FLOCI_OCI_DEFAULT_TENANCY_ID`. Compartments are a field on each resource (filtered via `compartmentId`), exactly as on real OCI — tenancy is the isolation boundary, compartments are the organizational one.
+Unsigned requests fall back to `FLOCI_OCI_DEFAULT_TENANCY_ID`. Compartments are a field on each resource (filtered via `compartmentId`), exactly as on real OCI. Tenancy is the isolation boundary, compartments are the organizational one.
 
 ## SDK Integration
 
-Point your existing OCI SDK at `http://localhost:4599`. Any locally generated RSA key works — the signature is parsed for tenancy/user context, never verified.
+Point your existing OCI SDK at `http://localhost:4599`. Any locally generated RSA key works: the signature is parsed for tenancy/user context, never verified.
 
 <details>
 <summary><strong>Java, oci-java-sdk</strong></summary>
@@ -393,7 +394,7 @@ oci --profile FLOCI os ns get --endpoint http://localhost:4599
 
 ## Terraform and OpenTofu
 
-The official `oracle/oci` provider works against floci-oci through its per-client host overrides — no provider fork, no wrapper:
+The official `oracle/oci` provider works against floci-oci through its per-client host overrides, with no provider fork and no wrapper:
 
 ```bash
 export TF_VAR_CLIENT_HOST_OVERRIDES="oci_identity.IdentityClient=http://localhost:4599;oci_object_storage.ObjectStorageClient=http://localhost:4599"
@@ -419,7 +420,7 @@ The full apply → plan (zero drift) → destroy cycle is validated in CI for bo
 
 ## Compatibility Testing
 
-The [`compatibility-tests`](./compatibility-tests/) directory validates floci-oci with real SDKs and IaC tooling — not just theoretical protocol adherence.
+The [`compatibility-tests`](./compatibility-tests/) directory validates floci-oci with real SDKs and IaC tooling, not just theoretical protocol adherence.
 
 | Module | Language / Tool | SDK / Client | Tests |
 |---|---|---|---:|
@@ -476,9 +477,15 @@ docker exec floci-oci ocilocal os ns get
 ```
 
 `ocilocal` is a thin wrapper that points `oci` at the emulator. The bundled key exists
-only because the OCI CLI refuses to run without one — floci-oci parses request
+only because the OCI CLI refuses to run without one. floci-oci parses request
 signatures but never verifies them, so the key is public by design. Never point that
 config at real OCI.
+
+### Release train
+
+Stable releases ship on the **1st and 3rd Tuesday of each month**. Between trains, `floci/floci-oci:nightly` tracks `main`. Every merged fix is available the next day, and dated `nightly-mmddyyyy` tags let you pin a specific night's build.
+
+Versions are derived from Conventional Commits by [semantic-release](https://github.com/semantic-release/semantic-release); `CHANGELOG.md` is generated, never hand-edited. Releases are cut from `main` only: there are no maintenance branches.
 
 ## Configuration
 
