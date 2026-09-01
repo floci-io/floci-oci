@@ -463,7 +463,7 @@ image: floci/floci-oci:latest
 image: floci/floci-oci:latest-compat
 
 # Pinned release
-image: floci/floci-oci:0.1.0
+image: floci/floci-oci:x.y.z
 
 # Track main
 image: floci/floci-oci:nightly
