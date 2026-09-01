@@ -15,8 +15,8 @@
     <properties>
         <maven.compiler.release>25</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <quarkus.platform.version>3.37.4</quarkus.platform.version>
-        <jackson.version>2.22.1</jackson.version>
+        <quarkus.platform.version>3.38.3</quarkus.platform.version>
+        <jackson.version>2.22.2</jackson.version>
     </properties>
 
     <dependencyManagement>
@@ -114,7 +114,7 @@
         <dependency>
             <groupId>org.bouncycastle</groupId>
             <artifactId>bcprov-jdk18on</artifactId>
-            <version>1.85</version>
+            <version>1.85.2</version>
         </dependency>
         <dependency>
             <groupId>org.bouncycastle</groupId>
