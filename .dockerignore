@@ -1,6 +1,7 @@
 *
 !bin/ocilocal
 !docker/entrypoint.sh
+!docker/healthcheck.sh
 !docker/gen-oci-cli-config.py
 !pom.xml
 !src/**
