@@ -46,6 +46,27 @@ io.floci.oci
 (the `oci-go-sdk` generated models are the closest thing OCI has to a machine-readable
 wire model).
 
+## Code style
+
+[AGENTS.md](https://github.com/floci-io/floci-oci/blob/main/AGENTS.md#code-style) carries
+the full list. The rules worth knowing before your first PR:
+
+- **Write explicit types. Do not use `var`.** The concrete type at a call site is usually
+  what a wire-contract reviewer needs to see. The one exception is a record deconstruction
+  pattern.
+- **Import the classes you use.** No fully-qualified names inline, except for a genuine name
+  collision in that file, with a comment saying what collides.
+- **No wildcard imports in `src/main`.** Static wildcards are fine in tests.
+- **Never leave a `catch` block empty.** If swallowing is correct, name the variable
+  `ignored` or `expected` and say why in a comment.
+- **Always use braces in conditionals**, and use constructor injection.
+- **Tests**: JUnit 5 with Hamcrest and RestAssured. Name methods as a camelCase sentence
+  or `method_scenario_expectation`, never `testX`.
+- **Docs**: no em-dashes. Use colons, commas, or periods.
+
+Existing code does not yet satisfy all of these everywhere. Match the rules in code you add
+or change; leave unrelated cleanups for their own PR.
+
 ## Pull requests
 
 - Conventional commits: `feat:`, `fix:`, `perf:`, `docs:`, `chore:`
