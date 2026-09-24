@@ -2,7 +2,12 @@ package sdktestgo
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/pem"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/oracle/oci-go-sdk/v65/common"
@@ -19,12 +24,42 @@ func getEndpoint() string {
 	return ep
 }
 
+// throwawayKey returns a PEM RSA key: the SDK signs every request, so the key must parse,
+// but the emulator never verifies the signature.
+func throwawayKey(t *testing.T) string {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+	return string(pem.EncodeToMemory(&pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: x509.MarshalPKCS1PrivateKey(key),
+	}))
+}
+
 func getClient(t *testing.T) containerengine.ContainerEngineClient {
-	provider := common.NewRawConfigurationProvider("ocid1.tenancy.oc1..test", "ocid1.user.oc1..test", "us-ashburn-1", "fingerprint", "privateKey", nil)
+	provider := common.NewRawConfigurationProvider("ocid1.tenancy.oc1..test", "ocid1.user.oc1..test",
+		"us-ashburn-1", "aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99", throwawayKey(t), nil)
 	client, err := containerengine.NewContainerEngineClientWithConfigurationProvider(provider)
 	require.NoError(t, err)
 	client.Host = getEndpoint()
 	return client
+}
+
+// clusterIdFromWorkRequest reads the new cluster's OCID the way the Terraform provider does:
+// CreateCluster returns only opc-work-request-id, and the work request's resources carry it.
+func clusterIdFromWorkRequest(t *testing.T, client containerengine.ContainerEngineClient,
+	workRequestId *string) string {
+	wr, err := client.GetWorkRequest(context.Background(), containerengine.GetWorkRequestRequest{
+		WorkRequestId: workRequestId,
+	})
+	require.NoError(t, err)
+	for _, res := range wr.Resources {
+		if strings.Contains(strings.ToLower(*res.EntityType), "cluster") &&
+			res.ActionType == containerengine.WorkRequestResourceActionTypeCreated {
+			return *res.Identifier
+		}
+	}
+	t.Fatalf("work request %s has no CREATED cluster resource", *workRequestId)
+	return ""
 }
 
 func TestOkeClusterLifecycle(t *testing.T) {
@@ -46,8 +81,8 @@ func TestOkeClusterLifecycle(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	assert.NotEmpty(t, createResp.OpcWorkRequestId)
-	clusterId := *createResp.Id
+	require.NotNil(t, createResp.OpcWorkRequestId)
+	clusterId := clusterIdFromWorkRequest(t, client, createResp.OpcWorkRequestId)
 
 	// 2. Get Cluster
 	getResp, err := client.GetCluster(ctx, containerengine.GetClusterRequest{
