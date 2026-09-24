@@ -1,3 +1,7 @@
-oci>=2.135.0
+# Pinned to the version of the local/oracle/oci-python-sdk reference clone, which is also the
+# oci release that sdk-test-cli's pinned oci-cli requires; bump both whenever `make refs`
+# fast-forwards the clones. An unpinned oci picks up new API versions the emulator does not
+# serve yet (2.187.0 moved Functions from /20181201 to /20260325).
+oci==2.182.1
 pytest>=8.0
 cryptography>=42.0
