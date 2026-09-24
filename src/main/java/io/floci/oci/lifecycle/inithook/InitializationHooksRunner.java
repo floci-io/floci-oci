@@ -25,23 +25,23 @@ public class InitializationHooksRunner {
     private final InitLifecycleState initLifecycleState;
 
     @Inject
-    public InitializationHooksRunner(final HookScriptExecutor hookScriptExecutor,
-                                     final InitLifecycleState initLifecycleState) {
+    public InitializationHooksRunner(HookScriptExecutor hookScriptExecutor,
+                                     InitLifecycleState initLifecycleState) {
         this.hookScriptExecutor = hookScriptExecutor;
         this.initLifecycleState = initLifecycleState;
     }
 
-    public boolean hasHooks(final InitializationHook hook) {
+    public boolean hasHooks(InitializationHook hook) {
         return !findMergedScripts(hook).isEmpty();
     }
 
-    public void run(final InitializationHook hook) throws IOException, InterruptedException {
-        final List<File> scripts = findMergedScripts(hook);
+    public void run(InitializationHook hook) throws IOException, InterruptedException {
+        List<File> scripts = findMergedScripts(hook);
         if (!scripts.isEmpty()) {
             LOG.infov("Running {0} hook with {1} script(s): {2}",
                     hook.getName(), scripts.size(),
                     scripts.stream().map(File::getAbsolutePath).toList());
-            for (final File script : scripts) {
+            for (File script : scripts) {
                 LOG.infov("Executing {0} hook script: {1}", hook.getName(), script.getAbsolutePath());
                 try {
                     hookScriptExecutor.run(script);
@@ -60,6 +60,7 @@ public class InitializationHooksRunner {
             try {
                 return Integer.parseInt(msg.substring(msg.lastIndexOf(' ') + 1));
             } catch (NumberFormatException ignored) {
+                // Unparseable exit code: fall back to the generic failure code.
             }
         }
         return 1;
@@ -68,13 +69,13 @@ public class InitializationHooksRunner {
     /**
      * Runs scripts from an arbitrary directory — kept for test utilities and direct invocations.
      */
-    public void run(final String hookName, final File hookDirectory) throws IOException, InterruptedException {
-        final String[] scriptFileNames = findScriptFileNames(hookName, hookDirectory);
+    public void run(String hookName, File hookDirectory) throws IOException, InterruptedException {
+        String[] scriptFileNames = findScriptFileNames(hookName, hookDirectory);
         if (scriptFileNames.length > 0) {
             LOG.infov("Running {0} hook with {1} script(s) from {2}: {3}",
                     hookName, scriptFileNames.length, hookDirectory.getAbsolutePath(),
                     Arrays.toString(scriptFileNames));
-            for (final String scriptFileName : scriptFileNames) {
+            for (String scriptFileName : scriptFileNames) {
                 LOG.infov("Executing {0} hook script: {1}", hookName, scriptFileName);
                 hookScriptExecutor.run(hookDirectory, scriptFileName);
             }
@@ -85,12 +86,12 @@ public class InitializationHooksRunner {
      * Merges scripts from all primary (Floci) paths and then compat (LocalStack) paths.
      * First occurrence of a filename wins; merged list is sorted lexicographically.
      */
-    private static List<File> findMergedScripts(final InitializationHook hook) {
-        final Map<String, File> merged = new LinkedHashMap<>();
-        for (final File dir : hook.getPrimaryPaths()) {
+    private static List<File> findMergedScripts(InitializationHook hook) {
+        Map<String, File> merged = new LinkedHashMap<>();
+        for (File dir : hook.getPrimaryPaths()) {
             collectScripts(hook.getName(), dir, merged);
         }
-        for (final File dir : hook.getCompatPaths()) {
+        for (File dir : hook.getCompatPaths()) {
             collectScripts(hook.getName(), dir, merged);
         }
         return merged.entrySet().stream()
@@ -99,8 +100,8 @@ public class InitializationHooksRunner {
                 .toList();
     }
 
-    private static void collectScripts(final String hookName, final File dir,
-                                       final Map<String, File> target) {
+    private static void collectScripts(String hookName, File dir,
+                                       Map<String, File> target) {
         if (!dir.exists()) {
             LOG.debugv("{0} hook directory does not exist: {1}", hookName, dir.getAbsolutePath());
             return;
@@ -109,12 +110,12 @@ public class InitializationHooksRunner {
             LOG.warnv("{0} hook path is not a directory: {1}", hookName, dir.getAbsolutePath());
             return;
         }
-        final File[] scripts = dir.listFiles(SCRIPT_FILE_FILTER);
+        File[] scripts = dir.listFiles(SCRIPT_FILE_FILTER);
         if (scripts == null || scripts.length == 0) {
             LOG.debugv("No {0} hook scripts found in {1}", hookName, dir.getAbsolutePath());
             return;
         }
-        for (final File script : scripts) {
+        for (File script : scripts) {
             if (target.putIfAbsent(script.getName(), script) == null) {
                 LOG.debugv("Found {0} hook script: {1}", hookName, script.getAbsolutePath());
             } else {
@@ -123,7 +124,7 @@ public class InitializationHooksRunner {
         }
     }
 
-    private static String[] findScriptFileNames(final String hookName, final File hookDirectory) {
+    private static String[] findScriptFileNames(String hookName, File hookDirectory) {
         if (!hookDirectory.exists()) {
             LOG.debugv("{0} hook directory does not exist: {1}", hookName, hookDirectory.getAbsolutePath());
             return new String[0];
@@ -132,7 +133,7 @@ public class InitializationHooksRunner {
             LOG.warnv("{0} hook path is not a directory: {1}", hookName, hookDirectory.getAbsolutePath());
             return new String[0];
         }
-        final String[] scriptFileNames = hookDirectory.list(SCRIPT_FILE_FILTER);
+        String[] scriptFileNames = hookDirectory.list(SCRIPT_FILE_FILTER);
         if (scriptFileNames == null || scriptFileNames.length == 0) {
             LOG.debugv("No {0} hook scripts found in {1}", hookName, hookDirectory.getAbsolutePath());
             return new String[0];

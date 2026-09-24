@@ -17,6 +17,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.lenient;
@@ -68,7 +69,7 @@ class PersistentPathValidatorTest {
         validator().validateAtBoot();
 
         assertTrue(Files.isDirectory(root));
-        try (var entries = Files.list(root)) {
+        try (Stream<Path> entries = Files.list(root)) {
             assertEquals(0, entries.count(), "write probe must not be left behind");
         }
     }

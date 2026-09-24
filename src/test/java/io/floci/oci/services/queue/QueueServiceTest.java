@@ -5,6 +5,7 @@ import io.floci.oci.core.common.OciException;
 import io.floci.oci.core.storage.InMemoryStorage;
 import io.floci.oci.core.workrequest.StoredWorkRequest;
 import io.floci.oci.core.workrequest.WorkRequestService;
+import io.floci.oci.services.queue.model.StoredQueue;
 import io.floci.oci.services.queue.model.StoredQueue.StoredMessage;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -54,7 +55,7 @@ class QueueServiceTest {
         assertEquals(outcome.queueId(), wr.getResources().get(0).getIdentifier());
         assertNotNull(wr.getTimeFinished());
 
-        var q = service.getQueue(outcome.queueId());
+        StoredQueue q = service.getQueue(outcome.queueId());
         assertEquals("ACTIVE", q.getLifecycleState());
         assertEquals(30, q.getVisibilityInSeconds());
         assertEquals(86400, q.getRetentionInSeconds());

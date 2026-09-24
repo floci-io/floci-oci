@@ -3,7 +3,9 @@ package io.floci.oci.core.workrequest;
 import io.quarkus.runtime.annotations.RegisterForReflection;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * A work request — OCI's async-operation record. Serialized to the wire as
@@ -33,14 +35,14 @@ public class StoredWorkRequest {
      * The OCI wire shape: everything except the internal {@code service} partition tag.
      * Field order matches the documented response body.
      */
-    public java.util.Map<String, Object> toWire() {
-        java.util.Map<String, Object> wire = new java.util.LinkedHashMap<>();
+    public Map<String, Object> toWire() {
+        Map<String, Object> wire = new LinkedHashMap<>();
         wire.put("operationType", operationType);
         wire.put("status", status);
         wire.put("id", id);
         wire.put("compartmentId", compartmentId);
         wire.put("resources", resources.stream().map(r -> {
-            java.util.Map<String, Object> res = new java.util.LinkedHashMap<>();
+            Map<String, Object> res = new LinkedHashMap<>();
             res.put("entityType", r.getEntityType());
             res.put("actionType", r.getActionType());
             res.put("identifier", r.getIdentifier());

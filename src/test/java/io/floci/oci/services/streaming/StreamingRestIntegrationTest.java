@@ -1,6 +1,7 @@
 package io.floci.oci.services.streaming;
 
 import io.quarkus.test.junit.QuarkusTest;
+import io.restassured.response.ValidatableResponse;
 import org.junit.jupiter.api.Test;
 
 import java.util.Base64;
@@ -21,7 +22,7 @@ class StreamingRestIntegrationTest {
 
     /** CreateStream is dual-mode: full body AND opc-work-request-id. */
     private String createStream(String name, int partitions) {
-        var response = given()
+        ValidatableResponse response = given()
                 .contentType("application/json")
                 .body(Map.of("name", name, "partitions", partitions, "compartmentId", COMPARTMENT))
             .when().post("/20180418/streams")

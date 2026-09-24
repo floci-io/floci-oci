@@ -13,6 +13,7 @@ import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -61,7 +62,7 @@ class WalStorageTest {
         storage.put("a.2", "v2");
         storage.put("b.1", "v3");
 
-        var results = storage.scan(key -> key.startsWith("a."));
+        List<String> results = storage.scan(key -> key.startsWith("a."));
         assertEquals(2, results.size());
     }
 
@@ -69,7 +70,7 @@ class WalStorageTest {
     void scanReturnsMutableList() {
         storage.put("a", "1");
         storage.put("b", "2");
-        var result = storage.scan(key -> true);
+        List<String> result = storage.scan(key -> true);
         assertDoesNotThrow(() -> result.sort(String::compareTo));
         assertDoesNotThrow(() -> result.add("3"));
     }
@@ -132,7 +133,7 @@ class WalStorageTest {
         Path walPath = tempDir.resolve("binary-check.wal");
         Path snapshotPath = tempDir.resolve("binary-check-snapshot.json");
 
-        var store = new WalStorage<>(snapshotPath, walPath,
+        WalStorage<String, String> store = new WalStorage<>(snapshotPath, walPath,
                 new TypeReference<Map<String, String>>() {}, 600000);
         store.load();
         store.put("k", "v");

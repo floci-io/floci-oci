@@ -16,40 +16,40 @@ public class HookScriptExecutor {
     private final EmulatorConfig.InitHooksConfig initHooksConfig;
 
     @Inject
-    public HookScriptExecutor(final EmulatorConfig emulatorConfig) {
+    public HookScriptExecutor(EmulatorConfig emulatorConfig) {
         this.initHooksConfig = emulatorConfig.initHooks();
     }
 
-    public void run(final File scriptFile) throws IOException, InterruptedException {
+    public void run(File scriptFile) throws IOException, InterruptedException {
         run(scriptFile.getParentFile(), scriptFile.getName());
     }
 
-    public void run(final File hookDirectory, final String scriptFileName) throws IOException, InterruptedException {
-        final String command = scriptFileName.endsWith(".py") ? "python3" : initHooksConfig.shellExecutable();
+    public void run(File hookDirectory, String scriptFileName) throws IOException, InterruptedException {
+        String command = scriptFileName.endsWith(".py") ? "python3" : initHooksConfig.shellExecutable();
         LOG.debugv("Executing hook script {0} via {1}", scriptFileName, command);
 
         // Inherit parent I/O so script output is streamed directly and does not block on unconsumed buffers.
-        final Process process = new ProcessBuilder(command, scriptFileName).directory(hookDirectory).inheritIO().start();
+        Process process = new ProcessBuilder(command, scriptFileName).directory(hookDirectory).inheritIO().start();
         run(process, scriptFileName);
     }
 
-    void run(final Process process, final String scriptFileName) throws InterruptedException {
-        final int exitCode = waitForProcessExitCode(process, scriptFileName);
+    void run(Process process, String scriptFileName) throws InterruptedException {
+        int exitCode = waitForProcessExitCode(process, scriptFileName);
         if (exitCode != 0) {
-            final String message = String.format("Hook script failed: %s exited with code %d", scriptFileName, exitCode);
+            String message = String.format("Hook script failed: %s exited with code %d", scriptFileName, exitCode);
             throw new IllegalStateException(message);
         }
     }
 
-    private int waitForProcessExitCode(final Process process, final String scriptFileName) throws InterruptedException {
+    private int waitForProcessExitCode(Process process, String scriptFileName) throws InterruptedException {
         try {
-            final long timeoutSeconds = initHooksConfig.timeoutSeconds();
-            final boolean finished = process.waitFor(timeoutSeconds, TimeUnit.SECONDS);
+            long timeoutSeconds = initHooksConfig.timeoutSeconds();
+            boolean finished = process.waitFor(timeoutSeconds, TimeUnit.SECONDS);
             if (!finished) {
                 LOG.debugv("Hook script exceeded timeout of {0} seconds, terminating process: {1}", timeoutSeconds, scriptFileName);
                 terminateProcess(process, scriptFileName);
 
-                final String message = String.format("Hook script timed out after %d seconds: %s", timeoutSeconds, scriptFileName);
+                String message = String.format("Hook script timed out after %d seconds: %s", timeoutSeconds, scriptFileName);
                 throw new IllegalStateException(message);
             }
 
@@ -62,12 +62,12 @@ public class HookScriptExecutor {
         }
     }
 
-    private void terminateProcess(final Process process, final String scriptFileName) throws InterruptedException {
+    private void terminateProcess(Process process, String scriptFileName) throws InterruptedException {
         // Try a graceful shutdown first, then force termination if the process does not exit in time.
         process.destroy();
         if (process.isAlive()) {
-            final long shutdownGracePeriodSeconds = initHooksConfig.shutdownGracePeriodSeconds();
-            final boolean terminatedGracefully = process.waitFor(shutdownGracePeriodSeconds, TimeUnit.SECONDS);
+            long shutdownGracePeriodSeconds = initHooksConfig.shutdownGracePeriodSeconds();
+            boolean terminatedGracefully = process.waitFor(shutdownGracePeriodSeconds, TimeUnit.SECONDS);
             if (!terminatedGracefully) {
                 LOG.debugv("Hook script process did not terminate gracefully, forcing termination: {0}", scriptFileName);
                 process.destroyForcibly();

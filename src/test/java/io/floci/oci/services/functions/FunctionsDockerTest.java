@@ -6,12 +6,15 @@ import io.quarkus.test.junit.TestProfile;
 import org.junit.jupiter.api.*;
 
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.notNullValue;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
@@ -36,14 +39,15 @@ class FunctionsDockerTest {
         boolean dockerAvailable = false;
         try {
             Process ping = new ProcessBuilder("docker", "info").redirectErrorStream(true).start();
-            dockerAvailable = ping.waitFor(5, java.util.concurrent.TimeUnit.SECONDS) && ping.exitValue() == 0;
+            dockerAvailable = ping.waitFor(5, TimeUnit.SECONDS) && ping.exitValue() == 0;
         } catch (Exception ignored) {
+            // No docker CLI or engine: dockerAvailable stays false and the class is skipped.
         }
         assumeTrue(dockerAvailable, "Docker engine / Podman machine not responding — skipping real fnserver tests");
 
         // Build the FDK fixture image (a current python FDK — old fnproject/hello images
         // predate the http-stream contract and fail against modern fnserver).
-        java.nio.file.Path context = java.nio.file.Path.of(
+        Path context = Path.of(
                 getClass().getResource("/fn-hello/Dockerfile").toURI()).getParent();
         Process build = new ProcessBuilder("docker", "build", "--load",
                 "-t", "floci-oci-fn-hello:latest", context.toString())
@@ -98,7 +102,7 @@ class FunctionsDockerTest {
             .then().statusCode(200)
                 .header("opc-request-id", notNullValue())
                 .extract().asString();
-        org.junit.jupiter.api.Assertions.assertTrue(body.contains("Hello floci"),
+        assertTrue(body.contains("Hello floci"),
                 "the FDK function should greet the caller by name, got: " + body);
     }
 

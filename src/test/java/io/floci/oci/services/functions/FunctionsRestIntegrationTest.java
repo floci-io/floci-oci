@@ -8,6 +8,7 @@ import java.util.Map;
 
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.*;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** Runs in mock mode (test yml sets functions.mock=true) — no Docker required. */
 @QuarkusTest
@@ -103,7 +104,7 @@ class FunctionsRestIntegrationTest {
             .then().statusCode(200)
                 .header("opc-request-id", notNullValue())
                 .extract().asString();
-        org.junit.jupiter.api.Assertions.assertTrue(body.contains("mock invocation"));
+        assertTrue(body.contains("mock invocation"));
 
         // Dry run: validates, never executes.
         given()

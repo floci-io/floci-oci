@@ -7,11 +7,22 @@ import com.fasterxml.jackson.dataformat.cbor.CBORFactory;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import org.jboss.logging.Logger;
 
-import java.io.*;
+import java.io.BufferedInputStream;
+import java.io.BufferedOutputStream;
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
+import java.io.EOFException;
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
-import java.util.*;
+import java.nio.file.StandardOpenOption;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -275,8 +286,8 @@ public class WalStorage<K, V> implements StorageBackend<K, V> {
             Files.createDirectories(walPath.getParent());
             walWriter = new DataOutputStream(
                     new BufferedOutputStream(Files.newOutputStream(walPath,
-                            java.nio.file.StandardOpenOption.CREATE,
-                            java.nio.file.StandardOpenOption.APPEND)));
+                            StandardOpenOption.CREATE,
+                            StandardOpenOption.APPEND)));
         } catch (IOException e) {
             LOG.errorv(e, "Failed to open WAL writer at {0}", walPath);
         }

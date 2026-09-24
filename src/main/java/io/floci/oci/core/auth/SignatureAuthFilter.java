@@ -35,6 +35,7 @@ public class SignatureAuthFilter implements ContainerRequestFilter {
      * before runtime config mappings are registered.
      */
     @Inject
+    // Qualified: jakarta.ws.rs.ext.Provider is imported for the @Provider annotation.
     jakarta.inject.Provider<EmulatorConfig> configProvider;
 
     @Inject

@@ -5,6 +5,7 @@ import org.junit.jupiter.api.MethodOrderer;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestMethodOrder;
 
+import java.util.List;
 import java.util.Map;
 
 import static io.restassured.RestAssured.given;
@@ -128,7 +129,7 @@ class IdentityRestIntegrationTest {
                 .body(Map.of("compartmentId", TENANCY,
                         "name", "it-policy-" + System.nanoTime(),
                         "description", "d",
-                        "statements", java.util.List.of(
+                        "statements", List.of(
                                 "Allow group admins to manage all-resources in tenancy")))
             .when().post("/20160918/policies")
             .then().statusCode(200)

@@ -1,5 +1,6 @@
 package io.floci.oci.services.objectstorage;
 
+import io.floci.oci.core.common.Etags;
 import io.floci.oci.core.common.OciException;
 import io.floci.oci.core.common.OciPage;
 import io.floci.oci.core.workrequest.StoredWorkRequest;
@@ -11,7 +12,16 @@ import io.floci.oci.services.objectstorage.model.StoredOsObject;
 import io.floci.oci.services.objectstorage.model.StoredPar;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
-import jakarta.ws.rs.*;
+import jakarta.ws.rs.DELETE;
+import jakarta.ws.rs.GET;
+import jakarta.ws.rs.HEAD;
+import jakarta.ws.rs.HeaderParam;
+import jakarta.ws.rs.POST;
+import jakarta.ws.rs.PUT;
+import jakarta.ws.rs.Path;
+import jakarta.ws.rs.PathParam;
+import jakarta.ws.rs.Produces;
+import jakarta.ws.rs.QueryParam;
 import jakarta.ws.rs.core.Context;
 import jakarta.ws.rs.core.HttpHeaders;
 import jakarta.ws.rs.core.MediaType;
@@ -165,7 +175,7 @@ public class ObjectStorageController {
                               @HeaderParam("if-none-match") String ifNoneMatch) {
         StoredOsObject o = service.getObject(namespaceName, bucketName, objectName);
         if (ifMatch != null) {
-            io.floci.oci.core.common.Etags.checkIfMatch(ifMatch, o.getEtag());
+            Etags.checkIfMatch(ifMatch, o.getEtag());
         }
         return objectResponse(o, range, true);
     }
