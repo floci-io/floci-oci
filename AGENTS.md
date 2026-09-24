@@ -152,9 +152,74 @@ contract; use a current FDK image (see `src/test/resources/fn-hello/`).
 
 ## Code Style
 
-- Constructor injection; package-private constructors for testability
-- Self-explanatory code over comments; always use braces
-- JBoss Logging, structured, no noise in hot paths
+### General
+
+- Use constructor injection; keep constructors package-private where tests need them
+- Prefer self-explanatory code over comments
+- Avoid unnecessary comments
+- Always use braces in conditionals
+- Never leave a `catch` block empty. If an exception is intentionally tolerated, log it with
+  enough context to diagnose it later. When swallowing really is correct and logging would be
+  noise, name the variable `ignored` or `expected` and say in a comment why it is safe. A bare
+  `catch (Exception e) {}` is never acceptable.
+- Follow existing project patterns
+- Use modern Java features only when they improve clarity
+
+### Types and names
+
+- **Do not use `var`. Write the explicit type.** floci-oci reproduces OCI wire contracts, so the
+  concrete type at a call site is usually the thing under review: whether a value is a
+  `LinkedHashMap` or a `Map`, a `Stored*` model or a JDK one, is exactly what a reviewer needs to
+  see. This covers local declarations, enhanced-for (`for (StoredBucket bucket : buckets)`),
+  classic for-init, and try-with-resources. The one exception is a record deconstruction pattern
+  (`case Node(var left, var right) ->`), where naming the component types is pure noise.
+- **Import the classes you use. Do not write fully-qualified names inline.**
+  `new ArrayList<>()`, never `new java.util.ArrayList<>()`. The only reason to qualify inline is a
+  genuine name collision inside one file: import the type used more often, qualify the other, and
+  leave a short comment naming the clash. The real example in this repo is
+  `jakarta.inject.Provider` versus `jakarta.ws.rs.ext.Provider` in the JAX-RS filters. Class names
+  inside strings (`@RegisterForReflection(classNames = {...})`) are not inline qualification.
+
+### Imports
+
+- No wildcard imports in `src/main`. Static wildcards stay fine in tests, where
+  `Assertions.*` and `Matchers.*` are the established idiom.
+- Import order: non-`java`/`javax` imports alphabetically, then `java.*` and `javax.*` last. This
+  is the IntelliJ default layout and what most of the tree already uses.
+
+### Conventions the codebase already follows
+
+Written down so they stay true. New code should match them without thinking. A handful of files
+predate them; a violation you find in the tree is a straggler, not a precedent.
+
+- 4-space indentation, K&R braces. Never indent with a tab.
+- JBoss Logging, in a field named `LOG`, using the parameterized `...v()` form. No string
+  concatenation in log calls. Keep logs structured and out of hot paths.
+- No `printStackTrace`, anywhere. No `System.out` or `System.err` in `src/main`. A test may print
+  a failure repro just before failing, but an assertion message usually says it better.
+- `java.time` for everything floci-oci owns. `Calendar` and `SimpleDateFormat` appear nowhere and
+  must not be introduced. A `Date` survives only at a third-party boundary that forces one, such
+  as the BouncyCastle certificate builder in `CertificateGenerator`. Convert at that boundary with
+  `Date.from(instant)` and keep `java.time` on floci-oci's side of it.
+- Constructor injection in `src/main`. Field injection is fine in tests, and `Instance<T>` field
+  injection is a legitimate CDI pattern.
+- `Optional` as a return type, and never as a field. It reaches a parameter only where a Quarkus
+  config `Optional<T>` is threaded through; do not introduce it as a parameter for anything else.
+- Switch expressions over switch statements. Pattern-matching `instanceof` over
+  cast-after-check.
+- `OciException` for domain errors.
+- `final` on service fields, but not on locals or parameters.
+
+### Tests
+
+These describe `src/test`. `compatibility-tests/sdk-test-java` is a separate module that uses
+AssertJ. Follow the module you are in.
+
+- Name test methods either as a camelCase sentence (`putAndGetObject`) or as
+  `method_scenario_expectation`. Both are established. `testX` names exist in older tests and are
+  not the pattern to copy.
+- JUnit 5 assertions with Hamcrest and RestAssured matchers.
+- `@DisplayName` is not the pattern here. The method name carries the intent.
 
 ## Documentation Style
 
@@ -172,30 +237,58 @@ Never invent protocol behavior. Verify request/response shapes, field casing, he
 status codes and enums against the real OCI sources before implementing anything.
 Do not read jars from `~/.m2` as protocol reference.
 
-All OCI references live under this repo's gitignored `local/oracle/` (shallow clones;
-fetch or refresh them all with `make refs`):
+All OCI references live under this repo's gitignored `local/oracle/` (shallow clones).
+`make refs` fetches or refreshes the Oracle SDKs, CLI, Terraform provider and `fn`; the
+rows marked *manual* below are not in `make refs` and need a one-off
+`git clone --depth 1` into `local/oracle/`.
 
 | Checkout | Use it for |
 |---|---|
-| `local/oracle/oci-go-sdk` | **Primary wire model.** Generated Go structs carry `json:"…"` tags, `mandatory:"true"`, enum constants, and `*_request_response.go` files declare every request/response header (`presentIn:"header"`) and body shape (`presentIn:"body"`, covering bare-array lists and binary bodies). `*_client.go` has the exact method + path per operation and the client `BasePath` (API version prefix). |
+| `local/oracle/oci-go-sdk` | **Primary wire model.** Generated Go structs carry `json:"…"` tags, `mandatory:"true"`, enum constants, and `*_request_response.go` files declare every request parameter (`contributesTo:"path\|query\|header\|body"` + `name:`) and response field (`presentIn:"header"`, `presentIn:"header-collection"` + `prefix:`, `presentIn:"body"` for bare-array lists, `encoding:"binary"` bodies). `*_client.go` carries the exact method + path per operation in its `request.HTTPRequest(…)` call, and the `apiReferenceLink` string on each operation gives the docs slug + API version prefix. There is no `BasePath` constant. |
+| `local/oracle/oci-python-sdk` | **Independent structured model, and the natural cross-check for the Go tags.** It is generated from the same internal spec, but as literal assignments that are easier to read than struct tags: `swagger_types`, `attribute_map`, `resource_path`, `method`, `required_arguments`, `api_reference_link`. Go and Python agreeing is the strongest evidence OCI offers; disagreement is a real signal. Also the source for client behavior such as `UploadManager`'s multipart flow, which required `opc-content-md5` on UploadPart responses. |
 | `local/oracle/oci-java-sdk` | Cross-check for the Go model, and the client used by the default compat suite. Prefer the Go model on any disagreement. |
-| `local/oracle/oci-python-sdk` | Python client behavior, e.g. `UploadManager`'s multipart flow, which required `opc-content-md5` on UploadPart responses. |
 | `local/oracle/oci-typescript-sdk` | TypeScript client cross-check. |
-| `local/oracle/oci-cli` | CLI-level behavior and parameter mapping (generated from the same specs). |
+| `local/oracle/oci-cli` | CLI-level behavior and parameter mapping (generated from the same specs). Two assets are worth knowing by path: **`services/object_storage/tests/objectstorage_cassettes/*.yml`** (33 recorded request/response pairs against real `objectstorage.us-ashburn-1.oraclecloud.com`; the only artifact in the tree showing what OCI actually *sends*, as opposed to what the SDK is prepared to parse; **Object Storage only**), and **`services/*/tests/util/generated/command_to_api.py`** (CLI command → SDK method, e.g. `"os.create_bucket": "oci.object_storage.ObjectStorageClient.create_bucket"`). |
 | `local/oracle/terraform-provider-oci` | Exactly which API calls and read-backs IaC performs. Bucket Read calling `ListRetentionRules` came from here. Client-name keys for `CLIENT_HOST_OVERRIDES` are the `RegisterOracleClient` names in `internal/client/*.go`. |
+| `local/oracle/oci-ansible-collection` (*manual*) | A second IaC read-back consumer, independent of Terraform. Reach for it when a read-back surprise is suspected but Terraform does not show it. |
+| `local/oracle/fn` | The Fn Project, the engine behind OCI Functions. **`docs/swagger_v2.yml` + `docs/swagger_invoke.yml` are the only formal API spec anywhere in the tree.** Server-side behavior lives in `api/server/` (`error_response.go` in particular). |
+| `local/oracle/fn_go` (*manual*, `fnproject/fn_go`) | The swagger-generated Go client for the Fn API, a typed cross-check against `fn/docs/swagger_v2.yml`. Useful because `oci-go-sdk/functions` is the least tag-derivable of the emulated services. |
+| `local/oracle/fn-cli` (*manual*, `fnproject/cli`) | What the `fn` CLI (the one Oracle tells Functions users to install) actually puts on the wire. |
 
-Precedence when sources disagree: **oci-go-sdk → oci-java-sdk → published API reference**.
-There is no botocore equivalent and no reference implementation (no LocalStack/moto/Azurite
-analog): the generated SDK models are the closest thing OCI has to a wire contract.
+Precedence when sources disagree: **oci-go-sdk → oci-java-sdk → published API reference**,
+with oci-python-sdk as the independent cross-check.
+There is no botocore equivalent and no usable reference implementation: the generated SDK
+models are the closest thing OCI has to a wire contract. Consequences worth stating
+outright, so they are not re-researched:
+
+- **OCI declares no per-operation error lists.** Nothing anywhere maps an operation to the
+  codes it can throw, so the check inverts: a code must exist in Oracle's *global* catalog
+  ([apierrors.htm](https://docs.oracle.com/en-us/iaas/Content/API/References/apierrors.htm),
+  31 `(status, code)` pairs). Never claim an operation "declares" an error. Retryability is
+  in `oci-go-sdk/common/retry.go`.
+- **IAM policy verbs and resource-types exist only as HTML.** There is no machine-readable
+  OCI policy vocabulary, official or otherwise; the source is
+  [policyreference](https://docs.oracle.com/en-us/iaas/Content/Identity/Reference/policyreference.htm).
+- `cameritelabs/oci-emulator` is the only other OCI emulator and is **deliberately not
+  cloned**: stale since 2025, Object-Storage-only, and citing another emulator's guess would
+  launder it into an authority.
 
 Typical lookups:
 
 ```bash
-# Response shape + headers for an operation
-grep -A20 'type CreateBucketResponse struct' local/oracle/oci-go-sdk/objectstorage/create_bucket_request_response.go
+# Request parameters + response headers/body for an operation
+grep -A25 'type GetObjectRequest struct' local/oracle/oci-go-sdk/objectstorage/get_object_request_response.go
 
-# Path + method for an operation
+# Path + method + docs link for an operation
 grep -n 'HTTPRequest(http' local/oracle/oci-go-sdk/identity/identity_client.go
+grep -n 'apiReferenceLink :=' local/oracle/oci-go-sdk/objectstorage/objectstorage_client.go
+
+# Does this list operation return a bare JSON array? (`Items []T` = yes)
+grep -n 'presentIn:"body"' local/oracle/oci-go-sdk/objectstorage/list_buckets_request_response.go
+
+# Cross-check the same operation in the Python SDK
+grep -n 'resource_path\|required_arguments\|api_reference_link' \
+  local/oracle/oci-python-sdk/src/oci/object_storage/object_storage_client.py
 
 # What Terraform reads back after a create
 grep -n 'func (s \*.*ResourceCrud) Get' local/oracle/terraform-provider-oci/internal/service/objectstorage/*.go
