@@ -1,5 +1,6 @@
 package io.floci.oci.services.oke;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.floci.oci.config.EmulatorConfig;
 import io.floci.oci.core.common.OciException;
 import io.floci.oci.core.storage.InMemoryStorage;
@@ -207,7 +208,7 @@ class OkeServiceTest {
         cluster.setName("test-cluster");
         cluster.setHostPort(16443);
 
-        com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+        ObjectMapper mapper = new ObjectMapper();
         String json = mapper.writeValueAsString(cluster);
         assertTrue(json.contains("\"hostPort\":16443"), "Jackson storage serialization must include hostPort");
 

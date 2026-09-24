@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -63,7 +64,7 @@ class HybridStorageTest {
         storage.put("a.2", "v2");
         storage.put("b.1", "v3");
 
-        var results = storage.scan(key -> key.startsWith("a."));
+        List<String> results = storage.scan(key -> key.startsWith("a."));
         assertEquals(2, results.size());
     }
 
@@ -71,7 +72,7 @@ class HybridStorageTest {
     void scanReturnsMutableList() {
         storage.put("a", "1");
         storage.put("b", "2");
-        var result = storage.scan(key -> true);
+        List<String> result = storage.scan(key -> true);
         assertDoesNotThrow(() -> result.sort(String::compareTo));
         assertDoesNotThrow(() -> result.add("3"));
     }

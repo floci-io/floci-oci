@@ -11,6 +11,7 @@ import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.notNullValue;
 import static org.hamcrest.Matchers.nullValue;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 @QuarkusTest
 class OkeRestIntegrationTest {
@@ -118,9 +119,5 @@ class OkeRestIntegrationTest {
         given()
             .when().delete("/20180222/clusters/{id}", clusterId)
             .then().statusCode(202);
-    }
-
-    private void assertNotNull(Object obj) {
-        org.junit.jupiter.api.Assertions.assertNotNull(obj);
     }
 }

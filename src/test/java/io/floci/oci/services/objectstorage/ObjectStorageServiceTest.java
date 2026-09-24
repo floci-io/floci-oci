@@ -4,6 +4,7 @@ import io.floci.oci.config.EmulatorConfig;
 import io.floci.oci.core.common.OciException;
 import io.floci.oci.core.storage.InMemoryStorage;
 import io.floci.oci.core.workrequest.WorkRequestService;
+import io.floci.oci.services.objectstorage.ObjectStorageService.ObjectListing;
 import io.floci.oci.services.objectstorage.model.StoredBucket;
 import io.floci.oci.services.objectstorage.model.StoredMultipartUpload;
 import io.floci.oci.services.objectstorage.model.StoredOsObject;
@@ -180,23 +181,23 @@ class ObjectStorageServiceTest {
         put("list", "b/3.txt", "x");
         put("list", "top.txt", "x");
 
-        var all = service.listObjects(NS, "list", null, null, null, null, null);
+        ObjectListing all = service.listObjects(NS, "list", null, null, null, null, null);
         assertEquals(4, all.objects().size());
         assertNull(all.nextStartWith());
 
-        var grouped = service.listObjects(NS, "list", null, null, null, "/", null);
+        ObjectListing grouped = service.listObjects(NS, "list", null, null, null, "/", null);
         assertEquals(List.of("a/", "b/"), grouped.prefixes());
         assertEquals(1, grouped.objects().size());
         assertEquals("top.txt", grouped.objects().get(0).getName());
 
-        var prefixed = service.listObjects(NS, "list", "a/", null, null, null, null);
+        ObjectListing prefixed = service.listObjects(NS, "list", "a/", null, null, null, null);
         assertEquals(2, prefixed.objects().size());
 
-        var truncated = service.listObjects(NS, "list", null, null, null, null, 2);
+        ObjectListing truncated = service.listObjects(NS, "list", null, null, null, null, 2);
         assertEquals(2, truncated.objects().size());
         assertEquals("b/3.txt", truncated.nextStartWith());
 
-        var resumed = service.listObjects(NS, "list", null, truncated.nextStartWith(), null, null, null);
+        ObjectListing resumed = service.listObjects(NS, "list", null, truncated.nextStartWith(), null, null, null);
         assertEquals(2, resumed.objects().size());
     }
 

@@ -2,7 +2,11 @@ package io.floci.oci.services.streaming;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import io.floci.oci.config.EmulatorConfig;
-import io.floci.oci.core.common.*;
+import io.floci.oci.core.common.Etags;
+import io.floci.oci.core.common.OciException;
+import io.floci.oci.core.common.Ocids;
+import io.floci.oci.core.common.ServiceDescriptor;
+import io.floci.oci.core.common.ServiceRegistry;
 import io.floci.oci.core.storage.StorageBackend;
 import io.floci.oci.core.storage.StorageFactory;
 import io.floci.oci.core.workrequest.WorkRequestService;
@@ -16,7 +20,13 @@ import org.jboss.logging.Logger;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Base64;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
 
 /**
  * OCI Streaming: control plane (streams; work-request driven) and data plane

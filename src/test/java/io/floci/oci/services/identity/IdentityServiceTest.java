@@ -8,6 +8,7 @@ import io.floci.oci.core.workrequest.StoredWorkRequest;
 import io.floci.oci.core.workrequest.WorkRequestService;
 import io.floci.oci.services.identity.model.StoredCompartment;
 import io.floci.oci.services.identity.model.StoredGroup;
+import io.floci.oci.services.identity.model.StoredPolicy;
 import io.floci.oci.services.identity.model.StoredUser;
 import io.floci.oci.services.identity.model.StoredUserGroupMembership;
 import org.junit.jupiter.api.BeforeEach;
@@ -140,7 +141,7 @@ class IdentityServiceTest {
                 () -> service.createPolicy(null, "p", "d", List.of(), null, null, null));
         assertEquals(400, e.getHttpStatus());
 
-        var p = service.createPolicy(null, "p", "d",
+        StoredPolicy p = service.createPolicy(null, "p", "d",
                 List.of("Allow group admins to manage all-resources in tenancy"), null, null, null);
         assertEquals(1, service.listPolicies(null).size());
         service.deletePolicy(p.getId(), null);

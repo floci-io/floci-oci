@@ -4,10 +4,23 @@ import io.floci.oci.core.common.OciException;
 import io.floci.oci.core.common.OciPage;
 import io.floci.oci.core.workrequest.StoredWorkRequest;
 import io.floci.oci.core.workrequest.WorkRequestService;
-import io.floci.oci.services.identity.model.*;
+import io.floci.oci.services.identity.model.StoredCompartment;
+import io.floci.oci.services.identity.model.StoredGroup;
+import io.floci.oci.services.identity.model.StoredPolicy;
+import io.floci.oci.services.identity.model.StoredUser;
+import io.floci.oci.services.identity.model.StoredUserGroupMembership;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
-import jakarta.ws.rs.*;
+import jakarta.ws.rs.Consumes;
+import jakarta.ws.rs.DELETE;
+import jakarta.ws.rs.GET;
+import jakarta.ws.rs.HeaderParam;
+import jakarta.ws.rs.POST;
+import jakarta.ws.rs.PUT;
+import jakarta.ws.rs.Path;
+import jakarta.ws.rs.PathParam;
+import jakarta.ws.rs.Produces;
+import jakarta.ws.rs.QueryParam;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 
@@ -290,7 +303,7 @@ public class IdentityController {
     public Response listWorkRequests(@QueryParam("compartmentId") String compartmentId,
                                      @QueryParam("limit") Integer limit,
                                      @QueryParam("page") String page) {
-        List<java.util.Map<String, Object>> items = workRequests.list("identity", compartmentId)
+        List<Map<String, Object>> items = workRequests.list("identity", compartmentId)
                 .stream().map(StoredWorkRequest::toWire).toList();
         return paged(items, limit, page);
     }

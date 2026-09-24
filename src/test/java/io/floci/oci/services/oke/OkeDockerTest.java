@@ -14,10 +14,12 @@ import org.junit.jupiter.api.TestMethodOrder;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.notNullValue;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
@@ -40,8 +42,9 @@ class OkeDockerTest {
         boolean dockerAvailable = false;
         try {
             Process ping = new ProcessBuilder("docker", "info").redirectErrorStream(true).start();
-            dockerAvailable = ping.waitFor(5, java.util.concurrent.TimeUnit.SECONDS) && ping.exitValue() == 0;
+            dockerAvailable = ping.waitFor(5, TimeUnit.SECONDS) && ping.exitValue() == 0;
         } catch (Exception ignored) {
+            // No docker CLI or engine: dockerAvailable stays false and the class is skipped.
         }
         assumeTrue(dockerAvailable, "Docker engine / Podman machine not responding — skipping real OKE Docker test");
     }
@@ -64,7 +67,7 @@ class OkeDockerTest {
                 .body("name", equalTo("docker-oke-cluster"))
                 .extract().path("id");
 
-        org.junit.jupiter.api.Assertions.assertNotNull(clusterId);
+        assertNotNull(clusterId);
     }
 
     @Test

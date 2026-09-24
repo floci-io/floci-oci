@@ -8,6 +8,7 @@ import java.util.Map;
 
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.*;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @QuarkusTest
 class VaultRestIntegrationTest {
@@ -103,7 +104,7 @@ class VaultRestIntegrationTest {
             .then().statusCode(200)
                 .header("etag", notNullValue())
                 .extract().asString();
-        org.junit.jupiter.api.Assertions.assertTrue(body.isEmpty(),
+        assertTrue(body.isEmpty(),
                 "ScheduleSecretDeletion must return no body");
 
         given()

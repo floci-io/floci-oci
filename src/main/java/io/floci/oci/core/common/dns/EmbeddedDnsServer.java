@@ -17,7 +17,12 @@ import java.net.InetAddress;
 import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Optional;
+import java.util.SequencedSet;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -269,6 +274,7 @@ public class EmbeddedDnsServer {
     byte[] forwardToUpstreams(byte[] query, List<String> upstreams, int upstreamPort) throws Exception {
         Exception last = null;
         for (String upstream : upstreams) {
+            // Qualified: the imported DatagramSocket is the Vert.x one.
             try (java.net.DatagramSocket fwd = new java.net.DatagramSocket()) {
                 fwd.setSoTimeout(FORWARD_TIMEOUT_MS);
                 InetAddress addr = InetAddress.getByName(upstream);

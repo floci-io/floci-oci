@@ -4,13 +4,21 @@ import io.floci.oci.config.EmulatorConfig;
 import jakarta.annotation.Priority;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.Priorities;
-import jakarta.ws.rs.container.*;
+import jakarta.ws.rs.container.ContainerRequestContext;
+import jakarta.ws.rs.container.ContainerRequestFilter;
+import jakarta.ws.rs.container.ContainerResponseContext;
+import jakarta.ws.rs.container.ContainerResponseFilter;
+import jakarta.ws.rs.container.PreMatching;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.MultivaluedMap;
 import jakarta.ws.rs.core.Response;
 import jakarta.ws.rs.ext.Provider;
 
-import java.util.*;
+import java.util.Arrays;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Optional;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -52,6 +60,7 @@ public class GlobalCorsFilter implements ContainerRequestFilter, ContainerRespon
             "x-amz-target",
             "x-amz-user-agent");
 
+    // Qualified: jakarta.ws.rs.ext.Provider is imported for the @Provider annotation.
     private final jakarta.inject.Provider<EmulatorConfig> configProvider;
     private volatile CorsSettings settings;
 
