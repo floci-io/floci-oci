@@ -1,7 +1,6 @@
 package io.floci.oci.core.storage;
 
 import io.floci.oci.core.common.RequestContext;
-import jakarta.enterprise.context.ContextNotActiveException;
 import jakarta.enterprise.inject.Instance;
 
 import java.util.LinkedHashMap;
@@ -138,6 +137,14 @@ public class TenancyAwareStorageBackend<V> implements StorageBackend<String, V> 
         return delegate.scan(k -> k.startsWith(prefix) && keyFilter.test(k.substring(prefix.length())));
     }
 
+    /** The tenancy OCIDs that own at least one entry. */
+    public Set<String> tenancies() {
+        return delegate.keys().stream()
+                .filter(k -> k.indexOf('/') > 0)
+                .map(k -> k.substring(0, k.indexOf('/')))
+                .collect(Collectors.toUnmodifiableSet());
+    }
+
     public Set<String> keysForTenancy(String tenancyId) {
         String prefix = tenancyId + "/";
         return delegate.keys().stream()
@@ -149,17 +156,7 @@ public class TenancyAwareStorageBackend<V> implements StorageBackend<String, V> 
     // ---
 
     private String prefix() {
-        if (requestContextInstance != null) {
-            try {
-                String tenancyId = requestContextInstance.get().getTenancyId();
-                if (tenancyId != null) {
-                    return tenancyId;
-                }
-            } catch (ContextNotActiveException ignored) {
-                // outside request scope — fall through to default
-            }
-        }
-        return defaultTenancyId;
+        return RequestContext.currentTenancyId(requestContextInstance, defaultTenancyId);
     }
 
     private String prefixed(String key) {

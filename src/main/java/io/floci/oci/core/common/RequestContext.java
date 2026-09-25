@@ -1,6 +1,8 @@
 package io.floci.oci.core.common;
 
+import jakarta.enterprise.context.ContextNotActiveException;
 import jakarta.enterprise.context.RequestScoped;
+import jakarta.enterprise.inject.Instance;
 
 /**
  * Holds per-request derived values — tenancy OCID, user OCID and region — extracted
@@ -36,5 +38,24 @@ public class RequestContext {
 
     public void setRegion(String region) {
         this.region = region;
+    }
+
+    /**
+     * The tenancy of the current request, or {@code defaultTenancyId} outside a request
+     * scope (async workers, startup) or when no tenancy was resolved.
+     */
+    public static String currentTenancyId(Instance<RequestContext> requestContext,
+                                          String defaultTenancyId) {
+        if (requestContext != null) {
+            try {
+                String tenancyId = requestContext.get().getTenancyId();
+                if (tenancyId != null) {
+                    return tenancyId;
+                }
+            } catch (ContextNotActiveException ignored) {
+                // Outside request scope: fall through to the default.
+            }
+        }
+        return defaultTenancyId;
     }
 }

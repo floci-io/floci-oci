@@ -4,6 +4,7 @@ import io.floci.oci.config.EmulatorConfig;
 import io.floci.oci.core.common.OciException;
 import io.floci.oci.core.storage.InMemoryStorage;
 import io.floci.oci.core.storage.StorageBackend;
+import io.floci.oci.core.storage.TenancyAwareStorageBackend;
 import io.floci.oci.core.workrequest.StoredWorkRequest;
 import io.floci.oci.core.workrequest.WorkRequestService;
 import io.floci.oci.services.identity.model.StoredCompartment;
@@ -25,13 +26,16 @@ class IdentityServiceTest {
 
     private static final String TENANCY = "ocid1.tenancy.oc1..testtenancy";
 
+    private static final String OTHER_TENANCY = "ocid1.tenancy.oc1..othertenancy";
+
+    private EmulatorConfig config;
     private IdentityService service;
     private WorkRequestService workRequests;
     private StorageBackend<String, StoredWorkRequest> workRequestStore;
 
     @BeforeEach
     void setUp() {
-        EmulatorConfig config = mock(EmulatorConfig.class);
+        config = mock(EmulatorConfig.class);
         lenient().when(config.defaultTenancyId()).thenReturn(TENANCY);
         lenient().when(config.defaultRealm()).thenReturn("oc1");
         lenient().when(config.defaultRegion()).thenReturn("us-ashburn-1");
@@ -179,5 +183,70 @@ class IdentityServiceTest {
         StoredCompartment c = service.createCompartment(null, "tagless", "d",
                 Map.of("team", "dev"), null);
         assertEquals("dev", c.getFreeformTags().get("team"));
+    }
+
+    @Test
+    void requestTenancyScopesRootDefaultsAndTenancyLookup() {
+        IdentityService scoped = new IdentityService(new InMemoryStorage<>(),
+                new InMemoryStorage<>(), new InMemoryStorage<>(), new InMemoryStorage<>(),
+                new InMemoryStorage<>(), config, workRequests, () -> OTHER_TENANCY);
+
+        assertEquals(OTHER_TENANCY, scoped.getCompartment(OTHER_TENANCY).getId());
+        assertEquals(OTHER_TENANCY,
+                scoped.createCompartment(null, "dev", "d", null, null).getCompartmentId());
+        assertEquals(OTHER_TENANCY,
+                scoped.createUser("alice", "d", null, null, null).getCompartmentId());
+        assertEquals(OTHER_TENANCY, scoped.tenancy(OTHER_TENANCY).get("id"));
+        assertThrows(OciException.class, () -> scoped.tenancy(TENANCY));
+    }
+
+    @Test
+    void legacyDefaultTenancyRecordsAreAdoptedBySignedTenancy() {
+        TenancyAwareStorageBackend<StoredCompartment> compartments = tenancyAware(OTHER_TENANCY);
+        TenancyAwareStorageBackend<StoredUser> users = tenancyAware(OTHER_TENANCY);
+        TenancyAwareStorageBackend<StoredPolicy> policies = tenancyAware(OTHER_TENANCY);
+
+        StoredCompartment legacy = new StoredCompartment();
+        legacy.setId("ocid1.compartment.oc1..legacy");
+        legacy.setCompartmentId(TENANCY);
+        legacy.setName("legacy");
+        legacy.setTimeCreated("2026-01-01T00:00:00Z");
+        compartments.putForTenancy(OTHER_TENANCY, legacy.getId(), legacy);
+        StoredCompartment own = new StoredCompartment();
+        own.setId("ocid1.compartment.oc1..own");
+        own.setCompartmentId(TENANCY);
+        own.setName("own");
+        own.setTimeCreated("2026-01-01T00:00:00Z");
+        compartments.putForTenancy(TENANCY, own.getId(), own);
+        StoredUser user = new StoredUser();
+        user.setId("ocid1.user.oc1..legacy");
+        user.setCompartmentId(TENANCY);
+        users.putForTenancy(OTHER_TENANCY, user.getId(), user);
+        StoredPolicy policy = new StoredPolicy();
+        policy.setId("ocid1.policy.oc1..legacy");
+        policy.setCompartmentId(TENANCY);
+        policy.setTimeCreated("2026-01-01T00:00:00Z");
+        policies.putForTenancy(OTHER_TENANCY, policy.getId(), policy);
+
+        IdentityService scoped = new IdentityService(compartments, users,
+                tenancyAware(OTHER_TENANCY), tenancyAware(OTHER_TENANCY), policies, config,
+                workRequests, () -> OTHER_TENANCY);
+        scoped.adoptLegacyRootRecords();
+        scoped.adoptLegacyRootRecords();
+
+        assertEquals(List.of(legacy.getId()), scoped.listCompartments(null, false).stream()
+                .map(StoredCompartment::getId).toList());
+        assertEquals(List.of(legacy.getId()), scoped.listCompartments(null, true).stream()
+                .map(StoredCompartment::getId).toList());
+        assertEquals(OTHER_TENANCY, scoped.getUser(user.getId()).getCompartmentId());
+        assertEquals(List.of(policy.getId()), scoped.listPolicies(null).stream()
+                .map(StoredPolicy::getId).toList());
+        assertEquals(TENANCY, compartments.getForTenancy(TENANCY, own.getId())
+                .orElseThrow().getCompartmentId());
+    }
+
+    // Reads without a request context fall back to readsAs, standing in for the signed tenancy.
+    private static <V> TenancyAwareStorageBackend<V> tenancyAware(String readsAs) {
+        return new TenancyAwareStorageBackend<>(new InMemoryStorage<>(), null, readsAs);
     }
 }

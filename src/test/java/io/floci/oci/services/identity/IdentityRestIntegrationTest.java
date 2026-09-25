@@ -17,6 +17,13 @@ class IdentityRestIntegrationTest {
 
     private static final String TENANCY =
             "ocid1.tenancy.oc1..flocitesttenancy00000000000000000000000000000000000000000";
+    private static final String OTHER_TENANCY = "ocid1.tenancy.oc1..itothertenancy";
+
+    private static String signedAs(String tenancyId) {
+        return "Signature version=\"1\",keyId=\"" + tenancyId + "/ocid1.user.oc1..ituser/aa:bb\","
+                + "algorithm=\"rsa-sha256\",headers=\"date (request-target) host\","
+                + "signature=\"ZmFrZXNpZ25hdHVyZQ==\"";
+    }
 
     @Test
     void compartmentCrudRoundtrip() {
@@ -217,5 +224,45 @@ class IdentityRestIntegrationTest {
             .when().get("/20160918/groups")
             .then().statusCode(200)
                 .body("size()", greaterThanOrEqualTo(1));
+    }
+
+    @Test
+    void signedTenancyScopesIdentity() {
+        String auth = signedAs(OTHER_TENANCY);
+
+        given().header("Authorization", auth)
+            .when().get("/20160918/tenancies/" + OTHER_TENANCY)
+            .then()
+                .statusCode(200)
+                .header("opc-request-id", notNullValue())
+                .body("id", equalTo(OTHER_TENANCY));
+
+        given().header("Authorization", auth)
+            .when().get("/20160918/compartments/" + OTHER_TENANCY)
+            .then().statusCode(200).body("id", equalTo(OTHER_TENANCY));
+
+        given().header("Authorization", auth)
+            .when().get("/20160918/tenancies/" + OTHER_TENANCY + "/regionSubscriptions")
+            .then().statusCode(200).body("[0].isHomeRegion", equalTo(true));
+
+        String userId = given().header("Authorization", auth)
+                .contentType("application/json")
+                .body(Map.of("name", "it-tenant-user-" + System.nanoTime(), "description", "u"))
+            .when().post("/20160918/users")
+            .then()
+                .statusCode(200)
+                .body("compartmentId", equalTo(OTHER_TENANCY))
+                .extract().path("id");
+
+        given().when().get("/20160918/users/" + userId)
+            .then()
+                .statusCode(404)
+                .body("code", equalTo("NotAuthorizedOrNotFound"));
+
+        given().header("Authorization", auth)
+            .when().get("/20160918/tenancies/" + TENANCY)
+            .then()
+                .statusCode(404)
+                .body("code", equalTo("NotAuthorizedOrNotFound"));
     }
 }
