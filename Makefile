@@ -62,8 +62,8 @@ test-java-compat: ## Run the oci-java-sdk suite against a locally running emulat
 test-python-compat: ## Run the oci Python SDK suite against a locally running emulator (needs `pip install -r requirements.txt`)
 	cd compatibility-tests/sdk-test-python && FLOCI_OCI_ENDPOINT=$(LOCAL_ENDPOINT) python3 -m pytest --junitxml=/tmp/floci-oci-py-junit.xml
 
-test-go-compat: ## Run the oci-go-sdk suite against a locally running emulator
-	cd compatibility-tests/sdk-test-go && FLOCI_OCI_ENDPOINT=$(LOCAL_ENDPOINT) go test -v ./...
+test-go-compat: ## Run the oci-go-sdk suite against a locally running emulator (go.sum is gitignored, so tidy first)
+	cd compatibility-tests/sdk-test-go && go mod tidy && FLOCI_OCI_ENDPOINT=$(LOCAL_ENDPOINT) go test -v ./...
 
 test-cli-compat: ## Run the oci-cli suite against a locally running emulator (needs: oci, bats, jq)
 	cd compatibility-tests/sdk-test-cli && FLOCI_OCI_ENDPOINT=$(LOCAL_ENDPOINT) bats test/
