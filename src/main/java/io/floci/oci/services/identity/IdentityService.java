@@ -5,10 +5,12 @@ import io.floci.oci.config.EmulatorConfig;
 import io.floci.oci.core.common.Etags;
 import io.floci.oci.core.common.OciException;
 import io.floci.oci.core.common.Ocids;
+import io.floci.oci.core.common.RequestContext;
 import io.floci.oci.core.common.ServiceDescriptor;
 import io.floci.oci.core.common.ServiceRegistry;
 import io.floci.oci.core.storage.StorageBackend;
 import io.floci.oci.core.storage.StorageFactory;
+import io.floci.oci.core.storage.TenancyAwareStorageBackend;
 import io.floci.oci.core.workrequest.WorkRequestService;
 import io.floci.oci.services.identity.model.StoredCompartment;
 import io.floci.oci.services.identity.model.StoredGroup;
@@ -18,6 +20,7 @@ import io.floci.oci.services.identity.model.StoredUserGroupMembership;
 import io.quarkus.runtime.StartupEvent;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.Observes;
+import jakarta.enterprise.inject.Instance;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
@@ -25,6 +28,10 @@ import java.time.Instant;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.function.BiConsumer;
+import java.util.function.Function;
+import java.util.function.Supplier;
 
 @ApplicationScoped
 public class IdentityService {
@@ -39,11 +46,15 @@ public class IdentityService {
     private final EmulatorConfig config;
     private final ServiceRegistry serviceRegistry;
     private final WorkRequestService workRequests;
+    private final Supplier<String> tenancyId;
 
     @Inject
     public IdentityService(StorageFactory storageFactory, EmulatorConfig config,
-                           ServiceRegistry serviceRegistry, WorkRequestService workRequests) {
+                           ServiceRegistry serviceRegistry, WorkRequestService workRequests,
+                           Instance<RequestContext> requestContext) {
         this.config = config;
+        this.tenancyId = () -> RequestContext.currentTenancyId(requestContext,
+                config.defaultTenancyId());
         this.serviceRegistry = serviceRegistry;
         this.workRequests = workRequests;
         this.compartments = storageFactory.create("identity", "identity-compartments.json",
@@ -65,6 +76,19 @@ public class IdentityService {
                     StorageBackend<String, StoredPolicy> policies,
                     EmulatorConfig config,
                     WorkRequestService workRequests) {
+        this(compartments, users, groups, memberships, policies, config, workRequests,
+                config::defaultTenancyId);
+    }
+
+    IdentityService(StorageBackend<String, StoredCompartment> compartments,
+                    StorageBackend<String, StoredUser> users,
+                    StorageBackend<String, StoredGroup> groups,
+                    StorageBackend<String, StoredUserGroupMembership> memberships,
+                    StorageBackend<String, StoredPolicy> policies,
+                    EmulatorConfig config,
+                    WorkRequestService workRequests,
+                    Supplier<String> tenancyId) {
+        this.tenancyId = tenancyId;
         this.compartments = compartments;
         this.users = users;
         this.groups = groups;
@@ -81,6 +105,54 @@ public class IdentityService {
                 .storageKey("identity")
                 .resourceClasses(IdentityController.class)
                 .build());
+        adoptLegacyRootRecords();
+    }
+
+    /**
+     * Before identity followed the signed tenancy, a request signed as another tenancy stored
+     * its records in that tenancy's partition with the default tenancy as their root. OCI
+     * never parents a record in another tenancy, so those references are rewritten to the
+     * partition's own tenancy.
+     */
+    void adoptLegacyRootRecords() {
+        adoptLegacyRoot("compartments", compartments,
+                StoredCompartment::getCompartmentId, StoredCompartment::setCompartmentId);
+        adoptLegacyRoot("users", users, StoredUser::getCompartmentId, StoredUser::setCompartmentId);
+        adoptLegacyRoot("groups", groups,
+                StoredGroup::getCompartmentId, StoredGroup::setCompartmentId);
+        adoptLegacyRoot("memberships", memberships, StoredUserGroupMembership::getCompartmentId,
+                StoredUserGroupMembership::setCompartmentId);
+        adoptLegacyRoot("policies", policies,
+                StoredPolicy::getCompartmentId, StoredPolicy::setCompartmentId);
+    }
+
+    private <V> void adoptLegacyRoot(String kind, StorageBackend<String, V> store,
+                                     Function<V, String> getCompartmentId,
+                                     BiConsumer<V, String> setCompartmentId) {
+        if (!(store instanceof TenancyAwareStorageBackend<V> tenancyAware)) {
+            return;
+        }
+        String defaultTenancyId = config.defaultTenancyId();
+        int adopted = 0;
+        for (String tenancy : tenancyAware.tenancies()) {
+            if (tenancy.equals(defaultTenancyId)) {
+                continue;
+            }
+            for (String key : tenancyAware.keysForTenancy(tenancy)) {
+                Optional<V> record = tenancyAware.getForTenancy(tenancy, key);
+                if (record.isPresent()
+                        && defaultTenancyId.equals(getCompartmentId.apply(record.get()))) {
+                    setCompartmentId.accept(record.get(), tenancy);
+                    tenancyAware.putForTenancy(tenancy, key, record.get());
+                    adopted++;
+                }
+            }
+        }
+        if (adopted > 0) {
+            // Flush now: storage reloads from disk during startup and would drop the rewrite.
+            store.flush();
+            LOG.infov("Adopted {0} legacy identity {1} into their signed tenancy", adopted, kind);
+        }
     }
 
     // ── Compartments ───────────────────────────────────────────────────────────
@@ -501,7 +573,7 @@ public class IdentityService {
     // ── Helpers ────────────────────────────────────────────────────────────────
 
     private String tenancyId() {
-        return config.defaultTenancyId();
+        return tenancyId.get();
     }
 
     private static void requireNonBlank(String value, String field) {
