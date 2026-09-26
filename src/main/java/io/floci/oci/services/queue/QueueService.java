@@ -401,12 +401,6 @@ public class QueueService {
     }
 
     String regionShort() {
-        return switch (config.defaultRegion()) {
-            case "us-ashburn-1" -> "iad";
-            case "us-phoenix-1" -> "phx";
-            case "eu-frankfurt-1" -> "fra";
-            case "uk-london-1" -> "lhr";
-            default -> config.defaultRegion().replaceAll("[^a-z]", "").substring(0, 3);
-        };
+        return Ocids.regionShort(config.defaultRegion());
     }
 }

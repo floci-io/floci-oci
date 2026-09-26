@@ -5,6 +5,7 @@ import io.floci.oci.config.EmulatorConfig;
 import io.floci.oci.core.common.Etags;
 import io.floci.oci.core.common.OciException;
 import io.floci.oci.core.common.Ocids;
+import io.floci.oci.core.common.Regions;
 import io.floci.oci.core.common.RequestContext;
 import io.floci.oci.core.common.ServiceDescriptor;
 import io.floci.oci.core.common.ServiceRegistry;
@@ -557,17 +558,9 @@ public class IdentityService {
                 "homeRegionKey", regionKey());
     }
 
-    /** Region key: last segment initials, e.g. us-ashburn-1 → IAD is not derivable; use uppercase short form. */
+    /** Region key, e.g. us-ashburn-1 → IAD. */
     String regionKey() {
-        // Common well-known mappings; fall back to the uppercased first three letters.
-        return switch (config.defaultRegion()) {
-            case "us-ashburn-1" -> "IAD";
-            case "us-phoenix-1" -> "PHX";
-            case "eu-frankfurt-1" -> "FRA";
-            case "uk-london-1" -> "LHR";
-            default -> config.defaultRegion().replaceAll("[^a-zA-Z]", "")
-                    .toUpperCase().substring(0, 3);
-        };
+        return Regions.key(config.defaultRegion());
     }
 
     // ── Helpers ────────────────────────────────────────────────────────────────

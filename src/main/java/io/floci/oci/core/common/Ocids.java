@@ -71,15 +71,9 @@ public final class Ocids {
         return parse(value).map(o -> o.resourceType().equals(expectedType)).orElse(false);
     }
 
-    /** Region key short form used inside regional OCIDs, e.g. us-ashburn-1 → iad. */
+    /** Region segment of regional OCIDs, e.g. us-ashburn-1 → iad. See {@link Regions#code}. */
     public static String regionShort(String regionName) {
-        return switch (regionName) {
-            case "us-ashburn-1" -> "iad";
-            case "us-phoenix-1" -> "phx";
-            case "eu-frankfurt-1" -> "fra";
-            case "uk-london-1" -> "lhr";
-            default -> regionName.replaceAll("[^a-z]", "").substring(0, 3);
-        };
+        return Regions.code(regionName);
     }
 
     private static String randomUnique() {

@@ -186,6 +186,13 @@ class IdentityServiceTest {
     }
 
     @Test
+    void regionKeyUsesTheSdkRegionCode() {
+        lenient().when(config.defaultRegion()).thenReturn("sa-saopaulo-1");
+        assertEquals("GRU", service.regionKey());
+        assertEquals("GRU", service.tenancy(TENANCY).get("homeRegionKey"));
+    }
+  
+    @Test
     void requestTenancyScopesRootDefaultsAndTenancyLookup() {
         IdentityService scoped = new IdentityService(new InMemoryStorage<>(),
                 new InMemoryStorage<>(), new InMemoryStorage<>(), new InMemoryStorage<>(),
