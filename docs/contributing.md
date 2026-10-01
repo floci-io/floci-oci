@@ -74,6 +74,8 @@ or change; leave unrelated cleanups for their own PR.
 - See [AGENTS.md](https://github.com/floci-io/floci-oci/blob/main/AGENTS.md) for the full
   operating rules
 
+Please keep **no more than 2 open, non-draft pull requests** at a time. A bot labels your 3rd and later open PRs `over-pr-limit`, and starting 2026-10-08 it closes new ones from your 5th onward. See [CONTRIBUTING.md](https://github.com/floci-io/floci-oci/blob/main/CONTRIBUTING.md#pull-request-limits-and-review-bandwidth) for details.
+
 ## Releases
 
 Stable releases ship on the **1st and 3rd Tuesday of each month**. Merging to `main` does not cut a release: the change rides the next train, and reaches the `nightly` image on the next nightly build.
