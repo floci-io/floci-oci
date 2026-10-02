@@ -32,6 +32,7 @@ quarkus:
       - --initialize-at-run-time=io.floci.oci.core.common.Ocids
       - --initialize-at-run-time=io.floci.oci.core.tls.CertificateGenerator
       - --initialize-at-run-time=io.floci.oci.services.kms.KmsService
+      - --initialize-at-run-time=io.floci.oci.services.oke.OkeService
 
 floci-oci:
   port: 4599

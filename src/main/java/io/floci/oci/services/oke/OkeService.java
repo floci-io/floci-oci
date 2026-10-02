@@ -19,7 +19,10 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.Observes;
 import jakarta.inject.Inject;
 
+import java.security.SecureRandom;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 
@@ -28,6 +31,9 @@ import java.util.Map;
  */
 @ApplicationScoped
 public class OkeService implements Resettable {
+
+    private static final SecureRandom RANDOM = new SecureRandom();
+    private static final int API_TOKEN_BYTES = 32;
 
     private final StorageBackend<String, StoredOkeCluster> clusters;
     private final StorageBackend<String, StoredNodePool> nodePools;
@@ -78,16 +84,47 @@ public class OkeService implements Resettable {
     }
 
     void reconstructClusterState() {
+        List<StoredOkeCluster> existingClusters = backfillApiTokens();
         if (clusterManager == null || config == null || config.services().oke().mock()) {
             return;
         }
-        @SuppressWarnings("unchecked")
-        List<StoredOkeCluster> existingClusters = (clusters instanceof TenancyAwareStorageBackend)
-                ? ((TenancyAwareStorageBackend<StoredOkeCluster>) clusters).scanAllTenancies()
-                : clusters.scan(k -> true);
         for (StoredOkeCluster cluster : existingClusters) {
             clusterManager.registerExistingCluster(cluster);
         }
+    }
+
+    /**
+     * Gives every stored cluster an API token, persisting the ones that predate the field, so the
+     * k3s token file and {@code CreateKubeconfig} always agree after a restart.
+     */
+    private List<StoredOkeCluster> backfillApiTokens() {
+        List<StoredOkeCluster> existingClusters = new ArrayList<>();
+        if (clusters instanceof TenancyAwareStorageBackend<StoredOkeCluster> tenancyAware) {
+            for (String tenancyId : tenancyAware.tenancies()) {
+                for (StoredOkeCluster cluster : tenancyAware.scanForTenancy(tenancyId, k -> true)) {
+                    if (cluster.getApiToken() == null) {
+                        cluster.setApiToken(newApiToken());
+                        tenancyAware.putForTenancy(tenancyId, cluster.getId(), cluster);
+                    }
+                    existingClusters.add(cluster);
+                }
+            }
+        } else {
+            for (StoredOkeCluster cluster : clusters.scan(k -> true)) {
+                if (cluster.getApiToken() == null) {
+                    cluster.setApiToken(newApiToken());
+                    clusters.put(cluster.getId(), cluster);
+                }
+                existingClusters.add(cluster);
+            }
+        }
+        return existingClusters;
+    }
+
+    static String newApiToken() {
+        byte[] bytes = new byte[API_TOKEN_BYTES];
+        RANDOM.nextBytes(bytes);
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
     }
 
     @Override
@@ -131,6 +168,7 @@ public class OkeService implements Resettable {
         cluster.setMetadata(new StoredOkeCluster.ClusterMetadata(Instant.now()));
         cluster.setFreeformTags(freeformTags);
         cluster.setDefinedTags(definedTags);
+        cluster.setApiToken(newApiToken());
 
         if (clusterManager != null) {
             clusterManager.startCluster(cluster);

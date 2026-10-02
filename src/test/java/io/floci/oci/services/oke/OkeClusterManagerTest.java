@@ -13,12 +13,15 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
 import static org.mockito.Mockito.lenient;
@@ -41,6 +44,7 @@ class OkeClusterManagerTest {
     private ContainerBuilder containerBuilder;
 
     private EmulatorConfig config;
+    private ContainerBuilder.Builder specBuilder;
     private OkeClusterManager manager;
 
     @BeforeEach
@@ -53,9 +57,11 @@ class OkeClusterManagerTest {
         lenient().when(config.storage().mode()).thenReturn("memory");
         lenient().when(config.storage().pruneVolumesOnDelete()).thenReturn(true);
 
-        ContainerBuilder.Builder specBuilder = mock(ContainerBuilder.Builder.class, RETURNS_DEEP_STUBS);
+        specBuilder = mock(ContainerBuilder.Builder.class, RETURNS_DEEP_STUBS);
         lenient().when(containerBuilder.newContainer(anyString())).thenReturn(specBuilder);
         lenient().when(specBuilder.withName(anyString())).thenReturn(specBuilder);
+        lenient().when(specBuilder.withEntrypoint(anyList())).thenReturn(specBuilder);
+        lenient().when(specBuilder.withCmd(anyList())).thenReturn(specBuilder);
         lenient().when(specBuilder.withEnv(anyString(), anyString())).thenReturn(specBuilder);
         lenient().when(specBuilder.withPortBinding(anyInt(), anyInt())).thenReturn(specBuilder);
         lenient().when(specBuilder.withNamedVolume(anyString(), anyString())).thenReturn(specBuilder);
@@ -72,6 +78,7 @@ class OkeClusterManagerTest {
 
         StoredOkeCluster cluster = new StoredOkeCluster();
         cluster.setId("ocid1.cluster.oc1.iad.testcluster001");
+        cluster.setApiToken("token-testcluster001");
         cluster.setName("failing-cluster");
 
         assertThrows(RuntimeException.class, () -> manager.startCluster(cluster));
@@ -95,6 +102,7 @@ class OkeClusterManagerTest {
 
         StoredOkeCluster cluster = new StoredOkeCluster();
         cluster.setId("ocid1.cluster.oc1.iad.testcluster004");
+        cluster.setApiToken("token-testcluster004");
         cluster.setName("failing-persistent-cluster");
 
         assertThrows(RuntimeException.class, () -> manager.startCluster(cluster));
@@ -110,6 +118,7 @@ class OkeClusterManagerTest {
 
         StoredOkeCluster cluster = new StoredOkeCluster();
         cluster.setId("ocid1.cluster.oc1.iad.testcluster002");
+        cluster.setApiToken("token-testcluster002");
         cluster.setName("original-name");
 
         manager.startCluster(cluster);
@@ -135,6 +144,7 @@ class OkeClusterManagerTest {
 
         StoredOkeCluster cluster = new StoredOkeCluster();
         cluster.setId("ocid1.cluster.oc1.iad.testcluster006");
+        cluster.setApiToken("token-testcluster006");
         cluster.setName("failing-stop-cluster");
 
         manager.startCluster(cluster);
@@ -155,10 +165,12 @@ class OkeClusterManagerTest {
 
         StoredOkeCluster cluster1 = new StoredOkeCluster();
         cluster1.setId("ocid1.cluster.oc1.iad.cluster001");
+        cluster1.setApiToken("token-cluster001");
         cluster1.setName("cluster-1");
 
         StoredOkeCluster cluster2 = new StoredOkeCluster();
         cluster2.setId("ocid1.cluster.oc1.iad.cluster002");
+        cluster2.setApiToken("token-cluster002");
         cluster2.setName("cluster-2");
 
         manager.startCluster(cluster1);
@@ -180,6 +192,7 @@ class OkeClusterManagerTest {
 
         StoredOkeCluster cluster = new StoredOkeCluster();
         cluster.setId("ocid1.cluster.oc1.iad.cluster005");
+        cluster.setApiToken("token-cluster005");
         cluster.setName("cluster-volume-error");
 
         manager.startCluster(cluster);
@@ -198,6 +211,7 @@ class OkeClusterManagerTest {
 
         StoredOkeCluster cluster = new StoredOkeCluster();
         cluster.setId("ocid1.cluster.oc1.iad.testcluster003");
+        cluster.setApiToken("token-testcluster003");
         cluster.setName("persistent-cluster");
 
         manager.startCluster(cluster);
@@ -215,6 +229,7 @@ class OkeClusterManagerTest {
     void registerExistingClusterRestartsContainerAndReservesPort() {
         StoredOkeCluster cluster = new StoredOkeCluster();
         cluster.setId("ocid1.cluster.oc1.iad.reconstructed001");
+        cluster.setApiToken("token-reconstructed001");
         cluster.setHostPort(6445);
         cluster.setName("reconstructed-cluster");
 
@@ -228,5 +243,43 @@ class OkeClusterManagerTest {
         verify(lifecycleManager).removeIfExists(expectedContainer);
         verify(lifecycleManager).createAndStart(any());
         assertEquals("ACTIVE", cluster.getLifecycleState());
+    }
+
+    @Test
+    void startClusterRunsK3sServerWithTheClusterApiToken() {
+        when(portAllocator.allocate(6443, 6543)).thenReturn(6443);
+        when(lifecycleManager.createAndStart(any())).thenReturn(new ContainerLifecycleManager.ContainerInfo("c-789", Map.of()));
+
+        StoredOkeCluster cluster = new StoredOkeCluster();
+        cluster.setId("ocid1.cluster.oc1.iad.servermode001");
+        cluster.setApiToken("token-servermode001");
+
+        manager.startCluster(cluster);
+
+        verify(specBuilder).withEntrypoint(OkeClusterManager.TOKEN_FILE_ENTRYPOINT);
+        verify(specBuilder).withCmd(List.of("k3s", "server", "--disable=traefik",
+                "--kube-apiserver-arg=token-auth-file=" + OkeClusterManager.TOKEN_FILE));
+        verify(specBuilder).withEnv(OkeClusterManager.API_TOKEN_ENV, "token-servermode001");
+        assertEquals("ACTIVE", cluster.getLifecycleState());
+    }
+
+    @Test
+    void tokenFileEntrypointReadsTheTokenFromTheEnvironment() {
+        String script = OkeClusterManager.TOKEN_FILE_ENTRYPOINT.get(2);
+        assertEquals(List.of("sh", "-c"), OkeClusterManager.TOKEN_FILE_ENTRYPOINT.subList(0, 2));
+        assertTrue(script.contains("\"$" + OkeClusterManager.API_TOKEN_ENV + "\""));
+        assertTrue(script.contains("system:masters"));
+        assertTrue(script.endsWith("exec /bin/k3s \"$@\""));
+    }
+
+    @Test
+    void startClusterWithoutApiTokenFailsBeforeTouchingDocker() {
+        StoredOkeCluster cluster = new StoredOkeCluster();
+        cluster.setId("ocid1.cluster.oc1.iad.notoken001");
+
+        assertThrows(IllegalStateException.class, () -> manager.startCluster(cluster));
+
+        verify(portAllocator, never()).allocate(anyInt(), anyInt());
+        verify(lifecycleManager, never()).createAndStart(any());
     }
 }

@@ -22,12 +22,14 @@ public class StoredOkeCluster {
     private String lifecycleDetails;
     private Map<String, String> endpoints;
     private int hostPort;
+    private String apiToken;
     private ClusterMetadata metadata;
     private Map<String, String> freeformTags;
     private Map<String, Map<String, Object>> definedTags;
 
     /**
-     * The OCI wire shape: excludes internal properties like {@code hostPort}.
+     * The OCI wire shape: excludes internal properties like {@code hostPort} and
+     * {@code apiToken}.
      */
     public Map<String, Object> toWire() {
         Map<String, Object> wire = new LinkedHashMap<>();
@@ -136,6 +138,18 @@ public class StoredOkeCluster {
 
     public void setHostPort(int hostPort) {
         this.hostPort = hostPort;
+    }
+
+    /**
+     * Bearer token the k3s sidecar accepts and {@code CreateKubeconfig} hands out. Internal: never
+     * part of {@link #toWire()}.
+     */
+    public String getApiToken() {
+        return apiToken;
+    }
+
+    public void setApiToken(String apiToken) {
+        this.apiToken = apiToken;
     }
 
     public ClusterMetadata getMetadata() {

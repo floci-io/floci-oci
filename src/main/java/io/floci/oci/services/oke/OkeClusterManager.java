@@ -13,6 +13,8 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -24,6 +26,21 @@ public class OkeClusterManager implements Resettable {
 
     private static final Logger LOG = Logger.getLogger(OkeClusterManager.class);
     private static final int K3S_CONTAINER_PORT = 6443;
+    static final String API_TOKEN_ENV = "FLOCI_OKE_API_TOKEN";
+    static final String TOKEN_DIR = "/var/lib/rancher/k3s/floci";
+    static final String TOKEN_FILE = TOKEN_DIR + "/tokens.csv";
+
+    /**
+     * Writes the k3s static token file from {@link #API_TOKEN_ENV}, then execs k3s with the
+     * container CMD. The image's own CMD is {@code agent}, which needs a server to join and exits
+     * at once, so {@link #buildCmd()} always supplies {@code server}. The token travels as an env
+     * var so nothing from the cluster record is ever interpolated into the script.
+     */
+    static final List<String> TOKEN_FILE_ENTRYPOINT = List.of("sh", "-c",
+            "umask 077 && mkdir -p " + TOKEN_DIR
+                    + " && printf '%s,floci-admin,floci-admin,system:masters\\n' \"$" + API_TOKEN_ENV + "\""
+                    + " > " + TOKEN_FILE
+                    + " && exec /bin/k3s \"$@\"");
 
     public record ActiveClusterRef(String containerName, String volumeName, int hostPort) {}
 
@@ -50,6 +67,9 @@ public class OkeClusterManager implements Resettable {
             cluster.setLifecycleState("ACTIVE");
             return;
         }
+        if (cluster.getApiToken() == null || cluster.getApiToken().isBlank()) {
+            throw new IllegalStateException("OKE cluster " + cluster.getId() + " has no API token");
+        }
 
         int hostPort = cluster.getHostPort();
         if (hostPort > 0) {
@@ -73,7 +93,10 @@ public class OkeClusterManager implements Resettable {
 
                 ContainerSpec spec = containerBuilder.newContainer(config.services().oke().defaultImage())
                         .withName(containerName)
+                        .withEntrypoint(TOKEN_FILE_ENTRYPOINT)
+                        .withCmd(buildCmd())
                         .withEnv("K3S_KUBECONFIG_MODE", "644")
+                        .withEnv(API_TOKEN_ENV, cluster.getApiToken())
                         .withPortBinding(K3S_CONTAINER_PORT, hostPort)
                         .withNamedVolume(volumeName, "/var/lib/rancher/k3s")
                         .withPrivileged(true)
@@ -102,6 +125,23 @@ public class OkeClusterManager implements Resettable {
         ));
         cluster.setLifecycleState("ACTIVE");
         LOG.infof("Started k3s sidecar container '%s' bound to host port %d", containerName, hostPort);
+    }
+
+    static List<String> buildServerArgs() {
+        return List.of("server",
+                "--disable=traefik",
+                "--kube-apiserver-arg=token-auth-file=" + TOKEN_FILE);
+    }
+
+    /**
+     * The CMD paired with {@link #TOKEN_FILE_ENTRYPOINT}: a {@code $0} placeholder, then the k3s
+     * server args that the script's {@code "$@"} expands to.
+     */
+    static List<String> buildCmd() {
+        List<String> cmd = new ArrayList<>();
+        cmd.add("k3s");
+        cmd.addAll(buildServerArgs());
+        return cmd;
     }
 
     public void registerExistingCluster(StoredOkeCluster cluster) {
