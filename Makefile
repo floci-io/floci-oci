@@ -16,9 +16,12 @@ package: build
 # ── OCI reference sources ────────────────────────────────────────────────────
 #
 # Shallow clones of the official OCI SDKs / CLI / Terraform provider under the
-# gitignored local/oracle/. These are the wire-contract reference — see
+# gitignored local/oracle/. These are the wire-contract reference: see
 # "OCI Source as Reference" in AGENTS.md. Idempotent: clones if missing,
-# fast-forwards if present.
+# otherwise moves to the upstream default-branch tip. `git pull --ff-only`
+# cannot do that on a depth-1 clone (the new tip shares no history with the
+# old one), so existing checkouts are fetched at depth 1 and hard-reset to
+# FETCH_HEAD. A checkout with local changes is skipped, never reset.
 
 REF_REPOS = oci-go-sdk oci-java-sdk oci-python-sdk oci-typescript-sdk oci-cli terraform-provider-oci
 
@@ -26,21 +29,28 @@ REF_REPOS = oci-go-sdk oci-java-sdk oci-python-sdk oci-typescript-sdk oci-cli te
 
 refs: ## Download/refresh the OCI reference checkouts into local/oracle/
 	@mkdir -p local/oracle
-	@for repo in $(REF_REPOS); do \
-		if [ -d "local/oracle/$$repo/.git" ]; then \
+	@failed=""; \
+	for repo in $(REF_REPOS) fn; do \
+		case $$repo in \
+			fn) url="https://github.com/fnproject/fn.git" ;; \
+			*)  url="https://github.com/oracle/$$repo.git" ;; \
+		esac; \
+		dir="local/oracle/$$repo"; \
+		if [ -d "$$dir/.git" ]; then \
+			if [ -n "$$(git -C "$$dir" status --porcelain)" ]; then \
+				echo "skipping $$repo: local changes in $$dir"; \
+				continue; \
+			fi; \
 			echo "updating $$repo"; \
-			git -C "local/oracle/$$repo" pull --ff-only --depth 1 || true; \
+			git -C "$$dir" fetch --quiet --depth 1 origin HEAD \
+				&& git -C "$$dir" reset --quiet --hard FETCH_HEAD \
+				|| failed="$$failed $$repo"; \
 		else \
 			echo "cloning $$repo"; \
-			git clone --depth 1 "https://github.com/oracle/$$repo.git" "local/oracle/$$repo"; \
+			git clone --quiet --depth 1 "$$url" "$$dir" || failed="$$failed $$repo"; \
 		fi; \
-	done
-	@if [ -d "local/oracle/fn/.git" ]; then \
-		echo "updating fn"; git -C "local/oracle/fn" pull --ff-only --depth 1 || true; \
-	else \
-		echo "cloning fn (Fn Project — the engine behind OCI Functions)"; \
-		git clone --depth 1 "https://github.com/fnproject/fn.git" "local/oracle/fn"; \
-	fi
+	done; \
+	if [ -n "$$failed" ]; then echo "refs failed for:$$failed"; exit 1; fi
 
 # ── Compatibility suites ─────────────────────────────────────────────────────
 #
