@@ -21,7 +21,9 @@ package: build
 # otherwise moves to the upstream default-branch tip. `git pull --ff-only`
 # cannot do that on a depth-1 clone (the new tip shares no history with the
 # old one), so existing checkouts are fetched at depth 1 and hard-reset to
-# FETCH_HEAD. A checkout with local changes is skipped, never reset.
+# FETCH_HEAD. A checkout with local changes is skipped, never reset; so is one
+# holding ignored files at paths the new upstream commit tracks, because
+# `git status` does not report ignored files and the reset would overwrite them.
 
 REF_REPOS = oci-go-sdk oci-java-sdk oci-python-sdk oci-typescript-sdk oci-cli terraform-provider-oci
 
@@ -42,9 +44,16 @@ refs: ## Download/refresh the OCI reference checkouts into local/oracle/
 				continue; \
 			fi; \
 			echo "updating $$repo"; \
-			git -C "$$dir" fetch --quiet --depth 1 origin HEAD \
-				&& git -C "$$dir" reset --quiet --hard FETCH_HEAD \
-				|| failed="$$failed $$repo"; \
+			if ! git -C "$$dir" fetch --quiet --depth 1 origin HEAD; then \
+				failed="$$failed $$repo"; \
+				continue; \
+			fi; \
+			ignored="$$(git -C "$$dir" ls-files --others --ignored --exclude-standard)"; \
+			if [ -n "$$ignored" ] && git -C "$$dir" ls-tree -r --name-only FETCH_HEAD | grep -Fxq -- "$$ignored"; then \
+				echo "skipping $$repo: upstream now tracks ignored local files in $$dir"; \
+				continue; \
+			fi; \
+			git -C "$$dir" reset --quiet --hard FETCH_HEAD || failed="$$failed $$repo"; \
 		else \
 			echo "cloning $$repo"; \
 			git clone --quiet --depth 1 "$$url" "$$dir" || failed="$$failed $$repo"; \
