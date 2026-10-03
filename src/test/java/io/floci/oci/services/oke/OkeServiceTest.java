@@ -17,6 +17,7 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -217,5 +218,50 @@ class OkeServiceTest {
 
         Map<String, Object> wire = cluster.toWire();
         assertFalse(wire.containsKey("hostPort"));
+    }
+
+    @Test
+    void createClusterAssignsDistinctApiTokensKeptOffTheWire() {
+        StoredOkeCluster first = service.createCluster(COMPARTMENT, "first", VCN, null, null, null, null).cluster();
+        StoredOkeCluster second = service.createCluster(COMPARTMENT, "second", VCN, null, null, null, null).cluster();
+
+        assertNotNull(first.getApiToken());
+        assertEquals(43, first.getApiToken().length(), "32 random bytes, base64url without padding");
+        assertNotEquals(first.getApiToken(), second.getApiToken());
+        assertFalse(first.getApiToken().contains(first.getId()), "token must not be derivable from the OCID");
+        assertFalse(first.toWire().containsKey("apiToken"));
+        assertFalse(first.toWire().containsValue(first.getApiToken()));
+    }
+
+    @Test
+    void startupBackfillsApiTokenForClustersStoredBeforeTheField() {
+        StoredOkeCluster legacy = new StoredOkeCluster();
+        legacy.setId("ocid1.cluster.oc1.iad.legacy");
+        clusters.put(legacy.getId(), legacy);
+
+        service.reconstructClusterState();
+
+        String token = clusters.get(legacy.getId()).orElseThrow().getApiToken();
+        assertNotNull(token);
+        service.reconstructClusterState();
+        assertEquals(token, clusters.get(legacy.getId()).orElseThrow().getApiToken(), "an existing token is never rotated");
+    }
+
+    @Test
+    void startupBackfillsApiTokenInTheClusterOwnTenancy() {
+        StorageBackend<String, StoredOkeCluster> rawBackend = new InMemoryStorage<>();
+        TenancyAwareStorageBackend<StoredOkeCluster> taClusters =
+                new TenancyAwareStorageBackend<>(rawBackend, null, "ocid1.tenancy.oc1..flocitesttenancy");
+        OkeService tenancyService = new OkeService(taClusters, nodePools, null, null, mock(WorkRequestService.class), null);
+
+        StoredOkeCluster legacy = new StoredOkeCluster();
+        legacy.setId("ocid1.cluster.oc1.iad.legacyother");
+        String rawKey = "ocid1.tenancy.oc1..customtenancy/ocid1.cluster.oc1.iad.legacyother";
+        rawBackend.put(rawKey, legacy);
+
+        tenancyService.reconstructClusterState();
+
+        assertNotNull(rawBackend.get(rawKey).orElseThrow().getApiToken());
+        assertEquals(1, rawBackend.keys().size(), "the backfill must not copy the cluster into another tenancy");
     }
 }

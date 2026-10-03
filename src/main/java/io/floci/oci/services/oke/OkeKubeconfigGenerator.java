@@ -22,7 +22,7 @@ public class OkeKubeconfigGenerator {
                 ? cluster.getEndpoints().get("kubernetes")
                 : "https://127.0.0.1:6443";
 
-        String userToken = "floci-oke-token-" + cluster.getId();
+        String userToken = cluster.getApiToken();
 
         return """
                apiVersion: v1
