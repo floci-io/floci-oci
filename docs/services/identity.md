@@ -6,13 +6,15 @@ OCI Identity and Access Management — API version `20160918`.
 
 | Resource | Operations |
 |---|---|
-| Compartments | Create, Get, List (incl. `compartmentIdInSubtree`), Update, Delete (async, work request) |
+| Compartments | Create, Get, List (`compartmentIdInSubtree`, `name`, `lifecycleState`, `sortBy`, `sortOrder`, `accessLevel`), Update, Delete and Move (async, work request), Recover |
 | Users | Create, Get, List, Update, Delete |
 | Groups | Create, Get, List, Update, Delete |
 | User group memberships | AddUserToGroup, Get, List (by user/group), RemoveUserFromGroup |
 | Policies | Create, Get, List, Update, Delete |
 | Availability domains | List (3 ADs) |
-| Regions / region subscriptions | List |
+| Fault domains | List (3 per AD) |
+| Regions | List (every region in the configured realm) |
+| Region subscriptions | List, Create |
 | Tenancies | Get |
 | Work requests | Get, List |
 
@@ -32,6 +34,10 @@ oci iam compartment list --endpoint http://localhost:4599 --compartment-id "$TEN
 - The root compartment is the tenancy itself; `GET /compartments/{tenancyOcid}` returns it.
 - Deleting a compartment is asynchronous, exactly like real OCI: `202` +
   `opc-work-request-id`, terminal status `SUCCEEDED`.
+- `compartmentIdInSubtree=true` is only accepted on the tenancy (root compartment), as on
+  real OCI. `accessLevel` is validated but not enforced: every compartment is accessible.
+- Region subscriptions complete immediately with status `READY`. The home region is the
+  configured `default-region`.
 - Policy statements are stored verbatim; the policy language is not parsed or enforced.
 - Identity domains, API keys, auth tokens, dynamic groups and tag namespaces are not
   implemented yet.

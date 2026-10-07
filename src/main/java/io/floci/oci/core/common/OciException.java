@@ -47,6 +47,10 @@ public class OciException extends RuntimeException {
         return new OciException("Conflict", message, 409);
     }
 
+    public static OciException relatedResourceNotAuthorizedOrNotFound(String message) {
+        return new OciException("RelatedResourceNotAuthorizedOrNotFound", message, 400);
+    }
+
     public static OciException noEtagMatch(String message) {
         return new OciException("NoEtagMatch", message, 412);
     }

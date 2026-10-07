@@ -16,6 +16,7 @@ import io.floci.oci.core.workrequest.WorkRequestService;
 import io.floci.oci.services.identity.model.StoredCompartment;
 import io.floci.oci.services.identity.model.StoredGroup;
 import io.floci.oci.services.identity.model.StoredPolicy;
+import io.floci.oci.services.identity.model.StoredRegionSubscription;
 import io.floci.oci.services.identity.model.StoredUser;
 import io.floci.oci.services.identity.model.StoredUserGroupMembership;
 import io.quarkus.runtime.StartupEvent;
@@ -26,24 +27,36 @@ import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.function.BiConsumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
+import java.util.stream.IntStream;
 
 @ApplicationScoped
 public class IdentityService {
 
     private static final Logger LOG = Logger.getLogger(IdentityService.class);
+    private static final int AVAILABILITY_DOMAINS = 3;
+    private static final int FAULT_DOMAINS_PER_AD = 3;
+    private static final Set<String> ACCESS_LEVELS = Set.of("ANY", "ACCESSIBLE");
+    private static final Set<String> COMPARTMENT_SORT_FIELDS = Set.of("TIMECREATED", "NAME");
+    private static final Set<String> SORT_ORDERS = Set.of("ASC", "DESC");
+    private static final Set<String> COMPARTMENT_STATES =
+            Set.of("CREATING", "ACTIVE", "INACTIVE", "DELETING", "DELETED");
 
     private final StorageBackend<String, StoredCompartment> compartments;
     private final StorageBackend<String, StoredUser> users;
     private final StorageBackend<String, StoredGroup> groups;
     private final StorageBackend<String, StoredUserGroupMembership> memberships;
     private final StorageBackend<String, StoredPolicy> policies;
+    private final StorageBackend<String, StoredRegionSubscription> regionSubscriptions;
     private final EmulatorConfig config;
     private final ServiceRegistry serviceRegistry;
     private final WorkRequestService workRequests;
@@ -68,6 +81,9 @@ public class IdentityService {
                 new TypeReference<Map<String, StoredUserGroupMembership>>() {});
         this.policies = storageFactory.create("identity", "identity-policies.json",
                 new TypeReference<Map<String, StoredPolicy>>() {});
+        this.regionSubscriptions = storageFactory.create("identity",
+                "identity-region-subscriptions.json",
+                new TypeReference<Map<String, StoredRegionSubscription>>() {});
     }
 
     IdentityService(StorageBackend<String, StoredCompartment> compartments,
@@ -75,10 +91,11 @@ public class IdentityService {
                     StorageBackend<String, StoredGroup> groups,
                     StorageBackend<String, StoredUserGroupMembership> memberships,
                     StorageBackend<String, StoredPolicy> policies,
+                    StorageBackend<String, StoredRegionSubscription> regionSubscriptions,
                     EmulatorConfig config,
                     WorkRequestService workRequests) {
-        this(compartments, users, groups, memberships, policies, config, workRequests,
-                config::defaultTenancyId);
+        this(compartments, users, groups, memberships, policies, regionSubscriptions, config,
+                workRequests, config::defaultTenancyId);
     }
 
     IdentityService(StorageBackend<String, StoredCompartment> compartments,
@@ -86,6 +103,7 @@ public class IdentityService {
                     StorageBackend<String, StoredGroup> groups,
                     StorageBackend<String, StoredUserGroupMembership> memberships,
                     StorageBackend<String, StoredPolicy> policies,
+                    StorageBackend<String, StoredRegionSubscription> regionSubscriptions,
                     EmulatorConfig config,
                     WorkRequestService workRequests,
                     Supplier<String> tenancyId) {
@@ -95,6 +113,7 @@ public class IdentityService {
         this.groups = groups;
         this.memberships = memberships;
         this.policies = policies;
+        this.regionSubscriptions = regionSubscriptions;
         this.config = config;
         this.serviceRegistry = null;
         this.workRequests = workRequests;
@@ -157,19 +176,16 @@ public class IdentityService {
     }
 
     // ── Compartments ───────────────────────────────────────────────────────────
+    // Compartment writes are synchronized: each checks the tree (cycles, unique names, parent
+    // state) before it writes, and concurrent writes must not interleave between the two.
 
-    public StoredCompartment createCompartment(String parentId, String name, String description,
+    public synchronized StoredCompartment createCompartment(String parentId, String name, String description,
                                                Map<String, String> freeformTags,
                                                Map<String, Map<String, Object>> definedTags) {
         requireNonBlank(name, "name");
         requireNonBlank(description, "description");
         String parent = parentId != null ? parentId : tenancyId();
-        boolean duplicate = compartments.scan(k -> true).stream()
-                .anyMatch(c -> parent.equals(c.getCompartmentId()) && name.equals(c.getName())
-                        && "ACTIVE".equals(c.getLifecycleState()));
-        if (duplicate) {
-            throw OciException.conflict("Compartment " + name + " already exists in " + parent);
-        }
+        requireUniqueName(parent, name, null);
         StoredCompartment c = new StoredCompartment();
         c.setId(Ocids.generateGlobal("compartment", config.defaultRealm()));
         c.setCompartmentId(parent);
@@ -195,17 +211,31 @@ public class IdentityService {
     }
 
     public List<StoredCompartment> listCompartments(String parentId, boolean subtree) {
-        String parent = parentId != null ? parentId : tenancyId();
-        List<StoredCompartment> all = compartments.scan(k -> true).stream()
-                .sorted(Comparator.comparing(StoredCompartment::getTimeCreated))
-                .toList();
-        if (!subtree) {
-            return all.stream().filter(c -> parent.equals(c.getCompartmentId())).toList();
-        }
-        return all.stream().filter(c -> isInSubtree(c, parent)).toList();
+        return listCompartments(parentId, subtree, null, null, null, null, null);
     }
 
-    public StoredCompartment updateCompartment(String compartmentId, String name, String description,
+    public List<StoredCompartment> listCompartments(String parentId, boolean subtree, String name,
+                                                    String lifecycleState, String sortBy,
+                                                    String sortOrder, String accessLevel) {
+        String parent = parentId != null ? parentId : tenancyId();
+        requireOneOf(accessLevel, "accessLevel", ACCESS_LEVELS);
+        requireOneOf(sortBy, "sortBy", COMPARTMENT_SORT_FIELDS);
+        requireOneOf(sortOrder, "sortOrder", SORT_ORDERS);
+        String state = lifecycleState != null ? lifecycleState.toUpperCase(Locale.ROOT) : null;
+        requireOneOf(state, "lifecycleState", COMPARTMENT_STATES);
+        if (subtree && !parent.equals(tenancyId())) {
+            throw OciException.invalidParameter(
+                    "compartmentIdInSubtree can only be true when compartmentId is the tenancy.");
+        }
+        return compartments.scan(k -> true).stream()
+                .filter(c -> subtree ? isInSubtree(c, parent) : parent.equals(c.getCompartmentId()))
+                .filter(c -> name == null || name.equals(c.getName()))
+                .filter(c -> state == null || state.equals(c.getLifecycleState()))
+                .sorted(compartmentOrder(sortBy, sortOrder))
+                .toList();
+    }
+
+    public synchronized StoredCompartment updateCompartment(String compartmentId, String name, String description,
                                                Map<String, String> freeformTags,
                                                Map<String, Map<String, Object>> definedTags,
                                                String ifMatch) {
@@ -229,7 +259,7 @@ public class IdentityService {
     }
 
     /** Deletion is async on real OCI: returns the work-request OCID for the 202 response. */
-    public String deleteCompartment(String compartmentId, String ifMatch) {
+    public synchronized String deleteCompartment(String compartmentId, String ifMatch) {
         StoredCompartment c = compartments.get(compartmentId)
                 .orElseThrow(() -> notFound("compartment", compartmentId));
         Etags.checkIfMatch(ifMatch, c.getEtag());
@@ -246,6 +276,50 @@ public class IdentityService {
         return workRequests.succeeded("identity", "DELETE_COMPARTMENT", c.getCompartmentId(),
                 List.of(WorkRequestService.resource("COMPARTMENT", "DELETED", compartmentId,
                         "/20160918/compartments/" + compartmentId)));
+    }
+
+    /** Moving is async on real OCI: returns the work-request OCID for the 202 response. */
+    public synchronized String moveCompartment(String compartmentId, String targetCompartmentId,
+                                               String ifMatch) {
+        requireNonBlank(targetCompartmentId, "targetCompartmentId");
+        if (compartmentId.equals(tenancyId())) {
+            throw OciException.invalidParameter("The root compartment cannot be moved.");
+        }
+        StoredCompartment c = compartments.get(compartmentId)
+                .orElseThrow(() -> notFound("compartment", compartmentId));
+        Etags.checkIfMatch(ifMatch, c.getEtag());
+        requireActive(c);
+        StoredCompartment target = relatedCompartment(targetCompartmentId);
+        requireActive(target);
+        if (targetCompartmentId.equals(compartmentId) || isInSubtree(target, compartmentId)) {
+            throw OciException.invalidParameter(
+                    "A compartment cannot be moved into itself or one of its descendants.");
+        }
+        requireUniqueName(targetCompartmentId, c.getName(), compartmentId);
+        c.setCompartmentId(targetCompartmentId);
+        c.setEtag(Etags.newEtag());
+        compartments.put(c.getId(), c);
+        LOG.infov("moveCompartment {0} -> {1}", compartmentId, targetCompartmentId);
+        return workRequests.succeeded("identity", "MOVE_COMPARTMENT", targetCompartmentId,
+                List.of(WorkRequestService.resource("COMPARTMENT", "UPDATED", compartmentId,
+                        "/20160918/compartments/" + compartmentId)));
+    }
+
+    public synchronized StoredCompartment recoverCompartment(String compartmentId, String ifMatch) {
+        StoredCompartment c = compartments.get(compartmentId)
+                .orElseThrow(() -> notFound("compartment", compartmentId));
+        Etags.checkIfMatch(ifMatch, c.getEtag());
+        if (!"DELETED".equals(c.getLifecycleState())) {
+            throw OciException.conflict("Compartment " + compartmentId + " is "
+                    + c.getLifecycleState() + ", only DELETED compartments can be recovered.");
+        }
+        requireActive(getCompartment(c.getCompartmentId()));
+        requireUniqueName(c.getCompartmentId(), c.getName(), compartmentId);
+        c.setLifecycleState("ACTIVE");
+        c.setEtag(Etags.newEtag());
+        compartments.put(c.getId(), c);
+        LOG.infov("recoverCompartment {0}", compartmentId);
+        return c;
     }
 
     // ── Users ──────────────────────────────────────────────────────────────────
@@ -521,30 +595,83 @@ public class IdentityService {
 
     public List<Map<String, Object>> availabilityDomains(String compartmentId) {
         String compartment = compartmentId != null ? compartmentId : tenancyId();
-        String regionUpper = config.defaultRegion().toUpperCase().replace("-", "-");
-        return List.of(
-                ad(compartment, regionUpper, 1),
-                ad(compartment, regionUpper, 2),
-                ad(compartment, regionUpper, 3));
+        List<String> names = availabilityDomainNames();
+        return IntStream.range(0, names.size())
+                .mapToObj(i -> Map.<String, Object>of(
+                        "name", names.get(i),
+                        "id", "ocid1.availabilitydomain." + config.defaultRealm() + "..floci" + (i + 1),
+                        "compartmentId", compartment))
+                .toList();
     }
 
-    private Map<String, Object> ad(String compartmentId, String regionUpper, int index) {
-        return Map.of(
-                "name", "Floc:" + regionUpper + "-AD-" + index,
-                "id", "ocid1.availabilitydomain." + config.defaultRealm() + ".." + "floci" + index,
-                "compartmentId", compartmentId);
+    public List<Map<String, Object>> faultDomains(String compartmentId, String availabilityDomain) {
+        requireNonBlank(compartmentId, "compartmentId");
+        requireNonBlank(availabilityDomain, "availabilityDomain");
+        int ad = availabilityDomainNames().indexOf(availabilityDomain) + 1;
+        if (ad == 0) {
+            throw OciException.invalidParameter(
+                    "Unknown availability domain: " + availabilityDomain);
+        }
+        return IntStream.rangeClosed(1, FAULT_DOMAINS_PER_AD)
+                .mapToObj(fd -> Map.<String, Object>of(
+                        "name", "FAULT-DOMAIN-" + fd,
+                        "id", "ocid1.faultdomain." + config.defaultRealm() + "..floci" + ad + fd,
+                        "compartmentId", compartmentId,
+                        "availabilityDomain", availabilityDomain))
+                .toList();
     }
 
+    private List<String> availabilityDomainNames() {
+        String regionUpper = config.defaultRegion().toUpperCase(Locale.ROOT);
+        return IntStream.rangeClosed(1, AVAILABILITY_DOMAINS)
+                .mapToObj(i -> "Floc:" + regionUpper + "-AD-" + i)
+                .toList();
+    }
+
+    /**
+     * Every region in the emulator's realm: an OCI endpoint only serves its own realm. The home
+     * region is always listed, even when the region table does not know it.
+     */
     public List<Map<String, String>> regions() {
-        return List.of(Map.of("key", regionKey(), "name", config.defaultRegion()));
+        List<Map<String, String>> regions = new ArrayList<>(Regions.all().stream()
+                .filter(r -> r.realm().equals(config.defaultRealm()))
+                .map(r -> Map.of("key", r.key(), "name", r.name()))
+                .toList());
+        boolean homeListed = regions.stream()
+                .anyMatch(r -> r.get("name").equals(config.defaultRegion()));
+        if (!homeListed) {
+            regions.addFirst(Map.of("key", regionKey(), "name", config.defaultRegion()));
+        }
+        return regions;
     }
 
-    public List<Map<String, Object>> regionSubscriptions() {
-        return List.of(Map.of(
-                "regionKey", regionKey(),
-                "regionName", config.defaultRegion(),
-                "status", "READY",
-                "isHomeRegion", true));
+    public List<StoredRegionSubscription> regionSubscriptions() {
+        List<StoredRegionSubscription> result = new ArrayList<>();
+        result.add(new StoredRegionSubscription(regionKey(), config.defaultRegion(), "READY", true));
+        regionSubscriptions.scan(k -> true).stream()
+                .sorted(Comparator.comparing(StoredRegionSubscription::getRegionName))
+                .forEach(result::add);
+        return result;
+    }
+
+    /** Subscriptions complete immediately: the emulator has no region provisioning to wait on. */
+    public StoredRegionSubscription createRegionSubscription(String regionKey) {
+        requireNonBlank(regionKey, "regionKey");
+        Regions.Region region = Regions.all().stream()
+                .filter(r -> r.realm().equals(config.defaultRealm()))
+                .filter(r -> r.key().equalsIgnoreCase(regionKey))
+                .findFirst()
+                .orElseThrow(() -> OciException.invalidParameter("Unknown region key: " + regionKey));
+        boolean subscribed = regionSubscriptions().stream()
+                .anyMatch(sub -> sub.getRegionKey().equals(region.key()));
+        if (subscribed) {
+            throw OciException.conflict("The tenancy is already subscribed to " + region.name());
+        }
+        StoredRegionSubscription sub =
+                new StoredRegionSubscription(region.key(), region.name(), "READY", false);
+        regionSubscriptions.put(region.key(), sub);
+        LOG.infov("createRegionSubscription {0}", region.name());
+        return sub;
     }
 
     public Map<String, Object> tenancy(String tenancyOcid) {
@@ -567,6 +694,58 @@ public class IdentityService {
 
     private String tenancyId() {
         return tenancyId.get();
+    }
+
+    private void requireUniqueName(String parentId, String name, String excludeId) {
+        boolean duplicate = compartments.scan(k -> true).stream()
+                .anyMatch(c -> parentId.equals(c.getCompartmentId()) && name.equals(c.getName())
+                        && "ACTIVE".equals(c.getLifecycleState()) && !c.getId().equals(excludeId));
+        if (duplicate) {
+            throw OciException.conflict("Compartment " + name + " already exists in " + parentId);
+        }
+    }
+
+    /** A compartment named in the request body: OCI reports it missing as a 400, not a 404. */
+    private StoredCompartment relatedCompartment(String compartmentId) {
+        try {
+            return getCompartment(compartmentId);
+        } catch (OciException e) {
+            if (e.getHttpStatus() == 404) {
+                throw OciException.relatedResourceNotAuthorizedOrNotFound(
+                        "Compartment " + compartmentId + " not found or not authorized.");
+            }
+            throw e;
+        }
+    }
+
+    private static void requireActive(StoredCompartment c) {
+        if (!"ACTIVE".equals(c.getLifecycleState())) {
+            throw OciException.conflict(
+                    "Compartment " + c.getId() + " is " + c.getLifecycleState() + ".");
+        }
+    }
+
+    private static void requireOneOf(String value, String field, Set<String> allowed) {
+        if (value != null && !allowed.contains(value)) {
+            throw OciException.invalidParameter(
+                    "Invalid " + field + ": " + value + ". Allowed values: " + allowed);
+        }
+    }
+
+    /**
+     * No sortBy keeps creation order, oldest first unless sortOrder is DESC; TIMECREATED defaults
+     * to DESC and NAME to ASC.
+     */
+    private static Comparator<StoredCompartment> compartmentOrder(String sortBy, String sortOrder) {
+        if (sortBy == null) {
+            Comparator<StoredCompartment> created = Comparator.comparing(StoredCompartment::getTimeCreated);
+            return "DESC".equals(sortOrder) ? created.reversed() : created;
+        }
+        Comparator<StoredCompartment> order = "NAME".equals(sortBy)
+                ? Comparator.comparing(StoredCompartment::getName)
+                : Comparator.comparing(StoredCompartment::getTimeCreated);
+        String direction = sortOrder != null ? sortOrder : ("NAME".equals(sortBy) ? "ASC" : "DESC");
+        return "DESC".equals(direction) ? order.reversed() : order;
     }
 
     private static void requireNonBlank(String value, String field) {

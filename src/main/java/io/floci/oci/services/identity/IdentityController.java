@@ -68,10 +68,15 @@ public class IdentityController {
     @Path("/compartments")
     public Response listCompartments(@QueryParam("compartmentId") String compartmentId,
                                      @QueryParam("compartmentIdInSubtree") Boolean subtree,
+                                     @QueryParam("name") String name,
+                                     @QueryParam("lifecycleState") String lifecycleState,
+                                     @QueryParam("sortBy") String sortBy,
+                                     @QueryParam("sortOrder") String sortOrder,
+                                     @QueryParam("accessLevel") String accessLevel,
                                      @QueryParam("limit") Integer limit,
                                      @QueryParam("page") String page) {
-        return paged(service.listCompartments(compartmentId, Boolean.TRUE.equals(subtree)),
-                limit, page);
+        return paged(service.listCompartments(compartmentId, Boolean.TRUE.equals(subtree), name,
+                lifecycleState, sortBy, sortOrder, accessLevel), limit, page);
     }
 
     @PUT
@@ -91,6 +96,25 @@ public class IdentityController {
                                       @HeaderParam("if-match") String ifMatch) {
         String workRequestId = service.deleteCompartment(compartmentId, ifMatch);
         return Response.accepted().header("opc-work-request-id", workRequestId).build();
+    }
+
+    @POST
+    @Path("/compartments/{compartmentId}/actions/moveCompartment")
+    public Response moveCompartment(@PathParam("compartmentId") String compartmentId,
+                                    @HeaderParam("if-match") String ifMatch,
+                                    Map<String, Object> body) {
+        String workRequestId = service.moveCompartment(compartmentId,
+                str(body, "targetCompartmentId"), ifMatch);
+        return Response.accepted().header("opc-work-request-id", workRequestId).build();
+    }
+
+    @POST
+    @Path("/compartments/{compartmentId}/actions/recoverCompartment")
+    @Consumes(MediaType.WILDCARD)
+    public Response recoverCompartment(@PathParam("compartmentId") String compartmentId,
+                                       @HeaderParam("if-match") String ifMatch) {
+        StoredCompartment c = service.recoverCompartment(compartmentId, ifMatch);
+        return withEtag(Response.ok(c), c.getEtag());
     }
 
     // ── Users ──────────────────────────────────────────────────────────────────
@@ -271,6 +295,13 @@ public class IdentityController {
     }
 
     @GET
+    @Path("/faultDomains")
+    public Response listFaultDomains(@QueryParam("compartmentId") String compartmentId,
+                                     @QueryParam("availabilityDomain") String availabilityDomain) {
+        return Response.ok(service.faultDomains(compartmentId, availabilityDomain)).build();
+    }
+
+    @GET
     @Path("/regions")
     public Response listRegions() {
         return Response.ok(service.regions()).build();
@@ -287,6 +318,14 @@ public class IdentityController {
     public Response listRegionSubscriptions(@PathParam("tenancyId") String tenancyId) {
         service.tenancy(tenancyId);
         return Response.ok(service.regionSubscriptions()).build();
+    }
+
+    @POST
+    @Path("/tenancies/{tenancyId}/regionSubscriptions")
+    public Response createRegionSubscription(@PathParam("tenancyId") String tenancyId,
+                                             Map<String, Object> body) {
+        service.tenancy(tenancyId);
+        return Response.ok(service.createRegionSubscription(str(body, "regionKey"))).build();
     }
 
     // ── Work requests ──────────────────────────────────────────────────────────
