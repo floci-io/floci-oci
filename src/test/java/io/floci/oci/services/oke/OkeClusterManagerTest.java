@@ -5,11 +5,13 @@ import io.floci.oci.core.common.docker.ContainerBuilder;
 import io.floci.oci.core.common.docker.ContainerLifecycleManager;
 import io.floci.oci.core.common.docker.ContainerSpec;
 import io.floci.oci.core.common.docker.ContainerStorageHelper;
+import io.floci.oci.core.common.docker.DockerHostResolver;
 import io.floci.oci.core.common.docker.PortAllocator;
 import io.floci.oci.services.oke.model.StoredOkeCluster;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -56,6 +58,7 @@ class OkeClusterManagerTest {
         lenient().when(config.services().oke().defaultImage()).thenReturn("rancher/k3s:v1.30.1-k3s1");
         lenient().when(config.storage().mode()).thenReturn("memory");
         lenient().when(config.storage().pruneVolumesOnDelete()).thenReturn(true);
+        lenient().when(config.defaultRegion()).thenReturn("us-ashburn-1");
 
         specBuilder = mock(ContainerBuilder.Builder.class, RETURNS_DEEP_STUBS);
         lenient().when(containerBuilder.newContainer(anyString())).thenReturn(specBuilder);
@@ -66,6 +69,7 @@ class OkeClusterManagerTest {
         lenient().when(specBuilder.withPortBinding(anyInt(), anyInt())).thenReturn(specBuilder);
         lenient().when(specBuilder.withNamedVolume(anyString(), anyString())).thenReturn(specBuilder);
         lenient().when(specBuilder.withPrivileged(org.mockito.ArgumentMatchers.anyBoolean())).thenReturn(specBuilder);
+        lenient().when(specBuilder.withLabels(any())).thenReturn(specBuilder);
         lenient().when(specBuilder.build()).thenReturn(new ContainerSpec("rancher/k3s:v1.30.1-k3s1"));
 
         manager = new OkeClusterManager(containerBuilder, lifecycleManager, portAllocator, config);
@@ -281,5 +285,32 @@ class OkeClusterManagerTest {
 
         verify(portAllocator, never()).allocate(anyInt(), anyInt());
         verify(lifecycleManager, never()).createAndStart(any());
+    }
+
+    @Test
+    void startClusterLabelsContainerWithClusterIdentity() {
+        OkeClusterManager labelledManager = new OkeClusterManager(
+                new ContainerBuilder(config, mock(DockerHostResolver.class), null), lifecycleManager, portAllocator, config);
+        when(portAllocator.allocate(6443, 6543)).thenReturn(6443);
+        when(lifecycleManager.createAndStart(any())).thenReturn(new ContainerLifecycleManager.ContainerInfo("c-1", Map.of()));
+
+        StoredOkeCluster cluster = new StoredOkeCluster();
+        cluster.setId("ocid1.cluster.oc1.iad.labelled001");
+        cluster.setCompartmentId("ocid1.compartment.oc1..labelled");
+        cluster.setName("labelled-cluster");
+        cluster.setApiToken("token-labelled001");
+
+        labelledManager.startCluster(cluster);
+
+        ArgumentCaptor<ContainerSpec> spec = ArgumentCaptor.forClass(ContainerSpec.class);
+        verify(lifecycleManager).createAndStart(spec.capture());
+        assertEquals(
+                Map.of(
+                        "io.floci", "oci",
+                        "io.floci.service", "oke",
+                        "io.floci.resource-id", "ocid1.cluster.oc1.iad.labelled001",
+                        "io.floci.compartment", "ocid1.compartment.oc1..labelled",
+                        "io.floci.region", "us-ashburn-1"),
+                spec.getValue().labels());
     }
 }

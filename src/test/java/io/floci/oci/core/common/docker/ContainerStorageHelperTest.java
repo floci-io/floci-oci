@@ -68,6 +68,54 @@ class ContainerStorageHelperTest {
                 ContainerStorageHelper.defaultLabels(config));
     }
 
+    @Test
+    void resourceIdentityLabelsCarryEveryKey() {
+        assertEquals(
+                Map.of(
+                        "io.floci", "oci",
+                        "io.floci.service", "oke",
+                        "io.floci.resource-id", "ocid1.cluster.oc1.iad.abc",
+                        "io.floci.compartment", "ocid1.compartment.oc1..xyz",
+                        "io.floci.region", "us-ashburn-1"),
+                ContainerStorageHelper.resourceIdentityLabels(
+                        "oke", "ocid1.cluster.oc1.iad.abc", "ocid1.compartment.oc1..xyz", "us-ashburn-1"));
+    }
+
+    @Test
+    void resourceIdentityLabelsOmitBlankValues() {
+        assertEquals(
+                Map.of("io.floci", "oci", "io.floci.service", "functions", "io.floci.region", "us-ashburn-1"),
+                ContainerStorageHelper.resourceIdentityLabels("functions", null, " ", "us-ashburn-1"));
+        assertEquals(
+                Map.of("io.floci", "oci"),
+                ContainerStorageHelper.resourceIdentityLabels("", null, null, ""));
+    }
+
+    @Test
+    void withLegacyAliasesStampsTheLegacyKeyWithTheSameValue() {
+        Map<String, String> labels = Map.of("floci", "true", "io.floci.service", "functions");
+
+        assertEquals(
+                Map.of("floci", "true", "io.floci.service", "functions", "floci_service", "functions"),
+                ContainerStorageHelper.withLegacyAliases(labels));
+    }
+
+    @Test
+    void withLegacyAliasesOverridesAStaleLegacyValue() {
+        Map<String, String> labels = Map.of("io.floci.service", "oke", "floci_service", "functions");
+
+        assertEquals(
+                Map.of("io.floci.service", "oke", "floci_service", "oke"),
+                ContainerStorageHelper.withLegacyAliases(labels));
+    }
+
+    @Test
+    void withLegacyAliasesLeavesLabelsWithoutAliasedKeysAlone() {
+        Map<String, String> labels = Map.of("floci", "true", "floci_service", "functions");
+
+        assertEquals(labels, ContainerStorageHelper.withLegacyAliases(labels));
+    }
+
     private static EmulatorConfig config(String namespace) {
         EmulatorConfig config = mock(EmulatorConfig.class);
         EmulatorConfig.DockerConfig docker = mock(EmulatorConfig.DockerConfig.class);

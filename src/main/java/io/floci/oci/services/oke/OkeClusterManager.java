@@ -100,6 +100,8 @@ public class OkeClusterManager implements Resettable {
                         .withPortBinding(K3S_CONTAINER_PORT, hostPort)
                         .withNamedVolume(volumeName, "/var/lib/rancher/k3s")
                         .withPrivileged(true)
+                        .withLabels(ContainerStorageHelper.resourceIdentityLabels(
+                                "oke", cluster.getId(), cluster.getCompartmentId(), config.defaultRegion()))
                         .build();
 
                 lifecycleManager.createAndStart(spec);

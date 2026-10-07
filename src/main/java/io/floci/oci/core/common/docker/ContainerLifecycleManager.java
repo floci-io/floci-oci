@@ -220,7 +220,7 @@ public class ContainerLifecycleManager {
         if (specLabels != null) {
             labels.putAll(specLabels);
         }
-        return labels;
+        return ContainerStorageHelper.withLegacyAliases(labels);
     }
 
     /**
