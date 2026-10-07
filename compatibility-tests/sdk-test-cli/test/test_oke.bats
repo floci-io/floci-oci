@@ -47,10 +47,22 @@ teardown_file() {
     [ "$(json_get '.data | map(select(."operation-type" == "CLUSTER_CREATE")) | length')" -ge 1 ]
 }
 
-@test "ce: create-kubeconfig returns a kubeconfig" {
+@test "ce: create-kubeconfig returns the token version 2.0.0 exec kubeconfig" {
     run oci_json ce cluster create-kubeconfig --cluster-id "$CLUSTER_ID" --file -
     [ "$status" -eq 0 ]
     [[ "$output" == *apiVersion* ]]
+    [[ "$output" == *"command: oci"* ]]
+    [[ "$output" == *generate-token* ]]
+    [[ "$output" == *"$CLUSTER_ID"* ]]
+    [[ "$output" == *certificate-authority-data* ]]
+}
+
+@test "ce: generate-token mints the ExecCredential the kubeconfig runs" {
+    # Signs locally against the real containerengine host; no request reaches the emulator.
+    run oci_json ce cluster generate-token --cluster-id "$CLUSTER_ID"
+    [ "$status" -eq 0 ]
+    [ "$(json_get '.kind')" = "ExecCredential" ]
+    [ -n "$(json_get '.status.token')" ]
 }
 
 @test "ce: node-pool list succeeds" {

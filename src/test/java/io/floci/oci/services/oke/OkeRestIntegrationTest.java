@@ -1,21 +1,22 @@
 package io.floci.oci.services.oke;
 
+import io.floci.oci.config.EmulatorConfig;
 import io.quarkus.test.junit.QuarkusTest;
 import io.restassured.http.ContentType;
 import io.restassured.path.json.JsonPath;
+import jakarta.inject.Inject;
 import org.junit.jupiter.api.Test;
 
+import java.time.Instant;
 import java.util.Map;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.equalTo;
+import static org.hamcrest.Matchers.hasItem;
 import static org.hamcrest.Matchers.notNullValue;
 import static org.hamcrest.Matchers.nullValue;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -24,6 +25,10 @@ class OkeRestIntegrationTest {
 
     private static final String COMPARTMENT = "ocid1.compartment.oc1..oketestrest";
     private static final String VCN = "ocid1.vcn.oc1.iad.restvcn";
+    private static final String USER = "ocid1.user.oc1..restwebhookuser";
+
+    @Inject
+    EmulatorConfig config;
 
     @Test
     void testOkeClusterAndNodePoolLifecycle() {
@@ -75,7 +80,7 @@ class OkeRestIntegrationTest {
                 .statusCode(200)
                 .header("Content-Type", containsString("application/x-yaml"))
                 .body(containsString("apiVersion: v1"))
-                .body(containsString("rest-cluster"));
+                .body(containsString("- " + clusterId));
 
         // 5. Create Node Pool
         String nodePoolId = given()
@@ -128,21 +133,100 @@ class OkeRestIntegrationTest {
     }
 
     @Test
-    void kubeconfigTokenIsRandomAndNeverInClusterResponses() {
-        String createBody = createCluster("token-cluster-a");
-        String clusterId = JsonPath.from(createBody).getString("id");
-        String apiToken = kubeconfigToken(clusterId);
+    void kubeconfigIsTheRealOkeExecShapeByDefault() {
+        String clusterId = JsonPath.from(createCluster("exec-cluster")).getString("id");
 
-        assertFalse(apiToken.contains(clusterId), "token must not be derivable from the cluster OCID");
-        assertNotEquals(apiToken, kubeconfigToken(JsonPath.from(createCluster("token-cluster-b")).getString("id")));
+        String kubeconfig = given()
+            .contentType(ContentType.JSON)
+            .body(Map.of("tokenVersion", "2.0.0"))
+            .when().post("/20180222/clusters/{id}/kubeconfig/content", clusterId)
+            .then().statusCode(200)
+            .extract().asString();
 
-        String getBody = given().when().get("/20180222/clusters/{id}", clusterId)
-            .then().statusCode(200).body("apiToken", nullValue()).extract().asString();
-        String listBody = given().queryParam("compartmentId", COMPARTMENT).when().get("/20180222/clusters")
-            .then().statusCode(200).extract().asString();
-        assertFalse(createBody.contains(apiToken));
-        assertFalse(getBody.contains(apiToken));
-        assertFalse(listBody.contains(apiToken));
+        assertTrue(kubeconfig.contains("""
+                      command: oci
+                """), kubeconfig);
+        assertTrue(kubeconfig.contains("""
+                      - generate-token
+                      - --cluster-id
+                      - %s
+                      - --region
+                      - %s
+                """.formatted(clusterId, config.defaultRegion())), kubeconfig);
+        assertFalse(kubeconfig.contains("token: "), "exec mode must not leak the static token");
+    }
+
+    @Test
+    void createKubeconfigAcceptsTheSdkRequestModel() {
+        String clusterId = JsonPath.from(createCluster("dto-cluster")).getString("id");
+
+        given()
+            .contentType(ContentType.JSON)
+            .body(Map.of("tokenVersion", "2.0.0", "expiration", 2592000, "endpoint", "PUBLIC_ENDPOINT"))
+            .when().post("/20180222/clusters/{id}/kubeconfig/content", clusterId)
+            .then().statusCode(200);
+        given()
+            .contentType(ContentType.JSON)
+            .body(Map.of("endpoint", "private_endpoint"))
+            .when().post("/20180222/clusters/{id}/kubeconfig/content", clusterId)
+            .then().statusCode(200);
+        given()
+            .contentType(ContentType.JSON)
+            .body(Map.of("endpoint", "BOGUS"))
+            .when().post("/20180222/clusters/{id}/kubeconfig/content", clusterId)
+            .then()
+                .statusCode(400)
+                .header("opc-request-id", notNullValue())
+                .body("code", equalTo("InvalidParameter"));
+    }
+
+    @Test
+    void tokenWebhookAuthenticatesAGenerateTokenTokenForTheCluster() {
+        String clusterId = JsonPath.from(createCluster("webhook-cluster")).getString("id");
+        String tenancy = config.defaultTenancyId();
+        String token = ClusterTokenMinter.mint(config.defaultRegion(), clusterId, tenancy, USER, Instant.now());
+
+        given()
+            .contentType(ContentType.JSON)
+            .body(tokenReview("authentication.k8s.io/v1", token))
+            .when().post("/_floci-oci/oke/token-webhook/{tenancy}/{cluster}", tenancy, clusterId)
+            .then()
+                .statusCode(200)
+                .body("apiVersion", equalTo("authentication.k8s.io/v1"))
+                .body("kind", equalTo("TokenReview"))
+                .body("status.authenticated", equalTo(true))
+                .body("status.user.username", equalTo(USER))
+                .body("status.user.groups", hasItem("system:masters"));
+    }
+
+    @Test
+    void tokenWebhookEchoesV1beta1AndRejectsWithAuthenticatedFalse() {
+        String clusterId = JsonPath.from(createCluster("webhook-reject")).getString("id");
+        String tenancy = config.defaultTenancyId();
+        String otherCluster = ClusterTokenMinter.mint(config.defaultRegion(),
+                "ocid1.cluster.oc1.iad.notthisone", tenancy, USER, Instant.now());
+
+        given()
+            .contentType(ContentType.JSON)
+            .body(tokenReview("authentication.k8s.io/v1beta1", otherCluster))
+            .when().post("/_floci-oci/oke/token-webhook/{tenancy}/{cluster}", tenancy, clusterId)
+            .then()
+                .statusCode(200)
+                .body("apiVersion", equalTo("authentication.k8s.io/v1beta1"))
+                .body("status.authenticated", equalTo(false))
+                .body("status.user", nullValue());
+        given()
+            .contentType(ContentType.JSON)
+            .body(tokenReview("authentication.k8s.io/v1",
+                    ClusterTokenMinter.mint(config.defaultRegion(), clusterId, tenancy, USER, Instant.now())))
+            .when().post("/_floci-oci/oke/token-webhook/{tenancy}/{cluster}", "ocid1.tenancy.oc1..wrongscope", clusterId)
+            .then()
+                .statusCode(200)
+                .body("status.authenticated", equalTo(false));
+    }
+
+    private static Map<String, Object> tokenReview(String apiVersion, String token) {
+        return Map.of("apiVersion", apiVersion, "kind", "TokenReview", "spec", Map.of("token", token));
     }
 
     private static String createCluster(String name) {
@@ -152,17 +236,5 @@ class OkeRestIntegrationTest {
             .when().post("/20180222/clusters")
             .then().statusCode(202)
             .extract().asString();
-    }
-
-    private static String kubeconfigToken(String clusterId) {
-        String kubeconfig = given()
-            .contentType(ContentType.JSON)
-            .body(Map.of("tokenType", "BASIC"))
-            .when().post("/20180222/clusters/{id}/kubeconfig/content", clusterId)
-            .then().statusCode(200)
-            .extract().asString();
-        Matcher token = Pattern.compile("token: (\\S+)").matcher(kubeconfig);
-        assertTrue(token.find(), "kubeconfig must carry a bearer token");
-        return token.group(1);
     }
 }

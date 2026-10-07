@@ -28,6 +28,13 @@ All configuration lives under the `floci-oci.*` prefix; every property maps to a
 | `FLOCI_OCI_SERVICES_FUNCTIONS_ENABLED` | `true` | Enable/disable Functions |
 | `FLOCI_OCI_SERVICES_FUNCTIONS_MOCK` | `false` | Skip the Fn sidecar; invocations return a synthetic body |
 | `FLOCI_OCI_SERVICES_FUNCTIONS_SERVER_IMAGE` | `fnproject/fnserver:latest` | Fn Project server image |
+| `FLOCI_OCI_SERVICES_OKE_ENABLED` | `true` | Enable/disable Container Engine for Kubernetes (OKE) |
+| `FLOCI_OCI_SERVICES_OKE_MOCK` | `false` | Skip the k3s sidecar; clusters become `ACTIVE` at once with synthetic endpoints |
+| `FLOCI_OCI_SERVICES_OKE_DEFAULT_IMAGE` | `rancher/k3s:v1.30.1-k3s1` | k3s image for cluster sidecars |
+| `FLOCI_OCI_SERVICES_OKE_API_SERVER_BASE_PORT` | `6443` | First host port for cluster API servers |
+| `FLOCI_OCI_SERVICES_OKE_API_SERVER_MAX_PORT` | `6543` | Last host port for cluster API servers |
+| `FLOCI_OCI_SERVICES_OKE_KUBECONFIG_AUTH` | `exec` | Kubeconfig user: `exec` (real OKE `oci ce cluster generate-token`) or `token` (static bearer token) |
+| `FLOCI_OCI_SERVICES_OKE_READY_TIMEOUT_SECONDS` | `300` | How long a cluster may stay `CREATING` before it goes `FAILED` |
 | `FLOCI_OCI_SERVICES_DOCKER_NETWORK` | – | Shared Docker network for sidecar containers |
 | `FLOCI_OCI_DOCKER_RESOURCE_NAMESPACE` | – | Namespace inserted into sidecar container/volume names (`floci-oci-<ns>-…`) so parallel emulator instances on one Docker host don't collide |
 

@@ -25,6 +25,19 @@ class OkeDisabledRestIntegrationTest {
                 .body("message", equalTo("Service oke is not enabled."));
     }
 
+    @Test
+    void disabledOkeAlsoClosesTheTokenWebhook() {
+        given()
+            .contentType("application/json")
+            .body(Map.of("apiVersion", "authentication.k8s.io/v1", "kind", "TokenReview",
+                    "spec", Map.of("token", "x")))
+            .when().post("/_floci-oci/oke/token-webhook/{tenancy}/{cluster}",
+                    "ocid1.tenancy.oc1..x", "ocid1.cluster.oc1.iad.x")
+            .then()
+                .statusCode(503)
+                .body("code", equalTo("ServiceUnavailable"));
+    }
+
     public static class DisabledOkeProfile implements QuarkusTestProfile {
         @Override
         public Map<String, String> getConfigOverrides() {

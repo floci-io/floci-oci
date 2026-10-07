@@ -22,6 +22,9 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+
 import static io.floci.oci.compat.EmulatorFixture.TENANCY;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -42,7 +45,7 @@ class OkeCompatibilityTest {
     }
 
     @Test
-    void testOkeClusterAndNodePoolLifecycle() {
+    void testOkeClusterAndNodePoolLifecycle() throws IOException {
         // 1. Create Cluster
         CreateClusterResponse createClusterResponse = okeClient.createCluster(
             CreateClusterRequest.builder()
@@ -75,7 +78,11 @@ class OkeCompatibilityTest {
         var kubeconfigResponse = okeClient.createKubeconfig(
             CreateKubeconfigRequest.builder().clusterId(clusterId).build()
         );
-        assertThat(kubeconfigResponse.getInputStream()).isNotNull();
+        String kubeconfig = new String(kubeconfigResponse.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+        assertThat(kubeconfig)
+            .contains("command: oci")
+            .contains("- generate-token")
+            .contains("- " + clusterId);
 
         // 5. Create Node Pool
         CreateNodePoolResponse createNodePoolResponse = okeClient.createNodePool(

@@ -6,23 +6,33 @@ import io.floci.oci.core.common.OciException;
 import io.floci.oci.core.storage.InMemoryStorage;
 import io.floci.oci.core.storage.StorageBackend;
 import io.floci.oci.core.storage.TenancyAwareStorageBackend;
+import io.floci.oci.core.workrequest.StoredWorkRequest;
 import io.floci.oci.core.workrequest.WorkRequestService;
 import io.floci.oci.services.oke.model.StoredNodePool;
 import io.floci.oci.services.oke.model.StoredOkeCluster;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 class OkeServiceTest {
 
@@ -263,5 +273,222 @@ class OkeServiceTest {
 
         assertNotNull(rawBackend.get(rawKey).orElseThrow().getApiToken());
         assertEquals(1, rawBackend.keys().size(), "the backfill must not copy the cluster into another tenancy");
+    }
+
+    // -- Real-mode readiness: CREATING + IN_PROGRESS until the k3s API answers --
+
+    private static final String TENANCY = "ocid1.tenancy.oc1..readinesstenancy";
+
+    private OkeClusterManager readinessManager;
+    private WorkRequestService realWorkRequests;
+    private MutableClock clock;
+
+    private OkeService realModeService() {
+        EmulatorConfig realConfig = mock(EmulatorConfig.class, RETURNS_DEEP_STUBS);
+        lenient().when(realConfig.defaultRealm()).thenReturn("oc1");
+        lenient().when(realConfig.defaultRegion()).thenReturn("us-ashburn-1");
+        lenient().when(realConfig.services().oke().mock()).thenReturn(false);
+        lenient().when(realConfig.services().oke().readyTimeoutSeconds()).thenReturn(300);
+        readinessManager = mock(OkeClusterManager.class);
+        realWorkRequests = new WorkRequestService(new InMemoryStorage<>(), realConfig);
+        clock = new MutableClock(Instant.parse("2026-10-01T12:00:00Z"));
+        return new OkeService(clusters, nodePools, realConfig, null, realWorkRequests, readinessManager,
+                () -> TENANCY, clock);
+    }
+
+    @Test
+    void realModeCreateStaysCreatingWithAnInProgressWorkRequestNamingTheCluster() {
+        OkeService service = realModeService();
+
+        OkeService.CreateClusterResult result = service.createCluster(COMPARTMENT, "pending", VCN, null, null, null, null);
+
+        StoredOkeCluster cluster = result.cluster();
+        assertEquals("CREATING", cluster.getLifecycleState());
+        assertEquals(TENANCY, cluster.getTenancyId());
+        assertEquals("us-ashburn-1", cluster.getRegion());
+        assertEquals(result.workRequestId(), cluster.getCreateWorkRequestId());
+        StoredWorkRequest workRequest = realWorkRequests.get(result.workRequestId());
+        assertEquals("IN_PROGRESS", workRequest.getStatus());
+        assertNull(workRequest.getTimeFinished(), "Terraform keeps polling only while timeFinished is unset");
+        assertEquals(cluster.getId(), workRequest.getResources().get(0).getIdentifier(),
+                "Terraform reads the cluster id from the first work-request read");
+        assertFalse(cluster.toWire().containsKey("tenancyId"));
+        assertFalse(cluster.toWire().containsKey("createWorkRequestId"));
+    }
+
+    @Test
+    void pollReadinessActivatesTheClusterAndFinishesTheWorkRequest() {
+        OkeService service = realModeService();
+        OkeService.CreateClusterResult result = service.createCluster(COMPARTMENT, "ready", VCN, null, null, null, null);
+        when(readinessManager.probeReady(any())).thenReturn(Optional.of("Q0FEQVRB"));
+
+        service.pollReadiness();
+
+        StoredOkeCluster cluster = service.getCluster(result.cluster().getId());
+        assertEquals("ACTIVE", cluster.getLifecycleState());
+        assertEquals("Q0FEQVRB", cluster.getCaCertificate());
+        assertFalse(cluster.toWire().containsKey("caCertificate"));
+        StoredWorkRequest workRequest = realWorkRequests.get(result.workRequestId());
+        assertEquals("SUCCEEDED", workRequest.getStatus());
+        assertEquals(100.0f, workRequest.getPercentComplete().floatValue());
+        assertNotNull(workRequest.getTimeFinished());
+    }
+
+    @Test
+    void pollReadinessKeepsWaitingWhileTheSidecarRunsWithinTheTimeout() {
+        OkeService service = realModeService();
+        OkeService.CreateClusterResult result = service.createCluster(COMPARTMENT, "booting", VCN, null, null, null, null);
+        when(readinessManager.probeReady(any())).thenReturn(Optional.empty());
+        when(readinessManager.isClusterRunning(any())).thenReturn(true);
+        clock.advanceSeconds(299);
+
+        service.pollReadiness();
+
+        assertEquals("CREATING", service.getCluster(result.cluster().getId()).getLifecycleState());
+        assertEquals("IN_PROGRESS", realWorkRequests.get(result.workRequestId()).getStatus());
+    }
+
+    @Test
+    void pollReadinessDoesNotResurrectAClusterDeletedDuringTheProbe() {
+        OkeService service = realModeService();
+        OkeService.CreateClusterResult result = service.createCluster(COMPARTMENT, "doomed", VCN, null, null, null, null);
+        String clusterId = result.cluster().getId();
+        when(readinessManager.probeReady(any())).thenAnswer(invocation -> {
+            service.deleteCluster(clusterId);
+            return Optional.empty();
+        });
+        when(readinessManager.isClusterRunning(any())).thenReturn(false);
+
+        service.pollReadiness();
+
+        assertEquals(404, assertThrows(OciException.class, () -> service.getCluster(clusterId)).getHttpStatus());
+        assertEquals("CANCELED", realWorkRequests.get(result.workRequestId()).getStatus());
+    }
+
+    @Test
+    void pollReadinessFailsTheClusterWhenTheSidecarExits() {
+        OkeService service = realModeService();
+        OkeService.CreateClusterResult result = service.createCluster(COMPARTMENT, "crashed", VCN, null, null, null, null);
+        when(readinessManager.probeReady(any())).thenReturn(Optional.empty());
+        when(readinessManager.isClusterRunning(any())).thenReturn(false);
+
+        service.pollReadiness();
+
+        StoredOkeCluster cluster = service.getCluster(result.cluster().getId());
+        assertEquals("FAILED", cluster.getLifecycleState());
+        assertNotNull(cluster.getLifecycleDetails());
+        assertEquals("FAILED", realWorkRequests.get(result.workRequestId()).getStatus());
+        assertNotNull(realWorkRequests.get(result.workRequestId()).getTimeFinished());
+    }
+
+    @Test
+    void pollReadinessFailsTheClusterAfterTheReadyTimeout() {
+        OkeService service = realModeService();
+        OkeService.CreateClusterResult result = service.createCluster(COMPARTMENT, "slow", VCN, null, null, null, null);
+        when(readinessManager.probeReady(any())).thenReturn(Optional.empty());
+        when(readinessManager.isClusterRunning(any())).thenReturn(true);
+        clock.advanceSeconds(301);
+
+        service.pollReadiness();
+
+        assertEquals("FAILED", service.getCluster(result.cluster().getId()).getLifecycleState());
+        assertEquals("FAILED", realWorkRequests.get(result.workRequestId()).getStatus());
+    }
+
+    @Test
+    void oneClusterFailingToProbeDoesNotStarveTheOthers() {
+        OkeService service = realModeService();
+        StoredOkeCluster broken = service.createCluster(COMPARTMENT, "broken", VCN, null, null, null, null).cluster();
+        StoredOkeCluster healthy = service.createCluster(COMPARTMENT, "healthy", VCN, null, null, null, null).cluster();
+        when(readinessManager.probeReady(any())).thenAnswer(invocation -> {
+            StoredOkeCluster probed = invocation.getArgument(0);
+            if (probed.getId().equals(broken.getId())) {
+                throw new IllegalArgumentException("unsupported URI");
+            }
+            return Optional.of("Q0FEQVRB");
+        });
+
+        service.pollReadiness();
+
+        assertEquals("ACTIVE", service.getCluster(healthy.getId()).getLifecycleState());
+        assertEquals("CREATING", service.getCluster(broken.getId()).getLifecycleState());
+    }
+
+    @Test
+    void deletingACreatingClusterCancelsItsWorkRequest() {
+        OkeService service = realModeService();
+        OkeService.CreateClusterResult result = service.createCluster(COMPARTMENT, "doomed", VCN, null, null, null, null);
+
+        service.deleteCluster(result.cluster().getId());
+        service.pollReadiness();
+
+        assertEquals("CANCELED", realWorkRequests.get(result.workRequestId()).getStatus());
+    }
+
+    @Test
+    void restartKeepsReadyClustersActiveAndPollsTheOthersAgain() {
+        OkeService service = realModeService();
+        StoredOkeCluster ready = storedCluster("ocid1.cluster.oc1.iad.restartready", "Q0FEQVRB");
+        StoredOkeCluster unready = storedCluster("ocid1.cluster.oc1.iad.restartunready", null);
+        when(readinessManager.probeReady(any())).thenReturn(Optional.of("TkVXQ0E="));
+
+        service.reconstructClusterState();
+        assertEquals("ACTIVE", service.getCluster(ready.getId()).getLifecycleState());
+        assertEquals("CREATING", service.getCluster(unready.getId()).getLifecycleState());
+
+        service.pollReadiness();
+        assertEquals("ACTIVE", service.getCluster(unready.getId()).getLifecycleState());
+        assertEquals("TkVXQ0E=", service.getCluster(unready.getId()).getCaCertificate());
+    }
+
+    @Test
+    void restartRecapturesTheCaWhenShutdownPrunedTheVolumes() {
+        OkeService service = realModeService();
+        StoredOkeCluster ready = storedCluster("ocid1.cluster.oc1.iad.restartpruned", "T0xEQ0E=");
+        when(readinessManager.prunesVolumesOnStop()).thenReturn(true);
+        when(readinessManager.probeReady(any())).thenReturn(Optional.of("TkVXQ0E="));
+
+        service.reconstructClusterState();
+        assertEquals("CREATING", service.getCluster(ready.getId()).getLifecycleState());
+
+        service.pollReadiness();
+        assertEquals("ACTIVE", service.getCluster(ready.getId()).getLifecycleState());
+        assertEquals("TkVXQ0E=", service.getCluster(ready.getId()).getCaCertificate());
+    }
+
+    private StoredOkeCluster storedCluster(String id, String caCertificate) {
+        StoredOkeCluster cluster = new StoredOkeCluster();
+        cluster.setId(id);
+        cluster.setLifecycleState("ACTIVE");
+        cluster.setCaCertificate(caCertificate);
+        clusters.put(id, cluster);
+        return cluster;
+    }
+
+    private static final class MutableClock extends Clock {
+        private Instant now;
+
+        MutableClock(Instant now) {
+            this.now = now;
+        }
+
+        void advanceSeconds(long seconds) {
+            now = now.plusSeconds(seconds);
+        }
+
+        @Override
+        public ZoneId getZone() {
+            return ZoneOffset.UTC;
+        }
+
+        @Override
+        public Clock withZone(ZoneId zone) {
+            return this;
+        }
+
+        @Override
+        public Instant instant() {
+            return now;
+        }
     }
 }

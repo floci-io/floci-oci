@@ -23,13 +23,17 @@ public class StoredOkeCluster {
     private Map<String, String> endpoints;
     private int hostPort;
     private String apiToken;
+    private String tenancyId;
+    private String region;
+    private String caCertificate;
+    private String createWorkRequestId;
     private ClusterMetadata metadata;
     private Map<String, String> freeformTags;
     private Map<String, Map<String, Object>> definedTags;
 
     /**
-     * The OCI wire shape: excludes internal properties like {@code hostPort} and
-     * {@code apiToken}.
+     * The OCI wire shape: excludes internal properties like {@code hostPort}, {@code apiToken},
+     * {@code tenancyId}, {@code region}, {@code caCertificate} and {@code createWorkRequestId}.
      */
     public Map<String, Object> toWire() {
         Map<String, Object> wire = new LinkedHashMap<>();
@@ -150,6 +154,42 @@ public class StoredOkeCluster {
 
     public void setApiToken(String apiToken) {
         this.apiToken = apiToken;
+    }
+
+    /** Owning tenancy, so async workers outside a request can address the cluster's partition. */
+    public String getTenancyId() {
+        return tenancyId;
+    }
+
+    public void setTenancyId(String tenancyId) {
+        this.tenancyId = tenancyId;
+    }
+
+    /** Region name (e.g. {@code us-ashburn-1}) the cluster was created in. */
+    public String getRegion() {
+        return region;
+    }
+
+    public void setRegion(String region) {
+        this.region = region;
+    }
+
+    /** Base64 PEM of the k3s server CA, captured once the API answers. */
+    public String getCaCertificate() {
+        return caCertificate;
+    }
+
+    public void setCaCertificate(String caCertificate) {
+        this.caCertificate = caCertificate;
+    }
+
+    /** The CLUSTER_CREATE work request, finished when the cluster becomes ACTIVE or FAILED. */
+    public String getCreateWorkRequestId() {
+        return createWorkRequestId;
+    }
+
+    public void setCreateWorkRequestId(String createWorkRequestId) {
+        this.createWorkRequestId = createWorkRequestId;
     }
 
     public ClusterMetadata getMetadata() {

@@ -6,6 +6,7 @@ import io.floci.oci.core.common.OciException;
 import io.floci.oci.core.common.Ocids;
 import io.floci.oci.core.storage.StorageBackend;
 import io.floci.oci.core.storage.StorageFactory;
+import io.floci.oci.core.storage.TenancyAwareStorageBackend;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
@@ -13,14 +14,16 @@ import org.jboss.logging.Logger;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /**
- * Shared work-request plane — OCI's async-operation record store. Services create a
+ * Shared work-request plane: OCI's async-operation record store. Services create a
  * work request when returning {@code 202} + {@code opc-work-request-id}; clients and
- * Terraform poll it until terminal. Emulated operations complete synchronously, so the
- * typical call is {@link #succeeded}, and the record always carries populated
- * {@code resources} and a {@code timeFinished} — Terraform's retry predicates spin
- * until both are present.
+ * Terraform poll it until terminal. Most emulated operations complete synchronously, so the
+ * typical call is {@link #succeeded}, and the record carries populated {@code resources}
+ * and a {@code timeFinished}. Terraform's retry predicates spin until both are present,
+ * which is what an operation that really runs in the background ({@link #inProgress},
+ * then {@link #finish}) relies on.
  *
  * <p>Work requests are partitioned by owning service ({@link StoredWorkRequest#getService()})
  * because each OCI service exposes its own {@code /workRequests} listing; a queue work
@@ -52,7 +55,7 @@ public class WorkRequestService {
 
     /**
      * Records an already-completed operation with terminal status {@code SUCCEEDED} and
-     * returns its work-request OCID — the value for the {@code opc-work-request-id} header.
+     * returns its work-request OCID, the value for the {@code opc-work-request-id} header.
      */
     public String succeeded(String service, String operationType, String compartmentId,
                             List<StoredWorkRequest.Resource> resources) {
@@ -71,6 +74,54 @@ public class WorkRequestService {
         store.put(wr.getId(), wr);
         LOG.debugf("workRequest %s: %s %s (%s)", wr.getId(), operationType, terminalStatus, service);
         return wr.getId();
+    }
+
+    /**
+     * Records an operation that is still running: {@code IN_PROGRESS}, 0%, started, no
+     * {@code timeFinished}. The resources must already be populated: Terraform reads them once
+     * right after the create to learn the new resource's identifier. Close it with
+     * {@link #finish}.
+     */
+    public String inProgress(String service, String operationType, String compartmentId,
+                             List<StoredWorkRequest.Resource> resources) {
+        StoredWorkRequest wr = base(service, operationType, compartmentId, resources);
+        wr.setStatus("IN_PROGRESS");
+        wr.setPercentComplete(0.0f);
+        wr.setTimeStarted(Instant.now().toString());
+        store.put(wr.getId(), wr);
+        LOG.debugv("workRequest {0}: {1} IN_PROGRESS ({2})", wr.getId(), operationType, service);
+        return wr.getId();
+    }
+
+    /**
+     * Moves an in-progress work request to {@code terminalStatus}. Takes the owning tenancy
+     * explicitly because async workers run outside any request scope. A work request that is
+     * missing or already finished is left untouched.
+     */
+    public void finish(String tenancyId, String workRequestId, String terminalStatus) {
+        Optional<StoredWorkRequest> found = store instanceof TenancyAwareStorageBackend<StoredWorkRequest> tenancyAware
+                ? tenancyAware.getForTenancy(tenancyId, workRequestId)
+                : store.get(workRequestId);
+        if (found.isEmpty()) {
+            LOG.warnv("workRequest {0} not found in tenancy {1}; cannot mark it {2}",
+                    workRequestId, tenancyId, terminalStatus);
+            return;
+        }
+        StoredWorkRequest wr = found.get();
+        if (wr.getTimeFinished() != null) {
+            return;
+        }
+        wr.setStatus(terminalStatus);
+        if ("SUCCEEDED".equals(terminalStatus)) {
+            wr.setPercentComplete(100.0f);
+        }
+        wr.setTimeFinished(Instant.now().toString());
+        if (store instanceof TenancyAwareStorageBackend<StoredWorkRequest> tenancyAware) {
+            tenancyAware.putForTenancy(tenancyId, workRequestId, wr);
+        } else {
+            store.put(workRequestId, wr);
+        }
+        LOG.debugv("workRequest {0}: {1} ({2})", workRequestId, terminalStatus, wr.getService());
     }
 
     /** Records a failed operation and returns its work-request OCID. */

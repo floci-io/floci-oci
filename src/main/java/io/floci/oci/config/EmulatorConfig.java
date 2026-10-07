@@ -272,6 +272,23 @@ public interface EmulatorConfig {
 
             @WithDefault("6543")
             int apiServerMaxPort();
+
+            /**
+             * User credentials in the {@code CreateKubeconfig} YAML. {@code exec} (real OKE token
+             * version 2.0.0) runs {@code oci ce cluster generate-token}; {@code token} embeds the
+             * cluster's static bearer token, for clients without the oci CLI.
+             * Env: FLOCI_OCI_SERVICES_OKE_KUBECONFIG_AUTH
+             */
+            @WithDefault("exec")
+            String kubeconfigAuth();
+
+            /**
+             * How long a real-mode cluster may stay CREATING before the k3s API answers; past it
+             * the cluster and its work request go FAILED.
+             * Env: FLOCI_OCI_SERVICES_OKE_READY_TIMEOUT_SECONDS
+             */
+            @WithDefault("300")
+            int readyTimeoutSeconds();
         }
     }
 
