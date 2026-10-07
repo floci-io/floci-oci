@@ -90,7 +90,8 @@ public class FnServerManager {
                 .withNamedVolume(iofsVolume, "/iofs")
                 .withDockerNetwork(config.services().dockerNetwork())
                 .withLogRotation()
-                .withLabel("floci_service", "functions")
+                .withLabels(ContainerStorageHelper.resourceIdentityLabels(
+                        "functions", null, null, config.defaultRegion()))
                 .build();
         ContainerLifecycleManager.ContainerInfo info = lifecycleManager.createAndStart(spec);
         containerId = info.containerId();

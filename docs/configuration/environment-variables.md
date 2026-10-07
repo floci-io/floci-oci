@@ -37,3 +37,27 @@ Per-service storage overrides use the map form:
 FLOCI_OCI_STORAGE_SERVICES_OBJECTSTORAGE_MODE=wal
 FLOCI_OCI_STORAGE_SERVICES_OBJECTSTORAGE_FLUSH_INTERVAL_MS=5000
 ```
+
+## Resource identity labels
+
+Every container and volume floci-oci creates carries the base labels `floci=true`,
+`floci_emulator=floci-oci` and, when `FLOCI_OCI_DOCKER_RESOURCE_NAMESPACE` is set,
+`floci_namespace`. Function containers that `fnserver` starts itself are not labelled. A container backing an emulated OCI resource also carries labels tying
+it back to that resource, additive to the base labels:
+
+| Label | Value | Purpose |
+|---|---|---|
+| `io.floci` | `oci` | Cloud provider, for multi-cloud discovery when several Floci emulators share a host |
+| `io.floci.service` | e.g. `oke` | The OCI service the container backs |
+| `io.floci.resource-id` | e.g. `ocid1.cluster.oc1.iad.…` | The resource OCID, as the OCI CLI and SDKs take it |
+| `io.floci.compartment` | the compartment OCID | The compartment the resource belongs to |
+| `io.floci.region` | e.g. `us-ashburn-1` | The region the resource belongs to (`FLOCI_OCI_DEFAULT_REGION`) |
+| `floci_service` | same value as `io.floci.service` | Legacy alias, written alongside `io.floci.service`; prefer the new key |
+
+This makes `docker ps --filter label=io.floci.resource-id=<cluster-ocid>` resolve an emulated
+resource to its backing container directly. Applied to Container Engine (OKE) clusters and
+Functions. The Functions `fnserver` container is a shared singleton serving every application,
+so it carries every label except `io.floci.resource-id` and `io.floci.compartment`.
+
+The `io.floci.*` key set is shared with floci-aws, floci-gcp and floci-az, so
+`docker ps --filter label=io.floci` lists every resource-backing container on a shared host.

@@ -74,13 +74,35 @@ class ContainerLifecycleManagerLabelsTest {
         CreateContainerCmd createCmd = stubCreateContainer();
         ContainerSpec spec = new ContainerBuilder(config, mock(DockerHostResolver.class), null)
                 .newContainer("busybox:stable")
-                .withLabel("floci_service", "functions")
+                .withLabel("app", "demo")
                 .build();
 
         manager.create(spec);
 
         assertEquals(
-                Map.of("floci", "true", "floci_emulator", "floci-oci", "floci_service", "functions"),
+                Map.of("floci", "true", "floci_emulator", "floci-oci", "app", "demo"),
+                capturedLabels(createCmd));
+    }
+
+    @Test
+    void createAddsLegacyServiceAliasNextToTheNewKey() {
+        lenient().when(dockerConfig.imageRegistryBase()).thenReturn(Optional.empty());
+        CreateContainerCmd createCmd = stubCreateContainer();
+        ContainerSpec spec = new ContainerBuilder(config, mock(DockerHostResolver.class), null)
+                .newContainer("busybox:stable")
+                .withLabels(ContainerStorageHelper.resourceIdentityLabels("functions", null, null, "us-ashburn-1"))
+                .build();
+
+        manager.create(spec);
+
+        assertEquals(
+                Map.of(
+                        "floci", "true",
+                        "floci_emulator", "floci-oci",
+                        "io.floci", "oci",
+                        "io.floci.service", "functions",
+                        "io.floci.region", "us-ashburn-1",
+                        "floci_service", "functions"),
                 capturedLabels(createCmd));
     }
 

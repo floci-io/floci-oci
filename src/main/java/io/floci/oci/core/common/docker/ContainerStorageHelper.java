@@ -34,6 +34,20 @@ public final class ContainerStorageHelper {
     static final String CONTAINER_PREFIX = "floci-" + CLOUD + "-";
     static final String LEGACY_PREFIX = "floci-";
 
+    public static final String CLOUD_LABEL = "io.floci";
+    public static final String SERVICE_LABEL = "io.floci.service";
+    public static final String RESOURCE_ID_LABEL = "io.floci.resource-id";
+    public static final String COMPARTMENT_LABEL = "io.floci.compartment";
+    public static final String REGION_LABEL = "io.floci.region";
+
+    /**
+     * Legacy label aliases, keyed by the {@code io.floci.*} key that replaces them. This is the
+     * only place a legacy key is spelled: call sites set the new key, and {@link #withLegacyAliases}
+     * stamps the alias with the same value at container creation.
+     */
+    static final Map<String, String> LEGACY_LABEL_ALIASES = Map.of(
+            SERVICE_LABEL, "floci_service");
+
     private ContainerStorageHelper() {}
 
     /**
@@ -78,6 +92,43 @@ public final class ContainerStorageHelper {
             labels.put("floci_namespace", namespace);
         }
         return labels;
+    }
+
+    /**
+     * Labels tying a container to the emulated OCI resource it backs. Merged into a spec's own
+     * labels, never into {@link #defaultLabels}. A blank or null value omits its key: the shared
+     * fnserver has no single resource id.
+     */
+    public static Map<String, String> resourceIdentityLabels(
+            String service, String resourceId, String compartmentId, String region) {
+        Map<String, String> labels = new LinkedHashMap<>();
+        labels.put(CLOUD_LABEL, CLOUD);
+        putIfNotBlank(labels, SERVICE_LABEL, service);
+        putIfNotBlank(labels, RESOURCE_ID_LABEL, resourceId);
+        putIfNotBlank(labels, COMPARTMENT_LABEL, compartmentId);
+        putIfNotBlank(labels, REGION_LABEL, region);
+        return labels;
+    }
+
+    /**
+     * Returns a copy of {@code labels} with every legacy alias from {@link #LEGACY_LABEL_ALIASES}
+     * added next to its new key, carrying the same value so the two never drift.
+     */
+    public static Map<String, String> withLegacyAliases(Map<String, String> labels) {
+        Map<String, String> aliased = new LinkedHashMap<>(labels);
+        for (Map.Entry<String, String> alias : LEGACY_LABEL_ALIASES.entrySet()) {
+            String value = labels.get(alias.getKey());
+            if (value != null) {
+                aliased.put(alias.getValue(), value);
+            }
+        }
+        return aliased;
+    }
+
+    private static void putIfNotBlank(Map<String, String> labels, String key, String value) {
+        if (value != null && !value.isBlank()) {
+            labels.put(key, value);
+        }
     }
 
     private static String stripPrefix(String baseName) {
