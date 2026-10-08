@@ -111,4 +111,6 @@ floci-oci:
       default-image: "rancher/k3s:v1.30.1-k3s1"
       api-server-base-port: 6443
       api-server-max-port: 6543
+      kubeconfig-auth: exec  # exec = real OKE `oci ce cluster generate-token`; token = static bearer token
+      ready-timeout-seconds: 300
 

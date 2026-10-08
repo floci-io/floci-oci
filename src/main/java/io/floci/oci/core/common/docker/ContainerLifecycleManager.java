@@ -467,6 +467,13 @@ public class ContainerLifecycleManager {
         }
     }
 
+    /** The {@code KEY=value} environment an existing container was created with. */
+    public List<String> containerEnv(String containerId) {
+        InspectContainerResponse inspect = dockerClient.inspectContainerCmd(containerId).exec();
+        String[] env = inspect.getConfig() != null ? inspect.getConfig().getEnv() : null;
+        return env != null ? List.of(env) : List.of();
+    }
+
     /**
      * Resolves the endpoint (host and port) to connect to a specific container port.
      *
@@ -477,6 +484,16 @@ public class ContainerLifecycleManager {
     public EndpointInfo resolveEndpoint(String containerId, int containerPort) {
         InspectContainerResponse inspect = dockerClient.inspectContainerCmd(containerId).exec();
         return resolveEndpoint(inspect, containerPort);
+    }
+
+    /**
+     * Like {@link #resolveEndpoint(String, int)}, but in container mode takes the container's IP on
+     * {@code preferredNetwork} when it is attached there. A sidecar can sit on Docker's default
+     * {@code bridge} as well as floci-oci's own network, and only the latter is reachable.
+     */
+    public EndpointInfo resolveEndpoint(String containerId, int containerPort, String preferredNetwork) {
+        InspectContainerResponse inspect = dockerClient.inspectContainerCmd(containerId).exec();
+        return resolveEndpoint(inspect, containerPort, preferredNetwork);
     }
 
     /**

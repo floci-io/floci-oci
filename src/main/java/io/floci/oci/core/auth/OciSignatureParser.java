@@ -31,28 +31,33 @@ public final class OciSignatureParser {
      * or its keyId is not {@code tenancy/user/fingerprint}.
      */
     public static Optional<AuthContext> parse(String authorizationHeader) {
-        if (authorizationHeader == null) {
-            return Optional.empty();
-        }
-        String header = authorizationHeader.trim();
-        if (!header.toLowerCase(Locale.ROOT).startsWith("signature ")) {
-            return Optional.empty();
-        }
-        Map<String, String> params = new LinkedHashMap<>();
-        Matcher m = PARAM.matcher(header.substring("signature ".length()));
-        while (m.find()) {
-            params.put(m.group(1).toLowerCase(Locale.ROOT), m.group(2));
-        }
-        String keyId = params.get("keyid");
+        String keyId = parameters(authorizationHeader).get("keyid");
         if (keyId == null) {
             return Optional.empty();
         }
-        // Instance/resource principals use "ST$<token>" keyIds — no tenancy triple to extract.
+        // Instance/resource principals use "ST$<token>" keyIds: no tenancy triple to extract.
         String[] parts = keyId.split("/");
         if (parts.length != 3 || parts[0].isBlank() || parts[1].isBlank() || parts[2].isBlank()) {
             return Optional.empty();
         }
         return Optional.of(new AuthContext(parts[0], parts[1], parts[2]));
+    }
+
+    /**
+     * The Signature parameters ({@code keyid}, {@code algorithm}, {@code headers},
+     * {@code signature}, {@code version}) with lower-cased names.
+     * Empty when the value is absent or not a Signature scheme.
+     */
+    public static Map<String, String> parameters(String authorizationHeader) {
+        Map<String, String> params = new LinkedHashMap<>();
+        if (!isSignatureScheme(authorizationHeader)) {
+            return params;
+        }
+        Matcher m = PARAM.matcher(authorizationHeader.trim().substring("signature ".length()));
+        while (m.find()) {
+            params.put(m.group(1).toLowerCase(Locale.ROOT), m.group(2));
+        }
+        return params;
     }
 
     /** True when the header uses the Signature scheme at all (even if malformed). */

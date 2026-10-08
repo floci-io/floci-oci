@@ -32,6 +32,10 @@ class ApplicationDefaultsTest {
                 String.valueOf(config.auth().requireSignature()));
         assertEquals(annotationDefault(EmulatorConfig.TlsConfig.class, "enabled"),
                 String.valueOf(config.tls().enabled()));
+        assertEquals(annotationDefault(EmulatorConfig.ServicesConfig.OkeServiceConfig.class, "kubeconfigAuth"),
+                config.services().oke().kubeconfigAuth());
+        assertEquals(annotationDefault(EmulatorConfig.ServicesConfig.OkeServiceConfig.class, "readyTimeoutSeconds"),
+                String.valueOf(config.services().oke().readyTimeoutSeconds()));
     }
 
     @Test

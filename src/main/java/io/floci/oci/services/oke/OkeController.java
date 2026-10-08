@@ -1,5 +1,6 @@
 package io.floci.oci.services.oke;
 
+import io.floci.oci.core.common.OciException;
 import io.floci.oci.core.common.OciPage;
 import io.floci.oci.core.workrequest.StoredWorkRequest;
 import io.floci.oci.core.workrequest.WorkRequestService;
@@ -19,6 +20,7 @@ import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -28,6 +30,9 @@ import java.util.Map;
 @Produces(MediaType.APPLICATION_JSON)
 @Consumes(MediaType.APPLICATION_JSON)
 public class OkeController {
+
+    static final List<String> KUBECONFIG_ENDPOINTS =
+            List.of("LEGACY_KUBERNETES", "PUBLIC_ENDPOINT", "PRIVATE_ENDPOINT", "VCN_HOSTNAME");
 
     private final OkeService service;
     private final OkeKubeconfigGenerator kubeconfigGenerator;
@@ -107,9 +112,13 @@ public class OkeController {
     @Produces("application/x-yaml")
     public Response createKubeconfig(@PathParam("clusterId") String clusterId,
                                      CreateKubeconfigDetails details) {
+        if (details != null && details.endpoint != null
+                && !KUBECONFIG_ENDPOINTS.contains(details.endpoint.toUpperCase(Locale.ROOT))) {
+            throw OciException.invalidParameter("Invalid endpoint: " + details.endpoint
+                    + ". Allowed values: " + String.join(", ", KUBECONFIG_ENDPOINTS));
+        }
         StoredOkeCluster cluster = service.getCluster(clusterId);
-        String tokenType = (details != null && details.tokenType != null) ? details.tokenType : "BASIC";
-        String kubeconfigYaml = kubeconfigGenerator.generateKubeconfig(cluster, tokenType);
+        String kubeconfigYaml = kubeconfigGenerator.generateKubeconfig(cluster);
         return Response.ok(kubeconfigYaml)
                 .header("Content-Type", "application/x-yaml")
                 .build();
@@ -252,9 +261,16 @@ public class OkeController {
         public String kubernetesVersion;
     }
 
+    /**
+     * {@code CreateClusterKubeconfigContentDetails} (oci-go-sdk containerengine). Every field is
+     * optional. {@code expiration} is accepted and ignored: the SDK documents it as "Deprecated.
+     * This field is no longer used." floci-oci has a single reachable API address, so every
+     * {@code endpoint} value resolves to it.
+     */
     public static class CreateKubeconfigDetails {
-        public String tokenType;
-        public String expiration;
+        public String tokenVersion;
+        public Integer expiration;
+        public String endpoint;
     }
 
     public static class CreateNodePoolDetails {
