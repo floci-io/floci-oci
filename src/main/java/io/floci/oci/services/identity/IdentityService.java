@@ -654,8 +654,11 @@ public class IdentityService {
         return result;
     }
 
-    /** Subscriptions complete immediately: the emulator has no region provisioning to wait on. */
-    public StoredRegionSubscription createRegionSubscription(String regionKey) {
+    /**
+     * Subscriptions complete immediately: the emulator has no region provisioning to wait on.
+     * Synchronized so the duplicate check and the write cannot interleave with a concurrent call.
+     */
+    public synchronized StoredRegionSubscription createRegionSubscription(String regionKey) {
         requireNonBlank(regionKey, "regionKey");
         Regions.Region region = Regions.all().stream()
                 .filter(r -> r.realm().equals(config.defaultRealm()))

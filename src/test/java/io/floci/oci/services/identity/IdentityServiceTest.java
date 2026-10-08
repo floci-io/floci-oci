@@ -16,8 +16,14 @@ import io.floci.oci.services.identity.model.StoredUserGroupMembership;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.lenient;
@@ -378,6 +384,33 @@ class IdentityServiceTest {
                 () -> service.createRegionSubscription("IAD")).getHttpStatus());
         assertEquals("InvalidParameter", assertThrows(OciException.class,
                 () -> service.createRegionSubscription("LTN")).getCode());
+    }
+
+    @Test
+    void concurrentRegionSubscriptionsConflictExactlyOnce() throws Exception {
+        int callers = 8;
+        CountDownLatch start = new CountDownLatch(1);
+        List<Future<StoredRegionSubscription>> calls = new ArrayList<>();
+        try (ExecutorService executor = Executors.newFixedThreadPool(callers)) {
+            for (int i = 0; i < callers; i++) {
+                calls.add(executor.submit(() -> {
+                    start.await();
+                    return service.createRegionSubscription("PHX");
+                }));
+            }
+            start.countDown();
+        }
+
+        int succeeded = 0;
+        for (Future<StoredRegionSubscription> call : calls) {
+            try {
+                call.get();
+                succeeded++;
+            } catch (ExecutionException e) {
+                assertEquals(409, assertInstanceOf(OciException.class, e.getCause()).getHttpStatus());
+            }
+        }
+        assertEquals(1, succeeded);
     }
 
     @Test
