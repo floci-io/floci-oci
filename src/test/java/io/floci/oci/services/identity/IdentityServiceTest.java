@@ -203,13 +203,10 @@ class IdentityServiceTest {
   
     @Test
     void requestTenancyScopesRootDefaultsAndTenancyLookup() {
-        EmulatorConfig otherConfig = mock(EmulatorConfig.class);
-        lenient().when(otherConfig.defaultTenancyId()).thenReturn(OTHER_TENANCY);
-        lenient().when(otherConfig.defaultRealm()).thenReturn("oc1");
-        lenient().when(otherConfig.defaultRegion()).thenReturn("us-ashburn-1");
         IdentityService scoped = new IdentityService(new InMemoryStorage<>(),
                 new InMemoryStorage<>(), new InMemoryStorage<>(), new InMemoryStorage<>(),
-                new InMemoryStorage<>(), new InMemoryStorage<>(), otherConfig, workRequests);
+                new InMemoryStorage<>(), new InMemoryStorage<>(), config, workRequests,
+                signedAs(OTHER_TENANCY));
 
         assertEquals(OTHER_TENANCY, scoped.getCompartment(OTHER_TENANCY).getId());
         assertEquals(OTHER_TENANCY,
@@ -270,6 +267,7 @@ class IdentityServiceTest {
         lenient().when(context.tenancyId()).thenReturn(tenancy);
         lenient().when(context.realm()).thenReturn("oc1");
         lenient().when(context.region()).thenReturn("us-ashburn-1");
+        lenient().when(context.homeRegion()).thenReturn("us-ashburn-1");
         return context;
     }
 
