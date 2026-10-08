@@ -37,4 +37,17 @@ class OciContextTest {
         assertEquals("sa-saopaulo-1", ctx.homeRegion());
         assertEquals("ocid1.tenancy.oc1..t", ctx.tenancyId());
     }
+
+    @Test
+    void regionOfReadsTheRegionalOcidSegment() {
+        OciContext ctx = context("us-ashburn-1", "oc1");
+        assertEquals("us-phoenix-1", ctx.regionOf("ocid1.cluster.oc1.phx.aaaa"));
+        assertEquals("us-ashburn-1", ctx.regionOf("ocid1.coreservicesworkrequest.oc1..aaaa"));
+        assertEquals("us-ashburn-1", ctx.regionOf("not-an-ocid"));
+    }
+
+    @Test
+    void regionOfMapsACustomDefaultRegionCodeToThatRegion() {
+        assertEquals("xx-nowhere-1", context("xx-nowhere-1", "oc9").regionOf("ocid1.cluster.oc9.xxn.aaaa"));
+    }
 }

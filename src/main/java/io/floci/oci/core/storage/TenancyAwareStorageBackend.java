@@ -9,6 +9,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.Predicate;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 /**
@@ -20,7 +21,8 @@ import java.util.stream.Collectors;
  * Outside a request (async workers, startup) the {@code defaultTenancyId} is used.
  *
  * <p>Async workers that must access a specific tenancy's data should use the explicit
- * {@code *ForTenancy} overloads, passing the tenancy OCID stored on the resource model.
+ * {@code *ForTenancy} overloads, passing the partition the resource lives in: the tenancy OCID
+ * for a global store, {@link #regionalPartition} for a regional one.
  *
  * <p>Backward compatibility: on a {@link #get} miss for the prefixed key, the un-prefixed
  * key is tried and the entry is migrated on read. This covers existing persistent/WAL data
@@ -29,15 +31,62 @@ import java.util.stream.Collectors;
 public class TenancyAwareStorageBackend<V> implements StorageBackend<String, V> {
 
     private final StorageBackend<String, V> delegate;
-    private final Instance<RequestContext> requestContextInstance;
-    private final String defaultTenancyId;
+    private final Supplier<String> partition;
 
     public TenancyAwareStorageBackend(StorageBackend<String, V> delegate,
                                       Instance<RequestContext> requestContextInstance,
                                       String defaultTenancyId) {
+        this(delegate, () -> RequestContext.currentTenancyId(requestContextInstance,
+                defaultTenancyId));
+    }
+
+    /**
+     * @param partition the key prefix for the current call: the tenancy OCID for global
+     *                  stores, {@code <tenancy>:<region>} for regional ones
+     */
+    public TenancyAwareStorageBackend(StorageBackend<String, V> delegate,
+                                      Supplier<String> partition) {
         this.delegate = delegate;
-        this.requestContextInstance = requestContextInstance;
-        this.defaultTenancyId = defaultTenancyId;
+        this.partition = partition;
+    }
+
+    /** The partition of a regional store: {@code <tenancy>:<region>}. */
+    public static String regionalPartition(String tenancyId, String region) {
+        return tenancyId + ":" + region;
+    }
+
+    /** The tenancy OCID a partition belongs to, for either a global or a regional store. */
+    public static String tenancyOf(String partition) {
+        int colon = partition.indexOf(':');
+        return colon < 0 ? partition : partition.substring(0, colon);
+    }
+
+    /**
+     * Moves entries written before region partitioning ({@code <tenancy>/<key>}) into
+     * {@code <tenancy>:<region>/<key>}, so existing persisted data lands in {@code region}.
+     * Tenancy OCIDs never contain {@code ':'}, which tells the two layouts apart.
+     *
+     * @return the number of entries moved
+     */
+    public int migrateToRegion(String region) {
+        int moved = 0;
+        for (String rawKey : delegate.keys()) {
+            int slash = rawKey.indexOf('/');
+            if (slash < 0) {
+                continue;
+            }
+            String head = rawKey.substring(0, slash);
+            if (!head.startsWith("ocid1.tenancy.") || head.contains(":")) {
+                continue;
+            }
+            Optional<V> value = delegate.get(rawKey);
+            if (value.isPresent()) {
+                delegate.put(head + ":" + region + rawKey.substring(slash), value.get());
+                delegate.delete(rawKey);
+                moved++;
+            }
+        }
+        return moved;
     }
 
     @Override
@@ -137,7 +186,10 @@ public class TenancyAwareStorageBackend<V> implements StorageBackend<String, V> 
         return delegate.scan(k -> k.startsWith(prefix) && keyFilter.test(k.substring(prefix.length())));
     }
 
-    /** The tenancy OCIDs that own at least one entry. */
+    /**
+     * The partitions that own at least one entry: tenancy OCIDs in a global store,
+     * {@code <tenancy>:<region>} in a regional one.
+     */
     public Set<String> tenancies() {
         return delegate.keys().stream()
                 .filter(k -> k.indexOf('/') > 0)
@@ -156,7 +208,7 @@ public class TenancyAwareStorageBackend<V> implements StorageBackend<String, V> 
     // ---
 
     private String prefix() {
-        return RequestContext.currentTenancyId(requestContextInstance, defaultTenancyId);
+        return partition.get();
     }
 
     private String prefixed(String key) {

@@ -65,3 +65,18 @@ print(client.get_namespace().data)
 The tenancy OCID in your signing key's `keyId` is the storage partition — requests signed
 with different tenancy OCIDs see isolated resources. Unsigned requests fall back to the
 configured `floci-oci.default-tenancy-id`.
+
+## Regions
+
+Regional resources (buckets, queues, streams, vaults, keys, secrets, functions, clusters) are
+partitioned by region as well as tenancy. The region comes from the request `Host` header:
+the first dot-separated label that is a known OCI region name, so a client that reaches the
+emulator as `queue.us-phoenix-1.oci.oraclecloud.com` (through the embedded DNS or TLS setup)
+works in `us-phoenix-1`. Any other host, such as `localhost:4599`, uses
+`floci-oci.default-region`.
+
+Identity is global, as on real OCI: compartments, users, groups and policies are shared by
+every region of the tenancy. The tenancy's home region is always `default-region`.
+
+Data persisted by an older floci-oci, before region partitioning, is moved into
+`default-region` on startup.

@@ -2,10 +2,9 @@ package io.floci.oci.core.storage;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import io.floci.oci.config.EmulatorConfig;
-import io.floci.oci.core.common.RequestContext;
+import io.floci.oci.core.common.OciContext;
 import io.floci.oci.core.common.ServiceConfigAccess;
 import jakarta.enterprise.context.ApplicationScoped;
-import jakarta.enterprise.inject.Instance;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
@@ -28,6 +27,7 @@ public class StorageFactory {
 
     private final EmulatorConfig config;
     private final ServiceConfigAccess serviceConfigAccess;
+    private final OciContext ociContext;
     private final List<StorageBackend<?, ?>> allBackends = new ArrayList<>();
     // A file path identifies one logical store: callers sharing a path are expected to agree on
     // its value type and storage mode. The first create() wins; repeat calls reuse that backend.
@@ -36,26 +36,40 @@ public class StorageFactory {
     private final List<WalStorage<?, ?>> walBackends = new ArrayList<>();
 
     @Inject
-    Instance<RequestContext> requestContextInstance;
-
-    @Inject
-    public StorageFactory(EmulatorConfig config, ServiceConfigAccess serviceConfigAccess) {
+    public StorageFactory(EmulatorConfig config, ServiceConfigAccess serviceConfigAccess,
+                          OciContext ociContext) {
         this.config = config;
         this.serviceConfigAccess = serviceConfigAccess;
+        this.ociContext = ociContext;
     }
 
     /**
-     * Create an tenancy-aware storage backend for the given service.
-     * All keys are automatically prefixed with the current tenancy OCID derived from
-     * the request signature. Async workers should use the {@code *ForTenancy} overloads
-     * on {@link TenancyAwareStorageBackend} with the tenancy OCID stored on the resource model.
+     * Create a regional storage backend for the given service. Keys are prefixed with
+     * {@code <tenancy>:<region>} of the current request, so resources in one region are
+     * invisible from another, as on real OCI. Entries persisted before region partitioning
+     * are moved into the default region on creation.
      *
-     * @param serviceName   the service name (identity, objectstorage, …)
+     * @param serviceName   the service name (objectstorage, queue, …)
      * @param fileName      the JSON file name for persistent storage
      * @param typeReference Jackson type reference for deserialization
      */
-    public synchronized <V> StorageBackend<String, V> create(String serviceName, String fileName,
-                                                 TypeReference<Map<String, V>> typeReference) {
+    public <V> StorageBackend<String, V> create(String serviceName, String fileName,
+                                                TypeReference<Map<String, V>> typeReference) {
+        return create(serviceName, fileName, typeReference, true);
+    }
+
+    /**
+     * Create a global storage backend, partitioned by tenancy only: for resources that exist
+     * in every region of the realm, such as Identity's compartments, users and policies.
+     */
+    public <V> StorageBackend<String, V> createGlobal(String serviceName, String fileName,
+                                                      TypeReference<Map<String, V>> typeReference) {
+        return create(serviceName, fileName, typeReference, false);
+    }
+
+    private synchronized <V> StorageBackend<String, V> create(String serviceName, String fileName,
+                                                              TypeReference<Map<String, V>> typeReference,
+                                                              boolean regional) {
         String mode = resolveMode(serviceName);
         long flushInterval = resolveFlushInterval(serviceName);
         Path basePath = Path.of(config.storage().persistentPath());
@@ -95,8 +109,19 @@ public class StorageFactory {
 
         inner.load();
 
-        TenancyAwareStorageBackend<V> backend = new TenancyAwareStorageBackend<>(
-                inner, requestContextInstance, config.defaultTenancyId());
+        TenancyAwareStorageBackend<V> backend;
+        if (regional) {
+            backend = new TenancyAwareStorageBackend<>(inner,
+                    () -> TenancyAwareStorageBackend.regionalPartition(ociContext.tenancyId(),
+                            ociContext.region()));
+            int moved = backend.migrateToRegion(config.defaultRegion());
+            if (moved > 0) {
+                LOG.infov("Moved {0} {1} entries into region {2}", moved, fileName,
+                        config.defaultRegion());
+            }
+        } else {
+            backend = new TenancyAwareStorageBackend<>(inner, ociContext::tenancyId);
+        }
         allBackends.add(backend);
         backendsByPath.put(filePath, backend);
         return backend;

@@ -18,6 +18,8 @@ import static org.mockito.Mockito.when;
 class WorkRequestServiceTest {
 
     private static final String TENANCY = "ocid1.tenancy.oc1..workrequesttenancy";
+    private static final String REGION = "us-phoenix-1";
+    private static final String PARTITION = TenancyAwareStorageBackend.regionalPartition(TENANCY, REGION);
 
     private StorageBackend<String, StoredWorkRequest> raw;
     private WorkRequestService workRequests;
@@ -27,7 +29,7 @@ class WorkRequestServiceTest {
         EmulatorConfig config = mock(EmulatorConfig.class);
         when(config.defaultRegion()).thenReturn("us-ashburn-1");
         raw = new InMemoryStorage<>();
-        workRequests = new WorkRequestService(new TenancyAwareStorageBackend<>(raw, null, TENANCY), config);
+        workRequests = new WorkRequestService(new TenancyAwareStorageBackend<>(raw, () -> PARTITION), config);
     }
 
     @Test
@@ -44,12 +46,12 @@ class WorkRequestServiceTest {
     }
 
     @Test
-    void finishWritesIntoTheGivenTenancyOutsideARequest() {
+    void finishWritesIntoTheGivenTenancyAndRegionOutsideARequest() {
         String id = workRequests.inProgress("oke", "CLUSTER_CREATE", "ocid1.compartment.oc1..c", List.of());
 
-        workRequests.finish(TENANCY, id, "SUCCEEDED");
+        workRequests.finish(TENANCY, REGION, id, "SUCCEEDED");
 
-        StoredWorkRequest wr = raw.get(TENANCY + "/" + id).orElseThrow();
+        StoredWorkRequest wr = raw.get(PARTITION + "/" + id).orElseThrow();
         assertEquals("SUCCEEDED", wr.getStatus());
         assertEquals(100.0f, wr.getPercentComplete().floatValue());
         assertNotNull(wr.getTimeFinished());
@@ -59,17 +61,27 @@ class WorkRequestServiceTest {
     @Test
     void finishLeavesAnAlreadyFinishedWorkRequestAlone() {
         String id = workRequests.inProgress("oke", "CLUSTER_CREATE", "ocid1.compartment.oc1..c", List.of());
-        workRequests.finish(TENANCY, id, "FAILED");
+        workRequests.finish(TENANCY, REGION, id, "FAILED");
 
-        workRequests.finish(TENANCY, id, "SUCCEEDED");
+        workRequests.finish(TENANCY, REGION, id, "SUCCEEDED");
 
         assertEquals("FAILED", workRequests.get(id).getStatus());
     }
 
     @Test
     void finishOfAnUnknownWorkRequestIsANoOp() {
-        workRequests.finish(TENANCY, "ocid1.coreservicesworkrequest.oc1..missing", "SUCCEEDED");
+        workRequests.finish(TENANCY, REGION, "ocid1.coreservicesworkrequest.oc1..missing", "SUCCEEDED");
 
         assertEquals(0, raw.keys().size());
+    }
+
+    @Test
+    void finishInAnotherRegionLeavesTheWorkRequestInProgress() {
+        String id = workRequests.inProgress("oke", "CLUSTER_CREATE", "ocid1.compartment.oc1..c", List.of());
+
+        workRequests.finish(TENANCY, "us-ashburn-1", id, "SUCCEEDED");
+
+        assertEquals("IN_PROGRESS", workRequests.get(id).getStatus());
+        assertEquals(1, raw.keys().size());
     }
 }

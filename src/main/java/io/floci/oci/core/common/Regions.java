@@ -115,11 +115,20 @@ public final class Regions {
     private static final Map<String, Region> BY_NAME = ALL.stream()
             .collect(Collectors.toUnmodifiableMap(Region::name, Function.identity()));
 
+    private static final Map<String, Region> BY_CODE = ALL.stream()
+            .collect(Collectors.toUnmodifiableMap(Region::code, Function.identity()));
+
     private Regions() {
     }
 
     public static Optional<Region> byName(String name) {
         return Optional.ofNullable(BY_NAME.get(name));
+    }
+
+    /** The region whose OCID segment is {@code code}, e.g. {@code phx -> us-phoenix-1}. */
+    public static Optional<Region> byCode(String code) {
+        return code == null ? Optional.empty()
+                : Optional.ofNullable(BY_CODE.get(code.toLowerCase(Locale.ROOT)));
     }
 
     public static List<Region> all() {
@@ -134,6 +143,24 @@ public final class Regions {
     public static String code(String name) {
         return byName(name).map(Region::code)
                 .orElseGet(() -> name.replaceAll("[^a-z]", "").substring(0, 3));
+    }
+
+    /**
+     * The region named by a request {@code Host}, e.g. {@code us-phoenix-1} for
+     * {@code queue.us-phoenix-1.oci.oraclecloud.com:443}: the first dot-separated label that
+     * is a known region name. Empty for hosts such as {@code localhost:4599}.
+     */
+    public static Optional<String> inHost(String host) {
+        if (host == null || host.isBlank()) {
+            return Optional.empty();
+        }
+        String hostname = host.replaceFirst(":\\d+$", "").toLowerCase(Locale.ROOT);
+        for (String label : hostname.split("\\.")) {
+            if (BY_NAME.containsKey(label)) {
+                return Optional.of(label);
+            }
+        }
+        return Optional.empty();
     }
 
     /** The uppercase region key, e.g. {@code IAD}. */

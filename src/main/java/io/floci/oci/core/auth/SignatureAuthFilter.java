@@ -2,6 +2,7 @@ package io.floci.oci.core.auth;
 
 import io.floci.oci.config.EmulatorConfig;
 import io.floci.oci.core.common.OciErrorResponse;
+import io.floci.oci.core.common.Regions;
 import io.floci.oci.core.common.RequestContext;
 import jakarta.annotation.Priority;
 import jakarta.inject.Inject;
@@ -18,7 +19,8 @@ import java.util.Optional;
 
 /**
  * Populates {@link RequestContext} with the tenancy/user parsed from the OCI Signature
- * {@code Authorization} header, falling back to the configured default tenancy.
+ * {@code Authorization} header, falling back to the configured default tenancy, and with the
+ * region named by the {@code Host} header, falling back to the configured default region.
  *
  * <p>When {@code floci-oci.auth.require-signature=true}, requests whose Authorization
  * header is missing or structurally malformed are rejected with 401 NotAuthenticated.
@@ -65,6 +67,7 @@ public class SignatureAuthFilter implements ContainerRequestFilter {
             }
             requestContext.setTenancyId(config.defaultTenancyId());
         }
-        requestContext.setRegion(config.defaultRegion());
+        requestContext.setRegion(Regions.inHost(ctx.getHeaderString(HttpHeaders.HOST))
+                .orElse(config.defaultRegion()));
     }
 }

@@ -45,4 +45,22 @@ class RegionsTest {
         assertTrue(Regions.byName("xx-nowhere-1").isEmpty());
         assertEquals("xxn", Regions.code("xx-nowhere-1"));
     }
+
+    @Test
+    void regionIsReadFromTheHostHeader() {
+        assertEquals("us-phoenix-1",
+                Regions.inHost("queue.us-phoenix-1.oci.oraclecloud.com").orElseThrow());
+        assertEquals("sa-saopaulo-1",
+                Regions.inHost("objectstorage.sa-saopaulo-1.oraclecloud.com:443").orElseThrow());
+        assertTrue(Regions.inHost("localhost:4599").isEmpty());
+        assertTrue(Regions.inHost(null).isEmpty());
+    }
+
+    @Test
+    void byCodeIsTheReverseOfCode() {
+        assertEquals("us-phoenix-1", Regions.byCode("phx").orElseThrow().name());
+        assertEquals("sa-saopaulo-1", Regions.byCode("GRU").orElseThrow().name());
+        assertTrue(Regions.byCode("xxn").isEmpty());
+        assertTrue(Regions.byCode(null).isEmpty());
+    }
 }
