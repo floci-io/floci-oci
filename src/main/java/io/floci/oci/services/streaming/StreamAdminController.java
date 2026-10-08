@@ -122,6 +122,7 @@ public class StreamAdminController {
     public Response listWorkRequests(@QueryParam("compartmentId") String compartmentId,
                                      @QueryParam("limit") Integer limit,
                                      @QueryParam("page") String page) {
+        compartments.requireInQuery(compartmentId);
         List<Map<String, Object>> items = workRequests.list(StreamingService.WR_SERVICE, compartmentId)
                 .stream().map(StoredWorkRequest::toWire).toList();
         OciPage.Page<Map<String, Object>> result = OciPage.paginate(items, limit, page);

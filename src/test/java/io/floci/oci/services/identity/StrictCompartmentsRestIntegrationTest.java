@@ -41,6 +41,15 @@ class StrictCompartmentsRestIntegrationTest {
     }
 
     @Test
+    void unknownCompartmentInAWorkRequestListIs404() {
+        given().queryParam("compartmentId", UNKNOWN)
+            .when().get("/20180418/workRequests")
+            .then()
+                .statusCode(404)
+                .body("code", equalTo("NotAuthorizedOrNotFound"));
+    }
+
+    @Test
     void existingCompartmentIsAccepted() {
         String compartmentId = given()
                 .contentType("application/json")

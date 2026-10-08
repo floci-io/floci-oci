@@ -46,8 +46,11 @@ public class CompartmentValidator {
     }
 
     private boolean isUnknown(String compartmentId) {
-        if (compartmentId == null || compartmentId.isBlank() || !strict()) {
+        if (compartmentId == null || !strict()) {
             return false;
+        }
+        if (compartmentId.isBlank()) {
+            return true;
         }
         try {
             StoredCompartment c = identity.getCompartment(compartmentId);

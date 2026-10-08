@@ -228,6 +228,7 @@ public class OkeController {
     public Response listWorkRequests(@QueryParam("compartmentId") String compartmentId,
                                       @QueryParam("limit") Integer limit,
                                       @QueryParam("page") String page) {
+        compartments.requireInQuery(compartmentId);
         OciPage.Page<Map<String, Object>> result = OciPage.paginate(
                 workRequests.list("oke", compartmentId).stream()
                         .map(StoredWorkRequest::toWire).toList(), limit, page);

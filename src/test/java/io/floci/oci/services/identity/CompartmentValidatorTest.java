@@ -59,6 +59,12 @@ class CompartmentValidatorTest {
     }
 
     @Test
+    void explicitlyBlankCompartmentIsRejected() {
+        assertThrows(OciException.class, () -> validator.requireInBody(" "));
+        assertThrows(OciException.class, () -> validator.requireInQuery(""));
+    }
+
+    @Test
     void deletedCompartmentIsRejected() {
         StoredCompartment gone = identity.createCompartment(null, "gone", "d", null, null);
         identity.deleteCompartment(gone.getId(), null);
