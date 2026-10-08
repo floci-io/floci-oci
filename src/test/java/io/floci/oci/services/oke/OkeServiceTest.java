@@ -2,6 +2,7 @@ package io.floci.oci.services.oke;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.floci.oci.config.EmulatorConfig;
+import io.floci.oci.core.common.OciContext;
 import io.floci.oci.core.common.OciException;
 import io.floci.oci.core.storage.InMemoryStorage;
 import io.floci.oci.core.storage.StorageBackend;
@@ -293,7 +294,7 @@ class OkeServiceTest {
         realWorkRequests = new WorkRequestService(new InMemoryStorage<>(), realConfig);
         clock = new MutableClock(Instant.parse("2026-10-01T12:00:00Z"));
         return new OkeService(clusters, nodePools, realConfig, null, realWorkRequests, readinessManager,
-                () -> TENANCY, clock);
+                () -> TENANCY, clock, OciContext.fromConfig(realConfig));
     }
 
     @Test

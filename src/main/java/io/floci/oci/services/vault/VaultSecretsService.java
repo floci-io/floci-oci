@@ -3,6 +3,7 @@ package io.floci.oci.services.vault;
 import com.fasterxml.jackson.core.type.TypeReference;
 import io.floci.oci.config.EmulatorConfig;
 import io.floci.oci.core.common.Etags;
+import io.floci.oci.core.common.OciContext;
 import io.floci.oci.core.common.OciException;
 import io.floci.oci.core.common.Ocids;
 import io.floci.oci.core.common.ServiceDescriptor;
@@ -35,18 +36,21 @@ public class VaultSecretsService {
 
     private final StorageBackend<String, StoredVaultSecret> secrets;
     private final EmulatorConfig config;
+    private final OciContext ociContext;
     private final ServiceRegistry serviceRegistry;
 
     @Inject
     public VaultSecretsService(StorageFactory storageFactory, EmulatorConfig config,
-                               ServiceRegistry serviceRegistry) {
+                               ServiceRegistry serviceRegistry, OciContext ociContext) {
         this.config = config;
+        this.ociContext = ociContext;
         this.serviceRegistry = serviceRegistry;
         this.secrets = storageFactory.create("vault", "vault-secrets.json",
                 new TypeReference<Map<String, StoredVaultSecret>>() {});
     }
 
     VaultSecretsService(StorageBackend<String, StoredVaultSecret> secrets, EmulatorConfig config) {
+        this.ociContext = OciContext.fromConfig(config);
         this.secrets = secrets;
         this.config = config;
         this.serviceRegistry = null;
@@ -79,7 +83,7 @@ public class VaultSecretsService {
             throw OciException.conflict("Secret " + secretName + " already exists in vault " + vaultId);
         }
         StoredVaultSecret secret = new StoredVaultSecret();
-        secret.setId(Ocids.generate("vaultsecret", config.defaultRealm(), regionShort()));
+        secret.setId(Ocids.generate("vaultsecret", ociContext.realm(), ociContext.regionCode()));
         secret.setCompartmentId(compartmentId);
         secret.setVaultId(vaultId);
         secret.setKeyId(keyId);
@@ -255,9 +259,6 @@ public class VaultSecretsService {
                 .orElseThrow(() -> notFound(secret.getId() + " stage " + effectiveStage));
     }
 
-    String regionShort() {
-        return Ocids.regionShort(config.defaultRegion());
-    }
 
     private static void require(String value, String field) {
         if (value == null || value.isBlank()) {

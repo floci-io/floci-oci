@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.floci.oci.config.EmulatorConfig;
 import io.floci.oci.core.common.Etags;
+import io.floci.oci.core.common.OciContext;
 import io.floci.oci.core.common.OciException;
 import io.floci.oci.core.common.Ocids;
 import io.floci.oci.core.common.Resettable;
@@ -50,13 +51,16 @@ public class FunctionsService implements Resettable {
     private final StorageBackend<String, StoredApplication> applications;
     private final StorageBackend<String, StoredFunction> functions;
     private final EmulatorConfig config;
+    private final OciContext ociContext;
     private final ServiceRegistry serviceRegistry;
     private final FnServerManager fnServer;
 
     @Inject
     public FunctionsService(StorageFactory storageFactory, EmulatorConfig config,
-                            ServiceRegistry serviceRegistry, FnServerManager fnServer) {
+                            ServiceRegistry serviceRegistry, FnServerManager fnServer,
+                            OciContext ociContext) {
         this.config = config;
+        this.ociContext = ociContext;
         this.serviceRegistry = serviceRegistry;
         this.fnServer = fnServer;
         this.applications = storageFactory.create("functions", "functions-applications.json",
@@ -68,6 +72,7 @@ public class FunctionsService implements Resettable {
     FunctionsService(StorageBackend<String, StoredApplication> applications,
                      StorageBackend<String, StoredFunction> functions,
                      EmulatorConfig config, FnServerManager fnServer) {
+        this.ociContext = OciContext.fromConfig(config);
         this.applications = applications;
         this.functions = functions;
         this.config = config;
@@ -125,8 +130,8 @@ public class FunctionsService implements Resettable {
             throw OciException.conflict("Application " + displayName + " already exists.");
         }
         StoredApplication app = new StoredApplication();
-        app.setId(Ocids.generate("fnapp", config.defaultRealm(),
-                Ocids.regionShort(config.defaultRegion())));
+        app.setId(Ocids.generate("fnapp", ociContext.realm(),
+                ociContext.regionCode()));
         app.setCompartmentId(compartmentId);
         app.setDisplayName(displayName);
         app.setLifecycleState("ACTIVE");
@@ -230,8 +235,8 @@ public class FunctionsService implements Resettable {
             throw OciException.conflict("Function " + displayName + " already exists.");
         }
         StoredFunction fn = new StoredFunction();
-        fn.setId(Ocids.generate("fnfunc", config.defaultRealm(),
-                Ocids.regionShort(config.defaultRegion())));
+        fn.setId(Ocids.generate("fnfunc", ociContext.realm(),
+                ociContext.regionCode()));
         fn.setApplicationId(applicationId);
         fn.setCompartmentId(app.getCompartmentId());
         fn.setDisplayName(displayName);

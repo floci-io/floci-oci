@@ -2,6 +2,7 @@ package io.floci.oci.core.workrequest;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import io.floci.oci.config.EmulatorConfig;
+import io.floci.oci.core.common.OciContext;
 import io.floci.oci.core.common.OciException;
 import io.floci.oci.core.common.Ocids;
 import io.floci.oci.core.storage.StorageBackend;
@@ -38,11 +39,11 @@ public class WorkRequestService {
     private static final Logger LOG = Logger.getLogger(WorkRequestService.class);
 
     private final StorageBackend<String, StoredWorkRequest> store;
-    private final EmulatorConfig config;
+    private final OciContext ociContext;
 
     @Inject
-    public WorkRequestService(StorageFactory storageFactory, EmulatorConfig config) {
-        this.config = config;
+    public WorkRequestService(StorageFactory storageFactory, OciContext ociContext) {
+        this.ociContext = ociContext;
         this.store = storageFactory.create("workrequests", "workrequests.json",
                 new TypeReference<Map<String, StoredWorkRequest>>() {});
     }
@@ -50,7 +51,7 @@ public class WorkRequestService {
     /** Storage-injecting constructor for tests. */
     public WorkRequestService(StorageBackend<String, StoredWorkRequest> store, EmulatorConfig config) {
         this.store = store;
-        this.config = config;
+        this.ociContext = OciContext.fromConfig(config);
     }
 
     /**
@@ -168,7 +169,7 @@ public class WorkRequestService {
     private StoredWorkRequest base(String service, String operationType, String compartmentId,
                                    List<StoredWorkRequest.Resource> resources) {
         StoredWorkRequest wr = new StoredWorkRequest();
-        wr.setId(Ocids.generateGlobal("coreservicesworkrequest", config.defaultRealm()));
+        wr.setId(Ocids.generateGlobal("coreservicesworkrequest", ociContext.realm()));
         wr.setService(service);
         wr.setOperationType(operationType);
         wr.setCompartmentId(compartmentId);

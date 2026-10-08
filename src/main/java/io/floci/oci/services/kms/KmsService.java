@@ -3,6 +3,7 @@ package io.floci.oci.services.kms;
 import com.fasterxml.jackson.core.type.TypeReference;
 import io.floci.oci.config.EmulatorConfig;
 import io.floci.oci.core.common.Etags;
+import io.floci.oci.core.common.OciContext;
 import io.floci.oci.core.common.OciException;
 import io.floci.oci.core.common.Ocids;
 import io.floci.oci.core.common.ServiceDescriptor;
@@ -57,12 +58,14 @@ public class KmsService {
     private final StorageBackend<String, StoredVault> vaults;
     private final StorageBackend<String, StoredKey> keys;
     private final EmulatorConfig config;
+    private final OciContext ociContext;
     private final ServiceRegistry serviceRegistry;
 
     @Inject
     public KmsService(StorageFactory storageFactory, EmulatorConfig config,
-                      ServiceRegistry serviceRegistry) {
+                      ServiceRegistry serviceRegistry, OciContext ociContext) {
         this.config = config;
+        this.ociContext = ociContext;
         this.serviceRegistry = serviceRegistry;
         this.vaults = storageFactory.create("kms", "kms-vaults.json",
                 new TypeReference<Map<String, StoredVault>>() {});
@@ -72,6 +75,7 @@ public class KmsService {
 
     KmsService(StorageBackend<String, StoredVault> vaults, StorageBackend<String, StoredKey> keys,
                EmulatorConfig config) {
+        this.ociContext = OciContext.fromConfig(config);
         this.vaults = vaults;
         this.keys = keys;
         this.config = config;
@@ -96,13 +100,13 @@ public class KmsService {
         require(displayName, "displayName");
         require(vaultType, "vaultType");
         StoredVault v = new StoredVault();
-        v.setId(Ocids.generate("vault", config.defaultRealm(), regionShort()));
+        v.setId(Ocids.generate("vault", ociContext.realm(), ociContext.regionCode()));
         v.setCompartmentId(compartmentId);
         v.setDisplayName(displayName);
         v.setVaultType(vaultType);
         v.setLifecycleState("ACTIVE");
         v.setTimeCreated(Instant.now().toString());
-        v.setWrappingkeyId(Ocids.generate("key", config.defaultRealm(), regionShort()));
+        v.setWrappingkeyId(Ocids.generate("key", ociContext.realm(), ociContext.regionCode()));
         v.setFreeformTags(freeformTags);
         v.setDefinedTags(definedTags);
         v.setEtag(Etags.newEtag());
@@ -221,7 +225,7 @@ public class KmsService {
             throw OciException.missingParameter("Missing required parameter: keyShape.length");
         }
         StoredKey key = new StoredKey();
-        key.setId(Ocids.generate("key", config.defaultRealm(), regionShort()));
+        key.setId(Ocids.generate("key", ociContext.realm(), ociContext.regionCode()));
         key.setVaultId(resolvedVaultId);
         key.setCompartmentId(compartmentId);
         key.setDisplayName(displayName);
@@ -441,7 +445,7 @@ public class KmsService {
 
     private StoredKeyVersion addVersion(StoredKey key) {
         StoredKeyVersion version = new StoredKeyVersion();
-        version.setId(Ocids.generate("keyversion", config.defaultRealm(), regionShort()));
+        version.setId(Ocids.generate("keyversion", ociContext.realm(), ociContext.regionCode()));
         version.setTimeCreated(Instant.now().toString());
         version.setLifecycleState("ENABLED");
         version.setOrigin("INTERNAL");
@@ -560,9 +564,6 @@ public class KmsService {
         return Long.toHexString(crc.getValue());
     }
 
-    String regionShort() {
-        return Ocids.regionShort(config.defaultRegion());
-    }
 
     private static void require(String value, String field) {
         if (value == null || value.isBlank()) {

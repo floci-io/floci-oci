@@ -3,6 +3,7 @@ package io.floci.oci.services.objectstorage;
 import com.fasterxml.jackson.core.type.TypeReference;
 import io.floci.oci.config.EmulatorConfig;
 import io.floci.oci.core.common.Etags;
+import io.floci.oci.core.common.OciContext;
 import io.floci.oci.core.common.OciException;
 import io.floci.oci.core.common.Ocids;
 import io.floci.oci.core.common.ServiceDescriptor;
@@ -43,13 +44,16 @@ public class ObjectStorageService {
     private final StorageBackend<String, StoredMultipartUpload> uploads;
     private final StorageBackend<String, StoredPar> pars;
     private final EmulatorConfig config;
+    private final OciContext ociContext;
     private final ServiceRegistry serviceRegistry;
     private final WorkRequestService workRequests;
 
     @Inject
     public ObjectStorageService(StorageFactory storageFactory, EmulatorConfig config,
-                                ServiceRegistry serviceRegistry, WorkRequestService workRequests) {
+                                ServiceRegistry serviceRegistry, WorkRequestService workRequests,
+                                OciContext ociContext) {
         this.config = config;
+        this.ociContext = ociContext;
         this.serviceRegistry = serviceRegistry;
         this.workRequests = workRequests;
         this.buckets = storageFactory.create("objectstorage", "objectstorage-buckets.json",
@@ -68,6 +72,7 @@ public class ObjectStorageService {
                          StorageBackend<String, StoredPar> pars,
                          EmulatorConfig config,
                          WorkRequestService workRequests) {
+        this.ociContext = OciContext.fromConfig(config);
         this.buckets = buckets;
         this.objects = objects;
         this.uploads = uploads;
@@ -132,7 +137,7 @@ public class ObjectStorageService {
         b.setStorageTier(storageTier != null ? storageTier : "Standard");
         b.setObjectEventsEnabled(false);
         b.setVersioning("Disabled");
-        b.setId(Ocids.generate("bucket", config.defaultRealm(), regionShort()));
+        b.setId(Ocids.generate("bucket", ociContext.realm(), ociContext.regionCode()));
         b.setFreeformTags(freeformTags);
         b.setDefinedTags(definedTags);
         buckets.put(name, b);
@@ -512,9 +517,6 @@ public class ObjectStorageService {
 
     // ── Helpers ────────────────────────────────────────────────────────────────
 
-    String regionShort() {
-        return Ocids.regionShort(config.defaultRegion());
-    }
 
     private static String objectKey(String bucketName, String objectName) {
         return bucketName + "/" + objectName;
