@@ -185,8 +185,9 @@ class IdentityRestIntegrationTest {
 
         given().when().get("/20160918/regions")
             .then().statusCode(200)
-                .body("[0].key", equalTo("IAD"))
-                .body("[0].name", equalTo("us-ashburn-1"));
+                .body("find { it.key == 'IAD' }.name", equalTo("us-ashburn-1"))
+                .body("find { it.key == 'GRU' }.name", equalTo("sa-saopaulo-1"))
+                .body("find { it.name == 'uk-gov-london-1' }", nullValue());
 
         given().when().get("/20160918/tenancies/" + TENANCY)
             .then().statusCode(200).body("id", equalTo(TENANCY));
@@ -264,5 +265,96 @@ class IdentityRestIntegrationTest {
             .then()
                 .statusCode(404)
                 .body("code", equalTo("NotAuthorizedOrNotFound"));
+    }
+
+    @Test
+    void faultDomainsAreABareArrayPerAvailabilityDomain() {
+        String ad = given().queryParam("compartmentId", TENANCY)
+            .when().get("/20160918/availabilityDomains")
+            .then().statusCode(200).extract().path("[0].name");
+
+        given().queryParam("compartmentId", TENANCY).queryParam("availabilityDomain", ad)
+            .when().get("/20160918/faultDomains")
+            .then()
+                .statusCode(200)
+                .header("opc-request-id", notNullValue())
+                .body("size()", equalTo(3))
+                .body("[0].name", equalTo("FAULT-DOMAIN-1"))
+                .body("[0].availabilityDomain", equalTo(ad));
+
+        given().queryParam("compartmentId", TENANCY)
+            .when().get("/20160918/faultDomains")
+            .then().statusCode(400).body("code", equalTo("MissingParameter"));
+    }
+
+    @Test
+    void createRegionSubscriptionReturnsTheSubscription() {
+        given().contentType("application/json").body(Map.of("regionKey", "FRA"))
+            .when().post("/20160918/tenancies/" + TENANCY + "/regionSubscriptions")
+            .then()
+                .statusCode(200)
+                .header("opc-request-id", notNullValue())
+                .body("regionKey", equalTo("FRA"))
+                .body("regionName", equalTo("eu-frankfurt-1"))
+                .body("status", equalTo("READY"))
+                .body("isHomeRegion", equalTo(false));
+
+        given().when().get("/20160918/tenancies/" + TENANCY + "/regionSubscriptions")
+            .then().statusCode(200)
+                .body("regionKey", hasItems("IAD", "FRA"));
+
+        given().contentType("application/json").body(Map.of("regionKey", "FRA"))
+            .when().post("/20160918/tenancies/" + TENANCY + "/regionSubscriptions")
+            .then().statusCode(409).body("code", equalTo("Conflict"));
+    }
+
+    @Test
+    void moveAndRecoverCompartment() {
+        String suffix = String.valueOf(System.nanoTime());
+        String src = createCompartment(TENANCY, "it-move-src-" + suffix);
+        String dst = createCompartment(TENANCY, "it-move-dst-" + suffix);
+
+        given().contentType("application/json").body(Map.of("targetCompartmentId", dst))
+            .when().post("/20160918/compartments/" + src + "/actions/moveCompartment")
+            .then()
+                .statusCode(202)
+                .header("opc-work-request-id", startsWith("ocid1.coreservicesworkrequest"));
+
+        given().queryParam("compartmentId", dst).queryParam("name", "it-move-src-" + suffix)
+            .when().get("/20160918/compartments")
+            .then().statusCode(200)
+                .body("size()", equalTo(1))
+                .body("[0].id", equalTo(src));
+
+        given().when().delete("/20160918/compartments/" + src).then().statusCode(202);
+
+        given().when().post("/20160918/compartments/" + src + "/actions/recoverCompartment")
+            .then()
+                .statusCode(200)
+                .header("etag", notNullValue())
+                .body("lifecycleState", equalTo("ACTIVE"));
+
+        given().when().post("/20160918/compartments/" + src + "/actions/recoverCompartment")
+            .then().statusCode(409).body("code", equalTo("Conflict"));
+    }
+
+    @Test
+    void listCompartmentsRejectsSubtreeBelowTheTenancy() {
+        String parent = createCompartment(TENANCY, "it-subtree-" + System.nanoTime());
+
+        given().queryParam("compartmentId", parent).queryParam("compartmentIdInSubtree", true)
+            .when().get("/20160918/compartments")
+            .then().statusCode(400).body("code", equalTo("InvalidParameter"));
+    }
+
+    private static String createCompartment(String parentId, String name) {
+        return given()
+                .contentType("application/json")
+                .body(Map.of("compartmentId", parentId, "name", name, "description", "it"))
+            .when()
+                .post("/20160918/compartments")
+            .then()
+                .statusCode(200)
+                .extract().path("id");
     }
 }

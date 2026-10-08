@@ -6,15 +6,21 @@ import com.oracle.bmc.identity.model.Compartment;
 import com.oracle.bmc.identity.model.CreateCompartmentDetails;
 import com.oracle.bmc.identity.model.CreateGroupDetails;
 import com.oracle.bmc.identity.model.CreatePolicyDetails;
+import com.oracle.bmc.identity.model.CreateRegionSubscriptionDetails;
 import com.oracle.bmc.identity.model.CreateUserDetails;
+import com.oracle.bmc.identity.model.FaultDomain;
 import com.oracle.bmc.identity.model.Group;
+import com.oracle.bmc.identity.model.MoveCompartmentDetails;
 import com.oracle.bmc.identity.model.Policy;
+import com.oracle.bmc.identity.model.Region;
+import com.oracle.bmc.identity.model.RegionSubscription;
 import com.oracle.bmc.identity.model.User;
 import com.oracle.bmc.identity.model.UserGroupMembership;
 import com.oracle.bmc.identity.requests.AddUserToGroupRequest;
 import com.oracle.bmc.identity.requests.CreateCompartmentRequest;
 import com.oracle.bmc.identity.requests.CreateGroupRequest;
 import com.oracle.bmc.identity.requests.CreatePolicyRequest;
+import com.oracle.bmc.identity.requests.CreateRegionSubscriptionRequest;
 import com.oracle.bmc.identity.requests.CreateUserRequest;
 import com.oracle.bmc.identity.requests.DeleteCompartmentRequest;
 import com.oracle.bmc.identity.requests.DeleteGroupRequest;
@@ -25,12 +31,18 @@ import com.oracle.bmc.identity.requests.GetUserRequest;
 import com.oracle.bmc.identity.requests.GetWorkRequestRequest;
 import com.oracle.bmc.identity.requests.ListAvailabilityDomainsRequest;
 import com.oracle.bmc.identity.requests.ListCompartmentsRequest;
+import com.oracle.bmc.identity.requests.ListFaultDomainsRequest;
+import com.oracle.bmc.identity.requests.ListRegionSubscriptionsRequest;
 import com.oracle.bmc.identity.requests.ListRegionsRequest;
 import com.oracle.bmc.identity.requests.ListUserGroupMembershipsRequest;
 import com.oracle.bmc.identity.requests.ListUsersRequest;
+import com.oracle.bmc.identity.requests.MoveCompartmentRequest;
+import com.oracle.bmc.identity.requests.RecoverCompartmentRequest;
 import com.oracle.bmc.identity.requests.RemoveUserFromGroupRequest;
 import com.oracle.bmc.identity.responses.CreateCompartmentResponse;
 import com.oracle.bmc.identity.responses.DeleteCompartmentResponse;
+import com.oracle.bmc.identity.responses.MoveCompartmentResponse;
+import com.oracle.bmc.identity.responses.RecoverCompartmentResponse;
 import com.oracle.bmc.model.BmcException;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -171,5 +183,70 @@ class IdentityCompatibilityTest {
         var ads = identity.listAvailabilityDomains(ListAvailabilityDomainsRequest.builder()
                 .compartmentId(TENANCY).build()).getItems();
         assertThat(ads).hasSize(3);
+    }
+
+    @Test
+    void moveRecoverAndFilteredListCompartments() {
+        String suffix = String.valueOf(System.nanoTime());
+        Compartment src = createCompartment(TENANCY, "sdk-move-src-" + suffix);
+        Compartment dst = createCompartment(TENANCY, "sdk-move-dst-" + suffix);
+
+        MoveCompartmentResponse moved = identity.moveCompartment(MoveCompartmentRequest.builder()
+                .compartmentId(src.getId())
+                .moveCompartmentDetails(MoveCompartmentDetails.builder()
+                        .targetCompartmentId(dst.getId()).build())
+                .build());
+        assertThat(moved.getOpcWorkRequestId()).isNotBlank();
+
+        List<Compartment> listed = identity.listCompartments(ListCompartmentsRequest.builder()
+                .compartmentId(dst.getId())
+                .name(src.getName())
+                .lifecycleState(Compartment.LifecycleState.Active)
+                .sortBy(ListCompartmentsRequest.SortBy.Name)
+                .sortOrder(ListCompartmentsRequest.SortOrder.Asc)
+                .accessLevel(ListCompartmentsRequest.AccessLevel.Any)
+                .build()).getItems();
+        assertThat(listed).extracting(Compartment::getId).containsExactly(src.getId());
+
+        identity.deleteCompartment(DeleteCompartmentRequest.builder()
+                .compartmentId(src.getId()).build());
+        RecoverCompartmentResponse recovered = identity.recoverCompartment(
+                RecoverCompartmentRequest.builder().compartmentId(src.getId()).build());
+        assertThat(recovered.getCompartment().getLifecycleState())
+                .isEqualTo(Compartment.LifecycleState.Active);
+        assertThat(recovered.getEtag()).isNotBlank();
+    }
+
+    @Test
+    void faultDomainsAndRegionSubscriptions() {
+        String ad = identity.listAvailabilityDomains(ListAvailabilityDomainsRequest.builder()
+                .compartmentId(TENANCY).build()).getItems().get(0).getName();
+        List<FaultDomain> fds = identity.listFaultDomains(ListFaultDomainsRequest.builder()
+                .compartmentId(TENANCY).availabilityDomain(ad).build()).getItems();
+        assertThat(fds).hasSize(3).allSatisfy(fd ->
+                assertThat(fd.getAvailabilityDomain()).isEqualTo(ad));
+
+        List<String> subscribed = identity.listRegionSubscriptions(
+                ListRegionSubscriptionsRequest.builder().tenancyId(TENANCY).build())
+                .getItems().stream().map(RegionSubscription::getRegionKey).toList();
+        String key = identity.listRegions(ListRegionsRequest.builder().build()).getItems().stream()
+                .map(Region::getKey).filter(k -> !subscribed.contains(k)).findFirst().orElseThrow();
+
+        RegionSubscription created = identity.createRegionSubscription(
+                CreateRegionSubscriptionRequest.builder()
+                        .tenancyId(TENANCY)
+                        .createRegionSubscriptionDetails(CreateRegionSubscriptionDetails.builder()
+                                .regionKey(key).build())
+                        .build()).getRegionSubscription();
+        assertThat(created.getRegionKey()).isEqualTo(key);
+        assertThat(created.getStatus()).isEqualTo(RegionSubscription.Status.Ready);
+        assertThat(created.getIsHomeRegion()).isFalse();
+    }
+
+    private static Compartment createCompartment(String parentId, String name) {
+        return identity.createCompartment(CreateCompartmentRequest.builder()
+                .createCompartmentDetails(CreateCompartmentDetails.builder()
+                        .compartmentId(parentId).name(name).description("sdk").build())
+                .build()).getCompartment();
     }
 }

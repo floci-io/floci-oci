@@ -25,7 +25,7 @@ It implements real OCI wire protocols so the official OCI SDKs, the OCI CLI, Ter
 
 | Service | API | Coverage |
 |---|---|---|
-| Identity (IAM) | `/20160918/…` | Compartments, users, groups, memberships, policies, availability domains, regions, tenancy, work requests |
+| Identity (IAM) | `/20160918/…` | Compartments, users, groups, memberships, policies, availability and fault domains, regions, region subscriptions, tenancy, work requests |
 | Object Storage | `/n/{ns}/b/{bucket}/o/{object}` | Namespaces, buckets, objects, listing, rename, copy, multipart uploads, pre-authenticated requests, work requests |
 | Queue | `/20210201/…` | Queues, messages, visibility timeouts, dead-letter queues, stats |
 | Vault, KMS & Secrets | `/20180608/…`, `/20190301/…` | Vaults, keys, real AES-GCM/RSA/ECDSA crypto, secrets and bundles |

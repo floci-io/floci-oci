@@ -10,13 +10,20 @@ import io.floci.oci.core.workrequest.WorkRequestService;
 import io.floci.oci.services.identity.model.StoredCompartment;
 import io.floci.oci.services.identity.model.StoredGroup;
 import io.floci.oci.services.identity.model.StoredPolicy;
+import io.floci.oci.services.identity.model.StoredRegionSubscription;
 import io.floci.oci.services.identity.model.StoredUser;
 import io.floci.oci.services.identity.model.StoredUserGroupMembership;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.lenient;
@@ -43,7 +50,7 @@ class IdentityServiceTest {
         workRequests = new WorkRequestService(workRequestStore, config);
         service = new IdentityService(new InMemoryStorage<>(), new InMemoryStorage<>(),
                 new InMemoryStorage<>(), new InMemoryStorage<>(), new InMemoryStorage<>(),
-                config, workRequests);
+                new InMemoryStorage<>(), config, workRequests);
     }
 
     @Test
@@ -82,9 +89,10 @@ class IdentityServiceTest {
         List<StoredCompartment> subtree = service.listCompartments(null, true);
         assertEquals(2, subtree.size());
 
-        List<StoredCompartment> childSubtree = service.listCompartments(parent.getId(), true);
-        assertEquals(1, childSubtree.size());
-        assertEquals(child.getId(), childSubtree.get(0).getId());
+        assertEquals(child.getId(), service.listCompartments(parent.getId(), false).get(0).getId());
+        OciException e = assertThrows(OciException.class,
+                () -> service.listCompartments(parent.getId(), true));
+        assertEquals("InvalidParameter", e.getCode());
     }
 
     @Test
@@ -156,8 +164,8 @@ class IdentityServiceTest {
     void referenceDataShapes() {
         assertEquals(3, service.availabilityDomains(null).size());
         assertEquals("IAD", service.regionKey());
-        assertEquals("us-ashburn-1", service.regions().get(0).get("name"));
-        assertEquals(Boolean.TRUE, service.regionSubscriptions().get(0).get("isHomeRegion"));
+        assertTrue(service.regions().contains(Map.of("key", "IAD", "name", "us-ashburn-1")));
+        assertEquals(Boolean.TRUE, service.regionSubscriptions().get(0).getIsHomeRegion());
         assertEquals(TENANCY, service.tenancy(TENANCY).get("id"));
         assertThrows(OciException.class, () -> service.tenancy("ocid1.tenancy.oc1..other"));
     }
@@ -196,7 +204,8 @@ class IdentityServiceTest {
     void requestTenancyScopesRootDefaultsAndTenancyLookup() {
         IdentityService scoped = new IdentityService(new InMemoryStorage<>(),
                 new InMemoryStorage<>(), new InMemoryStorage<>(), new InMemoryStorage<>(),
-                new InMemoryStorage<>(), config, workRequests, () -> OTHER_TENANCY);
+                new InMemoryStorage<>(), new InMemoryStorage<>(), config, workRequests,
+                () -> OTHER_TENANCY);
 
         assertEquals(OTHER_TENANCY, scoped.getCompartment(OTHER_TENANCY).getId());
         assertEquals(OTHER_TENANCY,
@@ -236,8 +245,8 @@ class IdentityServiceTest {
         policies.putForTenancy(OTHER_TENANCY, policy.getId(), policy);
 
         IdentityService scoped = new IdentityService(compartments, users,
-                tenancyAware(OTHER_TENANCY), tenancyAware(OTHER_TENANCY), policies, config,
-                workRequests, () -> OTHER_TENANCY);
+                tenancyAware(OTHER_TENANCY), tenancyAware(OTHER_TENANCY), policies,
+                tenancyAware(OTHER_TENANCY), config, workRequests, () -> OTHER_TENANCY);
         scoped.adoptLegacyRootRecords();
         scoped.adoptLegacyRootRecords();
 
@@ -255,5 +264,172 @@ class IdentityServiceTest {
     // Reads without a request context fall back to readsAs, standing in for the signed tenancy.
     private static <V> TenancyAwareStorageBackend<V> tenancyAware(String readsAs) {
         return new TenancyAwareStorageBackend<>(new InMemoryStorage<>(), null, readsAs);
+    }
+
+    @Test
+    void listCompartmentsFiltersAndSorts() {
+        StoredCompartment b = service.createCompartment(null, "beta", "d", null, null);
+        StoredCompartment a = service.createCompartment(null, "alpha", "d", null, null);
+        service.deleteCompartment(b.getId(), null);
+
+        assertEquals(List.of(a.getId()), ids(service.listCompartments(
+                null, false, "alpha", null, null, null, null)));
+        assertEquals(List.of(b.getId()), ids(service.listCompartments(
+                null, false, null, "deleted", null, null, null)));
+        assertEquals(List.of(a.getId(), b.getId()), ids(service.listCompartments(
+                null, false, null, null, "NAME", null, "ANY")));
+        assertEquals(List.of(b.getId(), a.getId()), ids(service.listCompartments(
+                null, false, null, null, "NAME", "DESC", "ACCESSIBLE")));
+
+        OciException e = assertThrows(OciException.class, () -> service.listCompartments(
+                null, false, null, null, "SIZE", null, null));
+        assertEquals("InvalidParameter", e.getCode());
+    }
+
+    @Test
+    void listCompartmentsAppliesSortOrderWithoutSortBy() {
+        StoredCompartment older = service.createCompartment(null, "older", "d", null, null);
+        StoredCompartment newer = service.createCompartment(null, "newer", "d", null, null);
+        older.setTimeCreated("2026-01-01T00:00:00Z");
+        newer.setTimeCreated("2026-01-02T00:00:00Z");
+
+        assertEquals(List.of(older.getId(), newer.getId()), ids(service.listCompartments(
+                null, false, null, null, null, null, null)));
+        assertEquals(List.of(newer.getId(), older.getId()), ids(service.listCompartments(
+                null, false, null, null, null, "DESC", null)));
+    }
+
+    @Test
+    void moveCompartmentReparentsAndRecordsWorkRequest() {
+        StoredCompartment src = service.createCompartment(null, "src", "d", null, null);
+        StoredCompartment dst = service.createCompartment(null, "dst", "d", null, null);
+
+        String wr = service.moveCompartment(src.getId(), dst.getId(), src.getEtag());
+
+        assertEquals(dst.getId(), service.getCompartment(src.getId()).getCompartmentId());
+        assertEquals("SUCCEEDED", workRequests.get("identity", wr).getStatus());
+    }
+
+    @Test
+    void moveCompartmentRejectsCyclesRootAndNameClashes() {
+        StoredCompartment parent = service.createCompartment(null, "parent", "d", null, null);
+        StoredCompartment child = service.createCompartment(parent.getId(), "child", "d", null, null);
+        service.createCompartment(null, "child", "d", null, null);
+
+        assertEquals("InvalidParameter", assertThrows(OciException.class,
+                () -> service.moveCompartment(parent.getId(), child.getId(), null)).getCode());
+        assertEquals("InvalidParameter", assertThrows(OciException.class,
+                () -> service.moveCompartment(TENANCY, parent.getId(), null)).getCode());
+        assertEquals(409, assertThrows(OciException.class,
+                () -> service.moveCompartment(child.getId(), TENANCY, null)).getHttpStatus());
+        assertEquals("RelatedResourceNotAuthorizedOrNotFound", assertThrows(OciException.class,
+                () -> service.moveCompartment(child.getId(), "ocid1.compartment.oc1..none", null))
+                .getCode());
+    }
+
+    @Test
+    void recoverCompartmentRestoresDeletedOnly() {
+        StoredCompartment c = service.createCompartment(null, "gone", "d", null, null);
+        assertEquals("Conflict", assertThrows(OciException.class,
+                () -> service.recoverCompartment(c.getId(), null)).getCode());
+
+        service.deleteCompartment(c.getId(), null);
+        StoredCompartment recovered = service.recoverCompartment(c.getId(), null);
+
+        assertEquals("ACTIVE", recovered.getLifecycleState());
+        assertEquals("ACTIVE", service.getCompartment(c.getId()).getLifecycleState());
+    }
+
+    @Test
+    void recoverCompartmentRejectsNameTakenMeanwhile() {
+        StoredCompartment c = service.createCompartment(null, "reused", "d", null, null);
+        service.deleteCompartment(c.getId(), null);
+        service.createCompartment(null, "reused", "d", null, null);
+
+        assertEquals(409, assertThrows(OciException.class,
+                () -> service.recoverCompartment(c.getId(), null)).getHttpStatus());
+    }
+
+    @Test
+    void regionsAreScopedToTheRealm() {
+        List<Map<String, String>> regions = service.regions();
+        assertTrue(regions.contains(Map.of("key", "GRU", "name", "sa-saopaulo-1")));
+        assertFalse(regions.stream().anyMatch(r -> r.get("name").equals("uk-gov-london-1")));
+    }
+
+    @Test
+    void regionsAlwaysListTheHomeRegion() {
+        assertEquals(1, service.regions().stream()
+                .filter(r -> r.get("name").equals("us-ashburn-1")).count());
+
+        lenient().when(config.defaultRegion()).thenReturn("xx-floci-1");
+        List<Map<String, String>> regions = service.regions();
+        assertEquals("xx-floci-1", regions.getFirst().get("name"));
+        assertEquals(service.regionKey(), regions.getFirst().get("key"));
+    }
+
+    @Test
+    void regionSubscriptionLifecycle() {
+        StoredRegionSubscription phx = service.createRegionSubscription("phx");
+
+        assertEquals("PHX", phx.getRegionKey());
+        assertEquals("us-phoenix-1", phx.getRegionName());
+        assertEquals(Boolean.FALSE, phx.getIsHomeRegion());
+        assertEquals(List.of("IAD", "PHX"), service.regionSubscriptions().stream()
+                .map(StoredRegionSubscription::getRegionKey).toList());
+
+        assertEquals(409, assertThrows(OciException.class,
+                () -> service.createRegionSubscription("PHX")).getHttpStatus());
+        assertEquals(409, assertThrows(OciException.class,
+                () -> service.createRegionSubscription("IAD")).getHttpStatus());
+        assertEquals("InvalidParameter", assertThrows(OciException.class,
+                () -> service.createRegionSubscription("LTN")).getCode());
+    }
+
+    @Test
+    void concurrentRegionSubscriptionsConflictExactlyOnce() throws Exception {
+        int callers = 8;
+        CountDownLatch start = new CountDownLatch(1);
+        List<Future<StoredRegionSubscription>> calls = new ArrayList<>();
+        try (ExecutorService executor = Executors.newFixedThreadPool(callers)) {
+            for (int i = 0; i < callers; i++) {
+                calls.add(executor.submit(() -> {
+                    start.await();
+                    return service.createRegionSubscription("PHX");
+                }));
+            }
+            start.countDown();
+        }
+
+        int succeeded = 0;
+        for (Future<StoredRegionSubscription> call : calls) {
+            try {
+                call.get();
+                succeeded++;
+            } catch (ExecutionException e) {
+                assertEquals(409, assertInstanceOf(OciException.class, e.getCause()).getHttpStatus());
+            }
+        }
+        assertEquals(1, succeeded);
+    }
+
+    @Test
+    void faultDomainsBelongToAnAvailabilityDomain() {
+        String ad = (String) service.availabilityDomains(null).get(1).get("name");
+
+        List<Map<String, Object>> fds = service.faultDomains(TENANCY, ad);
+
+        assertEquals(3, fds.size());
+        assertEquals("FAULT-DOMAIN-1", fds.get(0).get("name"));
+        assertEquals(ad, fds.get(0).get("availabilityDomain"));
+        assertEquals(TENANCY, fds.get(0).get("compartmentId"));
+        assertEquals("InvalidParameter", assertThrows(OciException.class,
+                () -> service.faultDomains(TENANCY, "nope:AD-9")).getCode());
+        assertEquals("MissingParameter", assertThrows(OciException.class,
+                () -> service.faultDomains(TENANCY, null)).getCode());
+    }
+
+    private static List<String> ids(List<StoredCompartment> compartments) {
+        return compartments.stream().map(StoredCompartment::getId).toList();
     }
 }
