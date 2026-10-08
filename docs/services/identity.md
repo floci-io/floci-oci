@@ -38,6 +38,9 @@ oci iam compartment list --endpoint http://localhost:4599 --compartment-id "$TEN
   real OCI. `accessLevel` is validated but not enforced: every compartment is accessible.
 - Region subscriptions complete immediately with status `READY`. The home region is the
   configured `default-region`.
+- Other services accept any `compartmentId` by default. Set
+  `FLOCI_OCI_SERVICES_IDENTITY_STRICT_COMPARTMENTS=true` to require an ACTIVE compartment
+  created here (or the tenancy), as real OCI does.
 - Policy statements are stored verbatim; the policy language is not parsed or enforced.
 - Identity domains, API keys, auth tokens, dynamic groups and tag namespaces are not
   implemented yet.

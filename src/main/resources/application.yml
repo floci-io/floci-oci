@@ -88,6 +88,7 @@ floci-oci:
   services:
     identity:
       enabled: true
+      strict-compartments: false  # FLOCI_OCI_SERVICES_IDENTITY_STRICT_COMPARTMENTS: reject unknown/inactive compartmentIds in other services
     objectstorage:
       enabled: true
     queue:

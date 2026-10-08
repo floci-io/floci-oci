@@ -3,6 +3,7 @@ package io.floci.oci.services.queue;
 import io.floci.oci.core.common.OciPage;
 import io.floci.oci.core.workrequest.StoredWorkRequest;
 import io.floci.oci.core.workrequest.WorkRequestService;
+import io.floci.oci.services.identity.CompartmentValidator;
 import io.floci.oci.services.queue.model.StoredQueue;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -35,17 +36,21 @@ import java.util.Map;
 public class QueueAdminController {
 
     private final QueueService service;
+    private final CompartmentValidator compartments;
     private final WorkRequestService workRequests;
 
     @Inject
-    public QueueAdminController(QueueService service, WorkRequestService workRequests) {
+    public QueueAdminController(QueueService service, WorkRequestService workRequests,
+                                CompartmentValidator compartments) {
         this.service = service;
+        this.compartments = compartments;
         this.workRequests = workRequests;
     }
 
     @POST
     @Path("/queues")
     public Response createQueue(Map<String, Object> body) {
+        compartments.requireInBody(str(body, "compartmentId"));
         QueueService.WorkRequestOutcome outcome = service.createQueue(
                 str(body, "displayName"), str(body, "compartmentId"),
                 integer(body, "retentionInSeconds"), integer(body, "visibilityInSeconds"),
@@ -69,6 +74,7 @@ public class QueueAdminController {
                                @QueryParam("id") String id,
                                @QueryParam("limit") Integer limit,
                                @QueryParam("page") String page) {
+        compartments.requireInQuery(compartmentId);
         List<Map<String, Object>> summaries = service.listQueues(compartmentId, displayName, id)
                 .stream().map(QueueAdminController::queueSummaryJson).toList();
         OciPage.Page<Map<String, Object>> result = OciPage.paginate(summaries, limit, page);
@@ -103,6 +109,7 @@ public class QueueAdminController {
     public Response changeCompartment(@PathParam("queueId") String queueId,
                                       @HeaderParam("if-match") String ifMatch,
                                       Map<String, Object> body) {
+        compartments.requireInBody(str(body, "compartmentId"));
         return accepted(service.changeCompartment(queueId, str(body, "compartmentId"), ifMatch));
     }
 

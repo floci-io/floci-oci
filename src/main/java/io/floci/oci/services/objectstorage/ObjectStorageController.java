@@ -5,6 +5,7 @@ import io.floci.oci.core.common.OciException;
 import io.floci.oci.core.common.OciPage;
 import io.floci.oci.core.workrequest.StoredWorkRequest;
 import io.floci.oci.core.workrequest.WorkRequestService;
+import io.floci.oci.services.identity.CompartmentValidator;
 import io.floci.oci.services.objectstorage.ObjectStorageService.BatchDeleteResult;
 import io.floci.oci.services.objectstorage.model.StoredBucket;
 import io.floci.oci.services.objectstorage.model.StoredMultipartUpload;
@@ -49,11 +50,14 @@ public class ObjectStorageController {
             DateTimeFormatter.RFC_1123_DATE_TIME.withZone(ZoneOffset.UTC).withLocale(Locale.US);
 
     private final ObjectStorageService service;
+    private final CompartmentValidator compartments;
     private final WorkRequestService workRequests;
 
     @Inject
-    public ObjectStorageController(ObjectStorageService service, WorkRequestService workRequests) {
+    public ObjectStorageController(ObjectStorageService service, WorkRequestService workRequests,
+                                   CompartmentValidator compartments) {
         this.service = service;
+        this.compartments = compartments;
         this.workRequests = workRequests;
     }
 
@@ -78,6 +82,7 @@ public class ObjectStorageController {
     @Path("/n/{namespaceName}/b")
     public Response createBucket(@PathParam("namespaceName") String namespaceName,
                                  Map<String, Object> body) {
+        compartments.requireInBody(str(body, "compartmentId"));
         StoredBucket b = service.createBucket(namespaceName,
                 str(body, "name"), str(body, "compartmentId"), stringMap(body, "metadata"),
                 str(body, "publicAccessType"), str(body, "storageTier"),
@@ -92,6 +97,7 @@ public class ObjectStorageController {
                                 @QueryParam("compartmentId") String compartmentId,
                                 @QueryParam("limit") Integer limit,
                                 @QueryParam("page") String page) {
+        compartments.requireInQuery(compartmentId);
         List<Map<String, Object>> summaries = service.listBuckets(namespaceName, compartmentId).stream()
                 .map(ObjectStorageController::bucketSummary)
                 .toList();

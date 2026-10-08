@@ -1,6 +1,7 @@
 package io.floci.oci.services.kms;
 
 import io.floci.oci.core.common.OciPage;
+import io.floci.oci.services.identity.CompartmentValidator;
 import io.floci.oci.services.kms.model.StoredKey;
 import io.floci.oci.services.kms.model.StoredKey.StoredKeyVersion;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -34,15 +35,18 @@ import java.util.Map;
 public class KmsManagementController {
 
     private final KmsService service;
+    private final CompartmentValidator compartments;
 
     @Inject
-    public KmsManagementController(KmsService service) {
+    public KmsManagementController(KmsService service, CompartmentValidator compartments) {
         this.service = service;
+        this.compartments = compartments;
     }
 
     @POST
     public Response createKey(Map<String, Object> body) {
         Map<String, Object> keyShape = map(body, "keyShape");
+        compartments.requireInBody(str(body, "compartmentId"));
         StoredKey key = service.createKey(null,
                 str(body, "compartmentId"), str(body, "displayName"),
                 str(keyShape, "algorithm"), integer(keyShape, "length"), str(keyShape, "curveId"),
@@ -62,6 +66,7 @@ public class KmsManagementController {
     public Response listKeys(@QueryParam("compartmentId") String compartmentId,
                              @QueryParam("limit") Integer limit,
                              @QueryParam("page") String page) {
+        compartments.requireInQuery(compartmentId);
         List<Map<String, Object>> summaries = service.listKeys(null, compartmentId).stream()
                 .map(KmsManagementController::keySummaryJson).toList();
         OciPage.Page<Map<String, Object>> result = OciPage.paginate(summaries, limit, page);
