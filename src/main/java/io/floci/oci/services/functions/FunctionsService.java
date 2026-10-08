@@ -313,7 +313,7 @@ public class FunctionsService implements Resettable {
     }
 
     public String invokeEndpoint() {
-        return config.effectiveBaseUrl();
+        return ociContext.baseUrl();
     }
 
     // ── Invocation ─────────────────────────────────────────────────────────────

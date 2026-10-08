@@ -50,6 +50,24 @@ public class OciContext {
         return config.defaultRegion();
     }
 
+    /**
+     * The base of URLs handed back to the client, such as a queue's {@code messagesEndpoint}:
+     * the regional host the request addressed, else the configured effective base URL.
+     */
+    public String baseUrl() {
+        if (requestContext != null) {
+            try {
+                String baseUrl = requestContext.get().getBaseUrl();
+                if (baseUrl != null) {
+                    return baseUrl;
+                }
+            } catch (ContextNotActiveException ignored) {
+                // Outside request scope: fall through to the configured URL.
+            }
+        }
+        return config.effectiveBaseUrl();
+    }
+
     /** The region segment of regional OCIDs, e.g. {@code iad}. */
     public String regionCode() {
         return Regions.code(region());
@@ -63,14 +81,17 @@ public class OciContext {
      * The region a regional OCID was minted in, read from its region segment
      * ({@code ocid1.cluster.oc1.phx.<unique>} is {@code us-phoenix-1}). Global OCIDs, and codes
      * outside the region table (the fallback code of a custom default region), answer the
-     * configured default region.
+     * configured default region. A code shared with the default region resolves to the default
+     * region, so a custom {@code default-region} such as {@code iad-local} keeps its own clusters.
      */
     public String regionOf(String ocid) {
+        String defaultRegion = config.defaultRegion();
         return Ocids.parse(ocid)
                 .map(Ocids.Ocid::region)
-                .flatMap(Regions::byCode)
-                .map(Regions.Region::name)
-                .orElseGet(() -> config.defaultRegion());
+                .map(code -> defaultRegion != null && code.equals(Regions.code(defaultRegion))
+                        ? defaultRegion
+                        : Regions.byCode(code).map(Regions.Region::name).orElse(defaultRegion))
+                .orElse(defaultRegion);
     }
 
     /** The tenancy's home region: always the configured default region. */

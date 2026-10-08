@@ -36,7 +36,9 @@ class RegionIsolationIntegrationTest {
 
         given().header("Host", PHOENIX_QUEUE)
             .when().get("/20210201/queues/" + queueId)
-            .then().statusCode(200).body("id", startsWith("ocid1.queue.oc1.phx."));
+            .then().statusCode(200)
+                .body("id", startsWith("ocid1.queue.oc1.phx."))
+                .body("messagesEndpoint", equalTo("http://" + PHOENIX_QUEUE));
 
         given()
             .when().get("/20210201/queues/" + queueId)

@@ -52,12 +52,18 @@ public class WorkRequestService {
         this.globalStore = storageFactory.createGlobal("workrequests",
                 "identity-workrequests.json",
                 new TypeReference<Map<String, StoredWorkRequest>>() {});
+        storageFactory.afterLoad(this::moveIdentityWorkRequestsToGlobalStore);
     }
 
     /** Storage-injecting constructor for tests. */
     public WorkRequestService(StorageBackend<String, StoredWorkRequest> store, EmulatorConfig config) {
+        this(store, store, config);
+    }
+
+    WorkRequestService(StorageBackend<String, StoredWorkRequest> store,
+                       StorageBackend<String, StoredWorkRequest> globalStore, EmulatorConfig config) {
         this.store = store;
-        this.globalStore = store;
+        this.globalStore = globalStore;
         this.ociContext = OciContext.fromConfig(config);
     }
 
@@ -169,6 +175,34 @@ public class WorkRequestService {
                 .filter(wr -> service == null || service.equals(wr.getService()))
                 .filter(wr -> compartmentId == null || compartmentId.equals(wr.getCompartmentId()))
                 .toList();
+    }
+
+    /**
+     * Identity work requests written before Identity became global sit in the regional store;
+     * moves them into the global one, keeping their tenancy.
+     */
+    void moveIdentityWorkRequestsToGlobalStore() {
+        if (!(store instanceof TenancyAwareStorageBackend<StoredWorkRequest> regional)
+                || !(globalStore instanceof TenancyAwareStorageBackend<StoredWorkRequest> global)
+                || store == globalStore) {
+            return;
+        }
+        int moved = 0;
+        for (String partition : regional.tenancies()) {
+            for (String key : regional.keysForTenancy(partition)) {
+                Optional<StoredWorkRequest> wr = regional.getForTenancy(partition, key);
+                if (wr.isPresent() && GLOBAL_SERVICE.equals(wr.get().getService())) {
+                    global.putForTenancy(TenancyAwareStorageBackend.tenancyOf(partition), key, wr.get());
+                    regional.deleteForTenancy(partition, key);
+                    moved++;
+                }
+            }
+        }
+        if (moved > 0) {
+            global.flush();
+            regional.flush();
+            LOG.infov("Moved {0} Identity work requests into the global store", moved);
+        }
     }
 
     /** Identity is global, so its work requests are too; every other service's are regional. */

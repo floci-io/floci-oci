@@ -62,26 +62,30 @@ public class TenancyAwareStorageBackend<V> implements StorageBackend<String, V> 
     }
 
     /**
-     * Moves entries written before region partitioning ({@code <tenancy>/<key>}) into
-     * {@code <tenancy>:<region>/<key>}, so existing persisted data lands in {@code region}.
-     * Tenancy OCIDs never contain {@code ':'}, which tells the two layouts apart.
+     * Moves entries written before region partitioning into {@code <tenancy>:<region>/<key>},
+     * so existing persisted data lands in {@code region}: {@code <tenancy>/<key>} keeps its
+     * tenancy, and a bare key from before multi-tenancy goes to {@code defaultTenancyId}, rather
+     * than to whichever region first reads it. Tenancy OCIDs never contain {@code ':'}, which
+     * tells the layouts apart.
      *
      * @return the number of entries moved
      */
-    public int migrateToRegion(String region) {
+    public int migrateToRegion(String defaultTenancyId, String region) {
         int moved = 0;
         for (String rawKey : delegate.keys()) {
             int slash = rawKey.indexOf('/');
-            if (slash < 0) {
-                continue;
-            }
-            String head = rawKey.substring(0, slash);
-            if (!head.startsWith("ocid1.tenancy.") || head.contains(":")) {
+            String head = slash < 0 ? rawKey : rawKey.substring(0, slash);
+            String target;
+            if (!head.startsWith("ocid1.tenancy.")) {
+                target = regionalPartition(defaultTenancyId, region) + "/" + rawKey;
+            } else if (slash > 0 && !head.contains(":")) {
+                target = regionalPartition(head, region) + rawKey.substring(slash);
+            } else {
                 continue;
             }
             Optional<V> value = delegate.get(rawKey);
             if (value.isPresent()) {
-                delegate.put(head + ":" + region + rawKey.substring(slash), value.get());
+                delegate.put(target, value.get());
                 delegate.delete(rawKey);
                 moved++;
             }

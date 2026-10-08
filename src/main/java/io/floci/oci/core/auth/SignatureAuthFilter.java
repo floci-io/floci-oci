@@ -20,7 +20,9 @@ import java.util.Optional;
 /**
  * Populates {@link RequestContext} with the tenancy/user parsed from the OCI Signature
  * {@code Authorization} header, falling back to the configured default tenancy, and with the
- * region named by the {@code Host} header, falling back to the configured default region.
+ * region named by the {@code Host} header, falling back to the configured default region. A
+ * regional {@code Host} also becomes the base of the URLs returned to the client, so following
+ * them stays in that region.
  *
  * <p>When {@code floci-oci.auth.require-signature=true}, requests whose Authorization
  * header is missing or structurally malformed are rejected with 401 NotAuthenticated.
@@ -67,7 +69,11 @@ public class SignatureAuthFilter implements ContainerRequestFilter {
             }
             requestContext.setTenancyId(config.defaultTenancyId());
         }
-        requestContext.setRegion(Regions.inHost(ctx.getHeaderString(HttpHeaders.HOST))
-                .orElse(config.defaultRegion()));
+        String host = ctx.getHeaderString(HttpHeaders.HOST);
+        Optional<String> hostRegion = Regions.inHost(host);
+        requestContext.setRegion(hostRegion.orElse(config.defaultRegion()));
+        if (hostRegion.isPresent()) {
+            requestContext.setBaseUrl(ctx.getUriInfo().getBaseUri().getScheme() + "://" + host);
+        }
     }
 }

@@ -34,6 +34,7 @@ public class StorageFactory {
     private final Map<Path, StorageBackend<?, ?>> backendsByPath = new HashMap<>();
     private final List<HybridStorage<?, ?>> hybridBackends = new ArrayList<>();
     private final List<WalStorage<?, ?>> walBackends = new ArrayList<>();
+    private final List<Runnable> afterLoadHooks = new ArrayList<>();
 
     @Inject
     public StorageFactory(EmulatorConfig config, ServiceConfigAccess serviceConfigAccess,
@@ -111,14 +112,11 @@ public class StorageFactory {
 
         TenancyAwareStorageBackend<V> backend;
         if (regional) {
-            backend = new TenancyAwareStorageBackend<>(inner,
+            TenancyAwareStorageBackend<V> regionalBackend = new TenancyAwareStorageBackend<>(inner,
                     () -> TenancyAwareStorageBackend.regionalPartition(ociContext.tenancyId(),
                             ociContext.region()));
-            int moved = backend.migrateToRegion(config.defaultRegion());
-            if (moved > 0) {
-                LOG.infov("Moved {0} {1} entries into region {2}", moved, fileName,
-                        config.defaultRegion());
-            }
+            afterLoad(() -> migrateToDefaultRegion(regionalBackend, fileName));
+            backend = regionalBackend;
         } else {
             backend = new TenancyAwareStorageBackend<>(inner, ociContext::tenancyId);
         }
@@ -127,10 +125,32 @@ public class StorageFactory {
         return backend;
     }
 
+    /**
+     * Runs {@code hook} now, over the data loaded when its stores were created, and again after
+     * every {@link #loadAll}, which re-reads the files and would otherwise undo a one-time data
+     * migration. Hooks run in registration order and must be idempotent.
+     */
+    public synchronized void afterLoad(Runnable hook) {
+        hook.run();
+        afterLoadHooks.add(hook);
+    }
+
     /** Load all storage backends from disk. */
     public synchronized void loadAll() {
         for (StorageBackend<?, ?> backend : allBackends) {
             backend.load();
+        }
+        for (Runnable hook : afterLoadHooks) {
+            hook.run();
+        }
+    }
+
+    private void migrateToDefaultRegion(TenancyAwareStorageBackend<?> backend, String fileName) {
+        int moved = backend.migrateToRegion(config.defaultTenancyId(), config.defaultRegion());
+        if (moved > 0) {
+            backend.flush();
+            LOG.infov("Moved {0} {1} entries into region {2}", moved, fileName,
+                    config.defaultRegion());
         }
     }
 

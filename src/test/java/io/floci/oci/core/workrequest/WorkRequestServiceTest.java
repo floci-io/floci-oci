@@ -84,4 +84,27 @@ class WorkRequestServiceTest {
         assertEquals("IN_PROGRESS", workRequests.get(id).getStatus());
         assertEquals(1, raw.keys().size());
     }
+
+    @Test
+    void identityWorkRequestsInTheRegionalStoreMoveToTheGlobalStore() {
+        StorageBackend<String, StoredWorkRequest> globalRaw = new InMemoryStorage<>();
+        TenancyAwareStorageBackend<StoredWorkRequest> global =
+                new TenancyAwareStorageBackend<>(globalRaw, () -> TENANCY);
+        EmulatorConfig config = mock(EmulatorConfig.class);
+        when(config.defaultRegion()).thenReturn("us-ashburn-1");
+        WorkRequestService service = new WorkRequestService(
+                new TenancyAwareStorageBackend<>(raw, () -> PARTITION), global, config);
+        StoredWorkRequest identity = new StoredWorkRequest();
+        identity.setService("identity");
+        StoredWorkRequest queue = new StoredWorkRequest();
+        queue.setService("queue");
+        raw.put(PARTITION + "/wr-identity", identity);
+        raw.put(PARTITION + "/wr-queue", queue);
+
+        service.moveIdentityWorkRequestsToGlobalStore();
+        service.moveIdentityWorkRequestsToGlobalStore();
+
+        assertEquals("identity", globalRaw.get(TENANCY + "/wr-identity").orElseThrow().getService());
+        assertEquals(List.of("wr-queue"), raw.keys().stream().map(k -> k.substring(k.indexOf('/') + 1)).toList());
+    }
 }

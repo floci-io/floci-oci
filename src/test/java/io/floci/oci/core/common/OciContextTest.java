@@ -50,4 +50,9 @@ class OciContextTest {
     void regionOfMapsACustomDefaultRegionCodeToThatRegion() {
         assertEquals("xx-nowhere-1", context("xx-nowhere-1", "oc9").regionOf("ocid1.cluster.oc9.xxn.aaaa"));
     }
+
+    @Test
+    void regionOfPrefersACustomDefaultRegionWhoseCodeMatchesAKnownRegion() {
+        assertEquals("iad-local", context("iad-local", "oc1").regionOf("ocid1.cluster.oc1.iad.aaaa"));
+    }
 }

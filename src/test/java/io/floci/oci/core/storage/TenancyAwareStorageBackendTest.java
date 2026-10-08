@@ -33,16 +33,29 @@ class TenancyAwareStorageBackendTest {
         InMemoryStorage<String, String> raw = new InMemoryStorage<>();
         raw.put(TENANCY + "/q1", "legacy");
         raw.put(TENANCY + ":us-phoenix-1/q2", "already regional");
-        raw.put("bucket/object", "no tenancy prefix");
         TenancyAwareStorageBackend<String> store = new TenancyAwareStorageBackend<>(
                 raw, () -> TENANCY + ":us-ashburn-1");
 
-        assertEquals(1, store.migrateToRegion("us-ashburn-1"));
+        assertEquals(1, store.migrateToRegion(TENANCY, "us-ashburn-1"));
 
         assertEquals("legacy", store.get("q1").orElseThrow());
         assertTrue(raw.get(TENANCY + "/q1").isEmpty());
         assertEquals("already regional", raw.get(TENANCY + ":us-phoenix-1/q2").orElseThrow());
-        assertEquals("no tenancy prefix", raw.get("bucket/object").orElseThrow());
-        assertEquals(0, store.migrateToRegion("us-ashburn-1"));
+        assertEquals(0, store.migrateToRegion(TENANCY, "us-ashburn-1"));
+    }
+
+    @Test
+    void bareLegacyKeysMoveIntoTheDefaultTenancyAndRegion() {
+        InMemoryStorage<String, String> raw = new InMemoryStorage<>();
+        raw.put("bucket/object", "pre-tenancy");
+        AtomicReference<String> region = new AtomicReference<>("us-phoenix-1");
+        TenancyAwareStorageBackend<String> store = new TenancyAwareStorageBackend<>(
+                raw, () -> TENANCY + ":" + region.get());
+
+        assertEquals(1, store.migrateToRegion(TENANCY, "us-ashburn-1"));
+
+        assertTrue(store.get("bucket/object").isEmpty(), "a Phoenix read must not claim it");
+        region.set("us-ashburn-1");
+        assertEquals("pre-tenancy", store.get("bucket/object").orElseThrow());
     }
 }
