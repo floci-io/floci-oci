@@ -3,6 +3,7 @@ package io.floci.oci.services.queue;
 import com.fasterxml.jackson.core.type.TypeReference;
 import io.floci.oci.config.EmulatorConfig;
 import io.floci.oci.core.common.Etags;
+import io.floci.oci.core.common.OciContext;
 import io.floci.oci.core.common.OciException;
 import io.floci.oci.core.common.Ocids;
 import io.floci.oci.core.common.ServiceDescriptor;
@@ -42,13 +43,16 @@ public class QueueService {
 
     private final StorageBackend<String, StoredQueue> queues;
     private final EmulatorConfig config;
+    private final OciContext ociContext;
     private final ServiceRegistry serviceRegistry;
     private final WorkRequestService workRequests;
 
     @Inject
     public QueueService(StorageFactory storageFactory, EmulatorConfig config,
-                        ServiceRegistry serviceRegistry, WorkRequestService workRequests) {
+                        ServiceRegistry serviceRegistry, WorkRequestService workRequests,
+                        OciContext ociContext) {
         this.config = config;
+        this.ociContext = ociContext;
         this.serviceRegistry = serviceRegistry;
         this.workRequests = workRequests;
         this.queues = storageFactory.create("queue", "queue-queues.json",
@@ -57,6 +61,7 @@ public class QueueService {
 
     QueueService(StorageBackend<String, StoredQueue> queues, EmulatorConfig config,
                  WorkRequestService workRequests) {
+        this.ociContext = OciContext.fromConfig(config);
         this.queues = queues;
         this.config = config;
         this.serviceRegistry = null;
@@ -89,7 +94,7 @@ public class QueueService {
             throw OciException.missingParameter("compartmentId is required");
         }
         StoredQueue q = new StoredQueue();
-        q.setId(Ocids.generate("queue", config.defaultRealm(), regionShort()));
+        q.setId(Ocids.generate("queue", ociContext.realm(), ociContext.regionCode()));
         q.setCompartmentId(compartmentId);
         q.setDisplayName(displayName);
         String now = Instant.now().toString();
@@ -400,7 +405,4 @@ public class QueueService {
         }
     }
 
-    String regionShort() {
-        return Ocids.regionShort(config.defaultRegion());
-    }
 }

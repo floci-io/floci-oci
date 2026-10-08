@@ -1,6 +1,7 @@
 package io.floci.oci.lifecycle;
 
 import io.floci.oci.config.EmulatorConfig;
+import io.floci.oci.core.common.Regions;
 import io.floci.oci.core.common.ServiceRegistry;
 import io.floci.oci.core.storage.PersistentPathValidator;
 import io.floci.oci.core.storage.StorageFactory;
@@ -61,6 +62,11 @@ public class EmulatorLifecycle {
         LOG.infof("=== OCI Local Emulator %s Starting ===", appVersion.orElse(""));
         LOG.infof("Endpoint:  http://0.0.0.0:%d", config.port());
         LOG.infof("Region:    %s  Tenancy: %s", config.defaultRegion(), config.defaultTenancyId());
+        Regions.byName(config.defaultRegion())
+                .filter(region -> !region.realm().equals(config.defaultRealm()))
+                .ifPresent(region -> LOG.warnf("default-realm %s does not match region %s, which"
+                        + " is in realm %s: OCIDs use %s", config.defaultRealm(), region.name(),
+                        region.realm(), region.realm()));
         LOG.infov("Namespace: {0}", config.defaultNamespace());
         LOG.infov("Storage:   {0}  Path: {1}", config.storage().mode(), config.storage().persistentPath());
         LOG.infov("TLS:       {0}", config.tls().enabled()

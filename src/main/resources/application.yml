@@ -41,7 +41,7 @@ floci-oci:
   # hostname: ""  # When set, overrides the hostname in response URLs.
                    # Needed for multi-container Docker setups. Example: FLOCI_OCI_HOSTNAME=floci-oci
   default-region: us-ashburn-1
-  default-realm: oc1
+  default-realm: oc1  # only used for regions outside the SDK region table; known regions carry their own realm
   default-tenancy-id: "ocid1.tenancy.oc1..flocilocaltenancy0000000000000000000000000000000000000000"
   default-namespace: floci-local
   storage:

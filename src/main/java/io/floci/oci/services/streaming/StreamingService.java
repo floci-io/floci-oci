@@ -3,6 +3,7 @@ package io.floci.oci.services.streaming;
 import com.fasterxml.jackson.core.type.TypeReference;
 import io.floci.oci.config.EmulatorConfig;
 import io.floci.oci.core.common.Etags;
+import io.floci.oci.core.common.OciContext;
 import io.floci.oci.core.common.OciException;
 import io.floci.oci.core.common.Ocids;
 import io.floci.oci.core.common.ServiceDescriptor;
@@ -43,13 +44,16 @@ public class StreamingService {
 
     private final StorageBackend<String, StoredStream> streams;
     private final EmulatorConfig config;
+    private final OciContext ociContext;
     private final ServiceRegistry serviceRegistry;
     private final WorkRequestService workRequests;
 
     @Inject
     public StreamingService(StorageFactory storageFactory, EmulatorConfig config,
-                            ServiceRegistry serviceRegistry, WorkRequestService workRequests) {
+                            ServiceRegistry serviceRegistry, WorkRequestService workRequests,
+                            OciContext ociContext) {
         this.config = config;
+        this.ociContext = ociContext;
         this.serviceRegistry = serviceRegistry;
         this.workRequests = workRequests;
         this.streams = storageFactory.create("streaming", "streaming-streams.json",
@@ -58,6 +62,7 @@ public class StreamingService {
 
     StreamingService(StorageBackend<String, StoredStream> streams, EmulatorConfig config,
                      WorkRequestService workRequests) {
+        this.ociContext = OciContext.fromConfig(config);
         this.streams = streams;
         this.config = config;
         this.serviceRegistry = null;
@@ -89,13 +94,13 @@ public class StreamingService {
             throw OciException.missingParameter("Either compartmentId or streamPoolId is required");
         }
         StoredStream stream = new StoredStream();
-        stream.setId(Ocids.generate("stream", config.defaultRealm(),
-                Ocids.regionShort(config.defaultRegion())));
+        stream.setId(Ocids.generate("stream", ociContext.realm(),
+                ociContext.regionCode()));
         stream.setName(name);
         stream.setCompartmentId(compartmentId);
         stream.setStreamPoolId(streamPoolId != null ? streamPoolId
-                : Ocids.generate("streampool", config.defaultRealm(),
-                        Ocids.regionShort(config.defaultRegion())));
+                : Ocids.generate("streampool", ociContext.realm(),
+                        ociContext.regionCode()));
         stream.setPartitions(partitions);
         stream.setRetentionInHours(retentionInHours != null ? retentionInHours : DEFAULT_RETENTION_HOURS);
         stream.setLifecycleState("ACTIVE");

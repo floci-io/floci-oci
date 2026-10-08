@@ -25,7 +25,7 @@ class WorkRequestServiceTest {
     @BeforeEach
     void setUp() {
         EmulatorConfig config = mock(EmulatorConfig.class);
-        when(config.defaultRealm()).thenReturn("oc1");
+        when(config.defaultRegion()).thenReturn("us-ashburn-1");
         raw = new InMemoryStorage<>();
         workRequests = new WorkRequestService(new TenancyAwareStorageBackend<>(raw, null, TENANCY), config);
     }

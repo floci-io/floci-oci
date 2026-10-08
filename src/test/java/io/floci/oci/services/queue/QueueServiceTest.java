@@ -212,4 +212,19 @@ class QueueServiceTest {
         assertEquals(other, service.getQueue(queueId).getCompartmentId());
         assertNotEquals(COMPARTMENT, service.getQueue(queueId).getCompartmentId());
     }
+
+    @Test
+    void queueOcidCarriesTheRealmAndCodeOfItsRegion() {
+        EmulatorConfig gov = mock(EmulatorConfig.class);
+        lenient().when(gov.defaultRealm()).thenReturn("oc1");
+        lenient().when(gov.defaultRegion()).thenReturn("uk-gov-london-1");
+        lenient().when(gov.effectiveBaseUrl()).thenReturn("http://localhost:4599");
+        QueueService govService = new QueueService(new InMemoryStorage<>(), gov,
+                new WorkRequestService(new InMemoryStorage<>(), gov));
+
+        String queueId = govService.createQueue("q", COMPARTMENT, null, null, null,
+                null, null, null, null).queueId();
+
+        assertTrue(queueId.startsWith("ocid1.queue.oc4.ltn."), queueId);
+    }
 }

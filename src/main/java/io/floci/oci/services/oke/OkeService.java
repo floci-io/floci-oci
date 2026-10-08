@@ -2,9 +2,9 @@ package io.floci.oci.services.oke;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import io.floci.oci.config.EmulatorConfig;
+import io.floci.oci.core.common.OciContext;
 import io.floci.oci.core.common.OciException;
 import io.floci.oci.core.common.Ocids;
-import io.floci.oci.core.common.RequestContext;
 import io.floci.oci.core.common.Resettable;
 import io.floci.oci.core.common.ServiceDescriptor;
 import io.floci.oci.core.common.ServiceRegistry;
@@ -19,7 +19,6 @@ import io.quarkus.runtime.StartupEvent;
 import jakarta.annotation.PreDestroy;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.Observes;
-import jakarta.enterprise.inject.Instance;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
@@ -58,6 +57,7 @@ public class OkeService implements Resettable {
     private final StorageBackend<String, StoredOkeCluster> clusters;
     private final StorageBackend<String, StoredNodePool> nodePools;
     private final EmulatorConfig config;
+    private final OciContext ociContext;
     private final ServiceRegistry serviceRegistry;
     private final WorkRequestService workRequests;
     private final OkeClusterManager clusterManager;
@@ -69,7 +69,7 @@ public class OkeService implements Resettable {
     @Inject
     public OkeService(StorageFactory storageFactory, EmulatorConfig config,
                       ServiceRegistry serviceRegistry, WorkRequestService workRequests,
-                      OkeClusterManager clusterManager, Instance<RequestContext> requestContext) {
+                      OkeClusterManager clusterManager, OciContext ociContext) {
         this(
             storageFactory.create("oke", "oke-clusters.json",
                 new TypeReference<Map<String, StoredOkeCluster>>() {}),
@@ -79,8 +79,9 @@ public class OkeService implements Resettable {
             serviceRegistry,
             workRequests,
             clusterManager,
-            () -> RequestContext.currentTenancyId(requestContext, config.defaultTenancyId()),
-            Clock.systemUTC()
+            ociContext::tenancyId,
+            Clock.systemUTC(),
+            ociContext
         );
     }
 
@@ -91,7 +92,8 @@ public class OkeService implements Resettable {
                WorkRequestService workRequests,
                OkeClusterManager clusterManager) {
         this(clusters, nodePools, config, serviceRegistry, workRequests, clusterManager,
-                () -> config != null ? config.defaultTenancyId() : null, Clock.systemUTC());
+                () -> config != null ? config.defaultTenancyId() : null, Clock.systemUTC(),
+                OciContext.fromConfig(config));
     }
 
     OkeService(StorageBackend<String, StoredOkeCluster> clusters,
@@ -101,7 +103,9 @@ public class OkeService implements Resettable {
                WorkRequestService workRequests,
                OkeClusterManager clusterManager,
                Supplier<String> tenancyId,
-               Clock clock) {
+               Clock clock,
+               OciContext ociContext) {
+        this.ociContext = ociContext;
         this.clusters = clusters;
         this.nodePools = nodePools;
         this.config = config;
@@ -336,7 +340,7 @@ public class OkeService implements Resettable {
             throw OciException.missingParameter("Missing required parameter: vcnId");
         }
 
-        String clusterId = Ocids.generate("cluster", config.defaultRealm(), regionShort());
+        String clusterId = Ocids.generate("cluster", ociContext.realm(), ociContext.regionCode());
         StoredOkeCluster cluster = new StoredOkeCluster();
         cluster.setId(clusterId);
         cluster.setName(name);
@@ -448,7 +452,7 @@ public class OkeService implements Resettable {
             throw OciException.missingParameter("Missing required parameter: name");
         }
 
-        String nodePoolId = Ocids.generate("nodepool", config.defaultRealm(), regionShort());
+        String nodePoolId = Ocids.generate("nodepool", ociContext.realm(), ociContext.regionCode());
         StoredNodePool pool = new StoredNodePool();
         pool.setId(nodePoolId);
         pool.setName(name);
@@ -513,7 +517,4 @@ public class OkeService implements Resettable {
         return workRequests.succeeded("oke", "NODEPOOL_DELETE", pool.getCompartmentId(), List.of(res));
     }
 
-    String regionShort() {
-        return Ocids.regionShort(config.defaultRegion());
-    }
 }

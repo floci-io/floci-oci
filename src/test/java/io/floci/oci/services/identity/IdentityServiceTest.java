@@ -1,6 +1,7 @@
 package io.floci.oci.services.identity;
 
 import io.floci.oci.config.EmulatorConfig;
+import io.floci.oci.core.common.OciContext;
 import io.floci.oci.core.common.OciException;
 import io.floci.oci.core.storage.InMemoryStorage;
 import io.floci.oci.core.storage.StorageBackend;
@@ -205,7 +206,7 @@ class IdentityServiceTest {
         IdentityService scoped = new IdentityService(new InMemoryStorage<>(),
                 new InMemoryStorage<>(), new InMemoryStorage<>(), new InMemoryStorage<>(),
                 new InMemoryStorage<>(), new InMemoryStorage<>(), config, workRequests,
-                () -> OTHER_TENANCY);
+                signedAs(OTHER_TENANCY));
 
         assertEquals(OTHER_TENANCY, scoped.getCompartment(OTHER_TENANCY).getId());
         assertEquals(OTHER_TENANCY,
@@ -246,7 +247,7 @@ class IdentityServiceTest {
 
         IdentityService scoped = new IdentityService(compartments, users,
                 tenancyAware(OTHER_TENANCY), tenancyAware(OTHER_TENANCY), policies,
-                tenancyAware(OTHER_TENANCY), config, workRequests, () -> OTHER_TENANCY);
+                tenancyAware(OTHER_TENANCY), config, workRequests, signedAs(OTHER_TENANCY));
         scoped.adoptLegacyRootRecords();
         scoped.adoptLegacyRootRecords();
 
@@ -259,6 +260,15 @@ class IdentityServiceTest {
                 .map(StoredPolicy::getId).toList());
         assertEquals(TENANCY, compartments.getForTenancy(TENANCY, own.getId())
                 .orElseThrow().getCompartmentId());
+    }
+
+    private static OciContext signedAs(String tenancy) {
+        OciContext context = mock(OciContext.class);
+        lenient().when(context.tenancyId()).thenReturn(tenancy);
+        lenient().when(context.realm()).thenReturn("oc1");
+        lenient().when(context.region()).thenReturn("us-ashburn-1");
+        lenient().when(context.homeRegion()).thenReturn("us-ashburn-1");
+        return context;
     }
 
     // Reads without a request context fall back to readsAs, standing in for the signed tenancy.

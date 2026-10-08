@@ -3,10 +3,10 @@ package io.floci.oci.services.identity;
 import com.fasterxml.jackson.core.type.TypeReference;
 import io.floci.oci.config.EmulatorConfig;
 import io.floci.oci.core.common.Etags;
+import io.floci.oci.core.common.OciContext;
 import io.floci.oci.core.common.OciException;
 import io.floci.oci.core.common.Ocids;
 import io.floci.oci.core.common.Regions;
-import io.floci.oci.core.common.RequestContext;
 import io.floci.oci.core.common.ServiceDescriptor;
 import io.floci.oci.core.common.ServiceRegistry;
 import io.floci.oci.core.storage.StorageBackend;
@@ -22,7 +22,6 @@ import io.floci.oci.services.identity.model.StoredUserGroupMembership;
 import io.quarkus.runtime.StartupEvent;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.Observes;
-import jakarta.enterprise.inject.Instance;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
@@ -36,7 +35,6 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.function.BiConsumer;
 import java.util.function.Function;
-import java.util.function.Supplier;
 import java.util.stream.IntStream;
 
 @ApplicationScoped
@@ -60,15 +58,14 @@ public class IdentityService {
     private final EmulatorConfig config;
     private final ServiceRegistry serviceRegistry;
     private final WorkRequestService workRequests;
-    private final Supplier<String> tenancyId;
+    private final OciContext ociContext;
 
     @Inject
     public IdentityService(StorageFactory storageFactory, EmulatorConfig config,
                            ServiceRegistry serviceRegistry, WorkRequestService workRequests,
-                           Instance<RequestContext> requestContext) {
+                           OciContext ociContext) {
         this.config = config;
-        this.tenancyId = () -> RequestContext.currentTenancyId(requestContext,
-                config.defaultTenancyId());
+        this.ociContext = ociContext;
         this.serviceRegistry = serviceRegistry;
         this.workRequests = workRequests;
         this.compartments = storageFactory.create("identity", "identity-compartments.json",
@@ -95,7 +92,7 @@ public class IdentityService {
                     EmulatorConfig config,
                     WorkRequestService workRequests) {
         this(compartments, users, groups, memberships, policies, regionSubscriptions, config,
-                workRequests, config::defaultTenancyId);
+                workRequests, OciContext.fromConfig(config));
     }
 
     IdentityService(StorageBackend<String, StoredCompartment> compartments,
@@ -106,8 +103,8 @@ public class IdentityService {
                     StorageBackend<String, StoredRegionSubscription> regionSubscriptions,
                     EmulatorConfig config,
                     WorkRequestService workRequests,
-                    Supplier<String> tenancyId) {
-        this.tenancyId = tenancyId;
+                    OciContext ociContext) {
+        this.ociContext = ociContext;
         this.compartments = compartments;
         this.users = users;
         this.groups = groups;
@@ -187,7 +184,7 @@ public class IdentityService {
         String parent = parentId != null ? parentId : tenancyId();
         requireUniqueName(parent, name, null);
         StoredCompartment c = new StoredCompartment();
-        c.setId(Ocids.generateGlobal("compartment", config.defaultRealm()));
+        c.setId(Ocids.generateGlobal("compartment", ociContext.realm()));
         c.setCompartmentId(parent);
         c.setName(name);
         c.setDescription(description);
@@ -335,7 +332,7 @@ public class IdentityService {
             throw OciException.conflict("User " + name + " already exists.");
         }
         StoredUser u = new StoredUser();
-        u.setId(Ocids.generateGlobal("user", config.defaultRealm()));
+        u.setId(Ocids.generateGlobal("user", ociContext.realm()));
         u.setCompartmentId(tenancyId());
         u.setName(name);
         u.setDescription(description);
@@ -407,7 +404,7 @@ public class IdentityService {
             throw OciException.conflict("Group " + name + " already exists.");
         }
         StoredGroup g = new StoredGroup();
-        g.setId(Ocids.generateGlobal("group", config.defaultRealm()));
+        g.setId(Ocids.generateGlobal("group", ociContext.realm()));
         g.setCompartmentId(tenancyId());
         g.setName(name);
         g.setDescription(description);
@@ -470,7 +467,7 @@ public class IdentityService {
             throw OciException.conflict("User " + userId + " is already in group " + groupId);
         }
         StoredUserGroupMembership m = new StoredUserGroupMembership();
-        m.setId(Ocids.generateGlobal("groupmembership", config.defaultRealm()));
+        m.setId(Ocids.generateGlobal("groupmembership", ociContext.realm()));
         m.setCompartmentId(tenancyId());
         m.setUserId(userId);
         m.setGroupId(groupId);
@@ -517,7 +514,7 @@ public class IdentityService {
             throw OciException.conflict("Policy " + name + " already exists.");
         }
         StoredPolicy p = new StoredPolicy();
-        p.setId(Ocids.generateGlobal("policy", config.defaultRealm()));
+        p.setId(Ocids.generateGlobal("policy", ociContext.realm()));
         p.setCompartmentId(compartment);
         p.setName(name);
         p.setDescription(description);
@@ -599,7 +596,7 @@ public class IdentityService {
         return IntStream.range(0, names.size())
                 .mapToObj(i -> Map.<String, Object>of(
                         "name", names.get(i),
-                        "id", "ocid1.availabilitydomain." + config.defaultRealm() + "..floci" + (i + 1),
+                        "id", "ocid1.availabilitydomain." + ociContext.realm() + "..floci" + (i + 1),
                         "compartmentId", compartment))
                 .toList();
     }
@@ -615,14 +612,14 @@ public class IdentityService {
         return IntStream.rangeClosed(1, FAULT_DOMAINS_PER_AD)
                 .mapToObj(fd -> Map.<String, Object>of(
                         "name", "FAULT-DOMAIN-" + fd,
-                        "id", "ocid1.faultdomain." + config.defaultRealm() + "..floci" + ad + fd,
+                        "id", "ocid1.faultdomain." + ociContext.realm() + "..floci" + ad + fd,
                         "compartmentId", compartmentId,
                         "availabilityDomain", availabilityDomain))
                 .toList();
     }
 
     private List<String> availabilityDomainNames() {
-        String regionUpper = config.defaultRegion().toUpperCase(Locale.ROOT);
+        String regionUpper = ociContext.region().toUpperCase(Locale.ROOT);
         return IntStream.rangeClosed(1, AVAILABILITY_DOMAINS)
                 .mapToObj(i -> "Floc:" + regionUpper + "-AD-" + i)
                 .toList();
@@ -634,20 +631,20 @@ public class IdentityService {
      */
     public List<Map<String, String>> regions() {
         List<Map<String, String>> regions = new ArrayList<>(Regions.all().stream()
-                .filter(r -> r.realm().equals(config.defaultRealm()))
+                .filter(r -> r.realm().equals(ociContext.realm()))
                 .map(r -> Map.of("key", r.key(), "name", r.name()))
                 .toList());
         boolean homeListed = regions.stream()
-                .anyMatch(r -> r.get("name").equals(config.defaultRegion()));
+                .anyMatch(r -> r.get("name").equals(ociContext.homeRegion()));
         if (!homeListed) {
-            regions.addFirst(Map.of("key", regionKey(), "name", config.defaultRegion()));
+            regions.addFirst(Map.of("key", regionKey(), "name", ociContext.homeRegion()));
         }
         return regions;
     }
 
     public List<StoredRegionSubscription> regionSubscriptions() {
         List<StoredRegionSubscription> result = new ArrayList<>();
-        result.add(new StoredRegionSubscription(regionKey(), config.defaultRegion(), "READY", true));
+        result.add(new StoredRegionSubscription(regionKey(), ociContext.homeRegion(), "READY", true));
         regionSubscriptions.scan(k -> true).stream()
                 .sorted(Comparator.comparing(StoredRegionSubscription::getRegionName))
                 .forEach(result::add);
@@ -661,7 +658,7 @@ public class IdentityService {
     public synchronized StoredRegionSubscription createRegionSubscription(String regionKey) {
         requireNonBlank(regionKey, "regionKey");
         Regions.Region region = Regions.all().stream()
-                .filter(r -> r.realm().equals(config.defaultRealm()))
+                .filter(r -> r.realm().equals(ociContext.realmOf(ociContext.homeRegion())))
                 .filter(r -> r.key().equalsIgnoreCase(regionKey))
                 .findFirst()
                 .orElseThrow(() -> OciException.invalidParameter("Unknown region key: " + regionKey));
@@ -688,15 +685,15 @@ public class IdentityService {
                 "homeRegionKey", regionKey());
     }
 
-    /** Region key, e.g. us-ashburn-1 → IAD. */
+    /** The home region key, e.g. us-ashburn-1 → IAD. */
     String regionKey() {
-        return Regions.key(config.defaultRegion());
+        return Regions.key(ociContext.homeRegion());
     }
 
     // ── Helpers ────────────────────────────────────────────────────────────────
 
     private String tenancyId() {
-        return tenancyId.get();
+        return ociContext.tenancyId();
     }
 
     private void requireUniqueName(String parentId, String name, String excludeId) {

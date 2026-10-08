@@ -495,7 +495,7 @@ All settings are overridable through environment variables with the `FLOCI_OCI_`
 |---|---|---|
 | `FLOCI_OCI_PORT` | `4599` | Port exposed by the floci-oci API |
 | `FLOCI_OCI_DEFAULT_REGION` | `us-ashburn-1` | Region used in OCIDs and reference data |
-| `FLOCI_OCI_DEFAULT_REALM` | `oc1` | Realm key used when minting OCIDs |
+| `FLOCI_OCI_DEFAULT_REALM` | `oc1` | Realm key for OCIDs when the region is not a known OCI region; known regions use their own realm (e.g. `uk-gov-london-1` is `oc4`) |
 | `FLOCI_OCI_DEFAULT_TENANCY_ID` | `ocid1.tenancy.oc1..flocilocal…` | Tenancy used for unsigned requests |
 | `FLOCI_OCI_DEFAULT_NAMESPACE` | `floci-local` | Object Storage namespace |
 | `FLOCI_OCI_BASE_URL` | `http://localhost:4599` | Base URL used when floci-oci returns service URLs |
