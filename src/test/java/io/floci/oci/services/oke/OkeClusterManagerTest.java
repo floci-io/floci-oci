@@ -360,6 +360,19 @@ class OkeClusterManagerTest {
     }
 
     @Test
+    void apiServerUrlPrefersTheConfiguredDockerNetworkTheSidecarJoined() throws Exception {
+        StoredOkeCluster cluster = new StoredOkeCluster();
+        cluster.setId("ocid1.cluster.oc1.iad.confignet001");
+        when(containerDetector.isRunningInContainer()).thenReturn(true);
+        when(config.services().dockerNetwork()).thenReturn(Optional.of("shared-net"));
+        lenient().when(networkResolver.resolveNetworkName()).thenReturn(Optional.of("floci-net"));
+        when(lifecycleManager.resolveEndpoint(anyString(), eq(6443), eq("shared-net")))
+                .thenReturn(new ContainerLifecycleManager.EndpointInfo("172.19.0.7", 6443));
+
+        assertEquals("https://172.19.0.7:6443", manager.apiServerUrl(cluster));
+    }
+
+    @Test
     void apiServerUrlReportsAVanishedSidecarAsAnIoFailure() {
         StoredOkeCluster cluster = new StoredOkeCluster();
         cluster.setId("ocid1.cluster.oc1.iad.vanished001");

@@ -281,7 +281,7 @@ public class OkeClusterManager implements Resettable {
 
     /**
      * Where floci-oci itself reaches the API server: the published host port when floci-oci runs
-     * on the host; otherwise the sidecar's IP on floci-oci's own Docker network, read from the
+     * on the host; otherwise the sidecar's IP on the network it was attached to, read from the
      * container rather than looked up by name. The name embeds the OCID, whose last label can start
      * with a digit, which {@link URI} rejects as a host, and Docker's default {@code bridge}
      * network has no name lookup at all.
@@ -293,12 +293,23 @@ public class OkeClusterManager implements Resettable {
         ContainerLifecycleManager.EndpointInfo endpoint;
         try {
             endpoint = lifecycleManager.resolveEndpoint(containerName(cluster), K3S_CONTAINER_PORT,
-                    networkResolver.resolveNetworkName().orElse(null));
+                    sidecarNetwork().orElse(null));
         } catch (RuntimeException e) {
             throw new IOException("Cannot inspect the k3s sidecar of cluster " + cluster.getId(), e);
         }
         String host = endpoint.host().contains(":") ? "[" + endpoint.host() + "]" : endpoint.host();
         return "https://" + host + ":" + endpoint.port();
+    }
+
+    /**
+     * The network {@code ContainerBuilder.withDockerNetwork(Optional.empty())} attaches the sidecar
+     * to: the configured {@code services.docker-network}, else floci-oci's own. A sidecar with a
+     * published port also sits on {@code bridge}, which floci-oci cannot reach from its network.
+     */
+    private Optional<String> sidecarNetwork() {
+        return config.services().dockerNetwork()
+                .filter(n -> !n.isBlank())
+                .or(networkResolver::resolveNetworkName);
     }
 
     private String containerName(StoredOkeCluster cluster) {
