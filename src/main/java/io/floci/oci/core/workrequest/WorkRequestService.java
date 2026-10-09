@@ -13,6 +13,7 @@ import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -187,22 +188,26 @@ public class WorkRequestService {
                 || store == globalStore) {
             return;
         }
-        int moved = 0;
+        Map<String, Map<String, StoredWorkRequest>> byPartition = new LinkedHashMap<>();
         for (String partition : regional.tenancies()) {
             for (String key : regional.keysForTenancy(partition)) {
-                Optional<StoredWorkRequest> wr = regional.getForTenancy(partition, key);
-                if (wr.isPresent() && GLOBAL_SERVICE.equals(wr.get().getService())) {
-                    global.putForTenancy(TenancyAwareStorageBackend.tenancyOf(partition), key, wr.get());
-                    regional.deleteForTenancy(partition, key);
-                    moved++;
-                }
+                regional.getForTenancy(partition, key)
+                        .filter(wr -> GLOBAL_SERVICE.equals(wr.getService()))
+                        .ifPresent(wr -> byPartition.computeIfAbsent(partition, p -> new LinkedHashMap<>())
+                                .put(key, wr));
             }
         }
-        if (moved > 0) {
-            global.flush();
-            regional.flush();
-            LOG.infov("Moved {0} Identity work requests into the global store", moved);
+        if (byPartition.isEmpty()) {
+            return;
         }
+        // Copy and persist before deleting, so an interrupted move duplicates rather than loses.
+        byPartition.forEach((partition, records) ->
+                global.putAllForTenancy(TenancyAwareStorageBackend.tenancyOf(partition), records));
+        global.flush();
+        byPartition.forEach((partition, records) -> regional.deleteAllForTenancy(partition, records.keySet()));
+        regional.flush();
+        LOG.infov("Moved {0} Identity work requests into the global store",
+                byPartition.values().stream().mapToInt(Map::size).sum());
     }
 
     /** Identity is global, so its work requests are too; every other service's are regional. */

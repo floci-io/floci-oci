@@ -77,23 +77,6 @@ public class OciContext {
         return realmOf(region());
     }
 
-    /**
-     * The region a regional OCID was minted in, read from its region segment
-     * ({@code ocid1.cluster.oc1.phx.<unique>} is {@code us-phoenix-1}). Global OCIDs, and codes
-     * outside the region table (the fallback code of a custom default region), answer the
-     * configured default region. A code shared with the default region resolves to the default
-     * region, so a custom {@code default-region} such as {@code iad-local} keeps its own clusters.
-     */
-    public String regionOf(String ocid) {
-        String defaultRegion = config.defaultRegion();
-        return Ocids.parse(ocid)
-                .map(Ocids.Ocid::region)
-                .map(code -> defaultRegion != null && code.equals(Regions.code(defaultRegion))
-                        ? defaultRegion
-                        : Regions.byCode(code).map(Regions.Region::name).orElse(defaultRegion))
-                .orElse(defaultRegion);
-    }
-
     /** The tenancy's home region: always the configured default region. */
     public String homeRegion() {
         return config.defaultRegion();

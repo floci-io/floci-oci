@@ -3,6 +3,8 @@ package io.floci.oci.core.storage;
 import io.floci.oci.core.common.RequestContext;
 import jakarta.enterprise.inject.Instance;
 
+import java.util.ArrayList;
+import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -71,7 +73,8 @@ public class TenancyAwareStorageBackend<V> implements StorageBackend<String, V> 
      * @return the number of entries moved
      */
     public int migrateToRegion(String defaultTenancyId, String region) {
-        int moved = 0;
+        Map<String, V> moves = new LinkedHashMap<>();
+        List<String> oldKeys = new ArrayList<>();
         for (String rawKey : delegate.keys()) {
             int slash = rawKey.indexOf('/');
             String head = slash < 0 ? rawKey : rawKey.substring(0, slash);
@@ -85,12 +88,26 @@ public class TenancyAwareStorageBackend<V> implements StorageBackend<String, V> 
             }
             Optional<V> value = delegate.get(rawKey);
             if (value.isPresent()) {
-                delegate.put(target, value.get());
-                delegate.delete(rawKey);
-                moved++;
+                moves.put(target, value.get());
+                oldKeys.add(rawKey);
             }
         }
-        return moved;
+        if (!moves.isEmpty()) {
+            delegate.putAllAndDelete(moves, oldKeys);
+        }
+        return moves.size();
+    }
+
+    /** Puts {@code entries} into one partition as a single change. */
+    public void putAllForTenancy(String partition, Map<String, V> entries) {
+        Map<String, V> prefixedEntries = new LinkedHashMap<>();
+        entries.forEach((key, value) -> prefixedEntries.put(partition + "/" + key, value));
+        delegate.putAllAndDelete(prefixedEntries, List.of());
+    }
+
+    /** Deletes {@code keys} from one partition as a single change. */
+    public void deleteAllForTenancy(String partition, Collection<String> keys) {
+        delegate.putAllAndDelete(Map.of(), keys.stream().map(key -> partition + "/" + key).toList());
     }
 
     @Override

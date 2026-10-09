@@ -55,12 +55,4 @@ class RegionsTest {
         assertTrue(Regions.inHost("localhost:4599").isEmpty());
         assertTrue(Regions.inHost(null).isEmpty());
     }
-
-    @Test
-    void byCodeIsTheReverseOfCode() {
-        assertEquals("us-phoenix-1", Regions.byCode("phx").orElseThrow().name());
-        assertEquals("sa-saopaulo-1", Regions.byCode("GRU").orElseThrow().name());
-        assertTrue(Regions.byCode("xxn").isEmpty());
-        assertTrue(Regions.byCode(null).isEmpty());
-    }
 }

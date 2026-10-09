@@ -115,20 +115,11 @@ public final class Regions {
     private static final Map<String, Region> BY_NAME = ALL.stream()
             .collect(Collectors.toUnmodifiableMap(Region::name, Function.identity()));
 
-    private static final Map<String, Region> BY_CODE = ALL.stream()
-            .collect(Collectors.toUnmodifiableMap(Region::code, Function.identity()));
-
     private Regions() {
     }
 
     public static Optional<Region> byName(String name) {
         return Optional.ofNullable(BY_NAME.get(name));
-    }
-
-    /** The region whose OCID segment is {@code code}, e.g. {@code phx -> us-phoenix-1}. */
-    public static Optional<Region> byCode(String code) {
-        return code == null ? Optional.empty()
-                : Optional.ofNullable(BY_CODE.get(code.toLowerCase(Locale.ROOT)));
     }
 
     public static List<Region> all() {
