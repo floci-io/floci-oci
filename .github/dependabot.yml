@@ -18,6 +18,10 @@ updates:
     ignore:
       - dependency-name: "com.networknt:json-schema-validator"
         versions: [">=2.0.0"]
+      # zstd-jni 1.5.7-18 added a Java 22 FFM binding (META-INF/versions/22, linkToNative) that
+      # GraalVM native-image cannot compile; stay below it until the native build supports it.
+      - dependency-name: "com.github.luben:zstd-jni"
+        versions: [">=1.5.7-18"]
     labels:
       - "dependencies"
       - "java"
