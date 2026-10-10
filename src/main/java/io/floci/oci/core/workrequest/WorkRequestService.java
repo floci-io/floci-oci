@@ -13,6 +13,7 @@ import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -38,7 +39,10 @@ public class WorkRequestService {
 
     private static final Logger LOG = Logger.getLogger(WorkRequestService.class);
 
+    private static final String GLOBAL_SERVICE = "identity";
+
     private final StorageBackend<String, StoredWorkRequest> store;
+    private final StorageBackend<String, StoredWorkRequest> globalStore;
     private final OciContext ociContext;
 
     @Inject
@@ -46,11 +50,21 @@ public class WorkRequestService {
         this.ociContext = ociContext;
         this.store = storageFactory.create("workrequests", "workrequests.json",
                 new TypeReference<Map<String, StoredWorkRequest>>() {});
+        this.globalStore = storageFactory.createGlobal("workrequests",
+                "identity-workrequests.json",
+                new TypeReference<Map<String, StoredWorkRequest>>() {});
+        storageFactory.afterLoad(this::moveIdentityWorkRequestsToGlobalStore);
     }
 
     /** Storage-injecting constructor for tests. */
     public WorkRequestService(StorageBackend<String, StoredWorkRequest> store, EmulatorConfig config) {
+        this(store, store, config);
+    }
+
+    WorkRequestService(StorageBackend<String, StoredWorkRequest> store,
+                       StorageBackend<String, StoredWorkRequest> globalStore, EmulatorConfig config) {
         this.store = store;
+        this.globalStore = globalStore;
         this.ociContext = OciContext.fromConfig(config);
     }
 
@@ -72,7 +86,7 @@ public class WorkRequestService {
         String now = Instant.now().toString();
         wr.setTimeStarted(now);
         wr.setTimeFinished(now);
-        store.put(wr.getId(), wr);
+        storeFor(service).put(wr.getId(), wr);
         LOG.debugf("workRequest %s: %s %s (%s)", wr.getId(), operationType, terminalStatus, service);
         return wr.getId();
     }
@@ -95,17 +109,19 @@ public class WorkRequestService {
     }
 
     /**
-     * Moves an in-progress work request to {@code terminalStatus}. Takes the owning tenancy
-     * explicitly because async workers run outside any request scope. A work request that is
-     * missing or already finished is left untouched.
+     * Moves an in-progress work request to {@code terminalStatus}. Takes the owning tenancy and
+     * region explicitly because async workers run outside any request scope; work-request OCIDs
+     * are global, so the region comes from the resource the work request is about. A work
+     * request that is missing or already finished is left untouched.
      */
-    public void finish(String tenancyId, String workRequestId, String terminalStatus) {
+    public void finish(String tenancyId, String region, String workRequestId, String terminalStatus) {
+        String partition = TenancyAwareStorageBackend.regionalPartition(tenancyId, region);
         Optional<StoredWorkRequest> found = store instanceof TenancyAwareStorageBackend<StoredWorkRequest> tenancyAware
-                ? tenancyAware.getForTenancy(tenancyId, workRequestId)
+                ? tenancyAware.getForTenancy(partition, workRequestId)
                 : store.get(workRequestId);
         if (found.isEmpty()) {
-            LOG.warnv("workRequest {0} not found in tenancy {1}; cannot mark it {2}",
-                    workRequestId, tenancyId, terminalStatus);
+            LOG.warnv("workRequest {0} not found in tenancy {1}, region {2}; cannot mark it {3}",
+                    workRequestId, tenancyId, region, terminalStatus);
             return;
         }
         StoredWorkRequest wr = found.get();
@@ -118,7 +134,7 @@ public class WorkRequestService {
         }
         wr.setTimeFinished(Instant.now().toString());
         if (store instanceof TenancyAwareStorageBackend<StoredWorkRequest> tenancyAware) {
-            tenancyAware.putForTenancy(tenancyId, workRequestId, wr);
+            tenancyAware.putForTenancy(partition, workRequestId, wr);
         } else {
             store.put(workRequestId, wr);
         }
@@ -134,12 +150,13 @@ public class WorkRequestService {
         String now = Instant.now().toString();
         wr.setTimeStarted(now);
         wr.setTimeFinished(now);
-        store.put(wr.getId(), wr);
+        storeFor(service).put(wr.getId(), wr);
         return wr.getId();
     }
 
     public StoredWorkRequest get(String workRequestId) {
         return store.get(workRequestId)
+                .or(() -> globalStore.get(workRequestId))
                 .orElseThrow(() -> OciException.notAuthorizedOrNotFound(
                         "Work request not found or not authorized: " + workRequestId));
     }
@@ -155,10 +172,47 @@ public class WorkRequestService {
     }
 
     public List<StoredWorkRequest> list(String service, String compartmentId) {
-        return store.scan(k -> true).stream()
+        return storeFor(service).scan(k -> true).stream()
                 .filter(wr -> service == null || service.equals(wr.getService()))
                 .filter(wr -> compartmentId == null || compartmentId.equals(wr.getCompartmentId()))
                 .toList();
+    }
+
+    /**
+     * Identity work requests written before Identity became global sit in the regional store;
+     * moves them into the global one, keeping their tenancy.
+     */
+    void moveIdentityWorkRequestsToGlobalStore() {
+        if (!(store instanceof TenancyAwareStorageBackend<StoredWorkRequest> regional)
+                || !(globalStore instanceof TenancyAwareStorageBackend<StoredWorkRequest> global)
+                || store == globalStore) {
+            return;
+        }
+        Map<String, Map<String, StoredWorkRequest>> byPartition = new LinkedHashMap<>();
+        for (String partition : regional.tenancies()) {
+            for (String key : regional.keysForTenancy(partition)) {
+                regional.getForTenancy(partition, key)
+                        .filter(wr -> GLOBAL_SERVICE.equals(wr.getService()))
+                        .ifPresent(wr -> byPartition.computeIfAbsent(partition, p -> new LinkedHashMap<>())
+                                .put(key, wr));
+            }
+        }
+        if (byPartition.isEmpty()) {
+            return;
+        }
+        // Copy and persist before deleting, so an interrupted move duplicates rather than loses.
+        byPartition.forEach((partition, records) ->
+                global.putAllForTenancy(TenancyAwareStorageBackend.tenancyOf(partition), records));
+        global.flush();
+        byPartition.forEach((partition, records) -> regional.deleteAllForTenancy(partition, records.keySet()));
+        regional.flush();
+        LOG.infov("Moved {0} Identity work requests into the global store",
+                byPartition.values().stream().mapToInt(Map::size).sum());
+    }
+
+    /** Identity is global, so its work requests are too; every other service's are regional. */
+    private StorageBackend<String, StoredWorkRequest> storeFor(String service) {
+        return GLOBAL_SERVICE.equals(service) ? globalStore : store;
     }
 
     public static StoredWorkRequest.Resource resource(String entityType, String actionType,

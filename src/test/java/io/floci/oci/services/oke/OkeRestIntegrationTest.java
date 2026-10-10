@@ -16,6 +16,7 @@ import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.hasItem;
 import static org.hamcrest.Matchers.notNullValue;
 import static org.hamcrest.Matchers.nullValue;
+import static org.hamcrest.Matchers.startsWith;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -223,6 +224,29 @@ class OkeRestIntegrationTest {
             .then()
                 .statusCode(200)
                 .body("status.authenticated", equalTo(false));
+    }
+
+    @Test
+    void tokenWebhookAuthenticatesATokenForAClusterInAnotherRegion() {
+        String clusterId = given()
+            .header("Host", "containerengine.us-phoenix-1.oci.oraclecloud.com")
+            .contentType(ContentType.JSON)
+            .body(Map.of("compartmentId", COMPARTMENT, "name", "phoenix-cluster", "vcnId", VCN))
+            .when().post("/20180222/clusters")
+            .then().statusCode(202)
+                .body("id", startsWith("ocid1.cluster.oc1.phx."))
+            .extract().path("id");
+        String tenancy = config.defaultTenancyId();
+        String token = ClusterTokenMinter.mint("us-phoenix-1", clusterId, tenancy, USER, Instant.now());
+
+        given()
+            .contentType(ContentType.JSON)
+            .body(tokenReview("authentication.k8s.io/v1", token))
+            .when().post("/_floci-oci/oke/token-webhook/{tenancy}/{cluster}", tenancy, clusterId)
+            .then()
+                .statusCode(200)
+                .body("status.authenticated", equalTo(true))
+                .body("status.user.username", equalTo(USER));
     }
 
     private static Map<String, Object> tokenReview(String apiVersion, String token) {

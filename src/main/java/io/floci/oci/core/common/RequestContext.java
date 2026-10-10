@@ -15,6 +15,7 @@ public class RequestContext {
     private String tenancyId;
     private String userId;
     private String region;
+    private String baseUrl;
 
     public String getTenancyId() {
         return tenancyId;
@@ -38,6 +39,15 @@ public class RequestContext {
 
     public void setRegion(String region) {
         this.region = region;
+    }
+
+    /** The scheme and regional host the client addressed, or null when the Host names no region. */
+    public String getBaseUrl() {
+        return baseUrl;
+    }
+
+    public void setBaseUrl(String baseUrl) {
+        this.baseUrl = baseUrl;
     }
 
     /**

@@ -187,11 +187,11 @@ public class KmsService {
      * caller's compartment vault — see {@link #resolveVaultForCompartment}.
      */
     public String managementEndpoint(String vaultId) {
-        return config.effectiveBaseUrl();
+        return ociContext.baseUrl();
     }
 
     public String cryptoEndpoint(String vaultId) {
-        return config.effectiveBaseUrl();
+        return ociContext.baseUrl();
     }
 
     /**

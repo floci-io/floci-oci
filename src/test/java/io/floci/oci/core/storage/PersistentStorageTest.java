@@ -8,6 +8,7 @@ import org.junit.jupiter.api.io.TempDir;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -41,6 +42,18 @@ class PersistentStorageTest {
         store2.load();
         assertEquals("value1", store2.get("key1").orElseThrow());
         assertEquals("value2", store2.get("key2").orElseThrow());
+    }
+
+    @Test
+    void putAllAndDeleteAppliesAndPersistsTheWholeChange() {
+        storage.put("old", "value");
+
+        storage.putAllAndDelete(Map.of("new", "value"), List.of("old"));
+
+        PersistentStorage<String, String> reloaded = new PersistentStorage<>(
+                tempDir.resolve("test-store.json"), new TypeReference<Map<String, String>>() {});
+        reloaded.load();
+        assertEquals(Set.of("new"), reloaded.keys());
     }
 
     @Test

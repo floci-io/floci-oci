@@ -162,7 +162,7 @@ public class StreamingService {
     }
 
     public String messagesEndpoint() {
-        return config.effectiveBaseUrl();
+        return ociContext.baseUrl();
     }
 
     // ── Data plane: produce ────────────────────────────────────────────────────

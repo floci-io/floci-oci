@@ -1,6 +1,8 @@
 package io.floci.oci.core.storage;
 
+import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.Predicate;
@@ -24,6 +26,15 @@ public interface StorageBackend<K, V> {
      * filter, or otherwise mutate the returned list without affecting the underlying store.
      */
     List<V> scan(Predicate<K> keyFilter);
+
+    /**
+     * Puts {@code puts}, then deletes {@code deletes}, as one change. Write-through backends
+     * override this to persist once instead of once per entry.
+     */
+    default void putAllAndDelete(Map<K, V> puts, Collection<K> deletes) {
+        puts.forEach(this::put);
+        deletes.forEach(this::delete);
+    }
 
     /** Return all keys in this store. */
     Set<K> keys();

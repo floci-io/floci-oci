@@ -50,6 +50,24 @@ public class OciContext {
         return config.defaultRegion();
     }
 
+    /**
+     * The base of URLs handed back to the client, such as a queue's {@code messagesEndpoint}:
+     * the regional host the request addressed, else the configured effective base URL.
+     */
+    public String baseUrl() {
+        if (requestContext != null) {
+            try {
+                String baseUrl = requestContext.get().getBaseUrl();
+                if (baseUrl != null) {
+                    return baseUrl;
+                }
+            } catch (ContextNotActiveException ignored) {
+                // Outside request scope: fall through to the configured URL.
+            }
+        }
+        return config.effectiveBaseUrl();
+    }
+
     /** The region segment of regional OCIDs, e.g. {@code iad}. */
     public String regionCode() {
         return Regions.code(region());

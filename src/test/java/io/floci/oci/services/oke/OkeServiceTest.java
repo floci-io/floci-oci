@@ -276,6 +276,28 @@ class OkeServiceTest {
         assertEquals(1, rawBackend.keys().size(), "the backfill must not copy the cluster into another tenancy");
     }
 
+    @Test
+    void findClusterSearchesEveryRegionOfTheTenancy() {
+        EmulatorConfig customRegion = mock(EmulatorConfig.class);
+        lenient().when(customRegion.defaultRegion()).thenReturn("iad-local");
+        StorageBackend<String, StoredOkeCluster> rawBackend = new InMemoryStorage<>();
+        TenancyAwareStorageBackend<StoredOkeCluster> taClusters =
+                new TenancyAwareStorageBackend<>(rawBackend, () -> TENANCY + ":iad-local");
+        OkeService regionalService = new OkeService(taClusters, nodePools, customRegion, null,
+                mock(WorkRequestService.class), null);
+        StoredOkeCluster ashburn = new StoredOkeCluster();
+        ashburn.setId("ocid1.cluster.oc1.iad.ashburn");
+        StoredOkeCluster local = new StoredOkeCluster();
+        local.setId("ocid1.cluster.oc1.iad.local");
+        rawBackend.put(TENANCY + ":us-ashburn-1/" + ashburn.getId(), ashburn);
+        rawBackend.put(TENANCY + ":iad-local/" + local.getId(), local);
+
+        assertTrue(regionalService.findCluster(TENANCY, ashburn.getId()).isPresent(),
+                "a cluster created through us-ashburn-1 shares the iad code with iad-local");
+        assertTrue(regionalService.findCluster(TENANCY, local.getId()).isPresent());
+        assertTrue(regionalService.findCluster("ocid1.tenancy.oc1..other", local.getId()).isEmpty());
+    }
+
     // -- Real-mode readiness: CREATING + IN_PROGRESS until the k3s API answers --
 
     private static final String TENANCY = "ocid1.tenancy.oc1..readinesstenancy";

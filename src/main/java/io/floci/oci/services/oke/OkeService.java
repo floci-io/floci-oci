@@ -170,10 +170,14 @@ public class OkeService implements Resettable {
     private List<OwnedCluster> backfillInternalFields() {
         List<OwnedCluster> existingClusters = new ArrayList<>();
         if (clusters instanceof TenancyAwareStorageBackend<StoredOkeCluster> tenancyAware) {
-            for (String owner : tenancyAware.tenancies()) {
-                for (StoredOkeCluster cluster : tenancyAware.scanForTenancy(owner, k -> true)) {
-                    if (backfill(cluster, owner)) {
-                        tenancyAware.putForTenancy(owner, cluster.getId(), cluster);
+            for (String partition : tenancyAware.tenancies()) {
+                String owner = TenancyAwareStorageBackend.tenancyOf(partition);
+                String region = partition.contains(":")
+                        ? partition.substring(partition.indexOf(':') + 1)
+                        : defaultRegion();
+                for (StoredOkeCluster cluster : tenancyAware.scanForTenancy(partition, k -> true)) {
+                    if (backfill(cluster, owner, region)) {
+                        tenancyAware.putForTenancy(partition, cluster.getId(), cluster);
                     }
                     existingClusters.add(new OwnedCluster(owner, cluster));
                 }
@@ -181,7 +185,7 @@ public class OkeService implements Resettable {
         } else {
             String owner = tenancyId.get();
             for (StoredOkeCluster cluster : clusters.scan(k -> true)) {
-                if (backfill(cluster, owner)) {
+                if (backfill(cluster, owner, defaultRegion())) {
                     clusters.put(cluster.getId(), cluster);
                 }
                 existingClusters.add(new OwnedCluster(owner, cluster));
@@ -190,7 +194,7 @@ public class OkeService implements Resettable {
         return existingClusters;
     }
 
-    private boolean backfill(StoredOkeCluster cluster, String owner) {
+    private boolean backfill(StoredOkeCluster cluster, String owner, String region) {
         boolean changed = false;
         if (cluster.getApiToken() == null) {
             cluster.setApiToken(newApiToken());
@@ -200,11 +204,15 @@ public class OkeService implements Resettable {
             cluster.setTenancyId(owner);
             changed = true;
         }
-        if (cluster.getRegion() == null && config != null && config.defaultRegion() != null) {
-            cluster.setRegion(config.defaultRegion());
+        if (cluster.getRegion() == null && region != null) {
+            cluster.setRegion(region);
             changed = true;
         }
         return changed;
+    }
+
+    private String defaultRegion() {
+        return config != null ? config.defaultRegion() : null;
     }
 
     private void startReadinessPoller() {
@@ -273,7 +281,8 @@ public class OkeService implements Resettable {
             cluster.setLifecycleDetails(details);
             putCluster(owner, cluster);
             if (cluster.getCreateWorkRequestId() != null) {
-                workRequests.finish(owner, cluster.getCreateWorkRequestId(), workRequestStatus);
+                workRequests.finish(owner, cluster.getRegion(),
+                        cluster.getCreateWorkRequestId(), workRequestStatus);
             }
             recorded.set(true);
             return null;
@@ -285,17 +294,32 @@ public class OkeService implements Resettable {
         LOG.infov("OKE cluster {0} is {1}", cluster.getId(), lifecycleState);
     }
 
-    /** Looks a cluster up in an explicit tenancy, for callers outside a request scope. */
+    /**
+     * Looks a cluster up in an explicit tenancy, for callers outside a request scope, across the
+     * tenancy's region partitions: a cluster's OCID region code cannot name its region when a
+     * custom default region shares that code.
+     */
     Optional<StoredOkeCluster> findCluster(String owner, String clusterId) {
         if (clusters instanceof TenancyAwareStorageBackend<StoredOkeCluster> tenancyAware) {
-            return tenancyAware.getForTenancy(owner, clusterId);
+            for (String partition : tenancyAware.tenancies()) {
+                if (TenancyAwareStorageBackend.tenancyOf(partition).equals(owner)) {
+                    Optional<StoredOkeCluster> found = tenancyAware.getForTenancy(partition, clusterId);
+                    if (found.isPresent()) {
+                        return found;
+                    }
+                }
+            }
+            return Optional.empty();
         }
         return clusters.get(clusterId);
     }
 
+    /** Stores a cluster in the partition of the tenancy and region it was created in. */
     private void putCluster(String owner, StoredOkeCluster cluster) {
         if (clusters instanceof TenancyAwareStorageBackend<StoredOkeCluster> tenancyAware) {
-            tenancyAware.putForTenancy(owner, cluster.getId(), cluster);
+            tenancyAware.putForTenancy(
+                    TenancyAwareStorageBackend.regionalPartition(owner, cluster.getRegion()),
+                    cluster.getId(), cluster);
         } else {
             clusters.put(cluster.getId(), cluster);
         }
@@ -355,7 +379,7 @@ public class OkeService implements Resettable {
         cluster.setDefinedTags(definedTags);
         cluster.setApiToken(newApiToken());
         cluster.setTenancyId(tenancyId.get());
-        cluster.setRegion(config.defaultRegion());
+        cluster.setRegion(ociContext.region());
 
         if (clusterManager != null) {
             clusterManager.startCluster(cluster);
@@ -415,7 +439,8 @@ public class OkeService implements Resettable {
     public String deleteCluster(String clusterId) {
         StoredOkeCluster cluster = getCluster(clusterId);
         if (pendingClusters.remove(clusterId) != null && cluster.getCreateWorkRequestId() != null) {
-            workRequests.finish(cluster.getTenancyId(), cluster.getCreateWorkRequestId(), "CANCELED");
+            workRequests.finish(cluster.getTenancyId(), cluster.getRegion(),
+                    cluster.getCreateWorkRequestId(), "CANCELED");
         }
         if (clusterManager != null) {
             clusterManager.stopCluster(cluster);

@@ -68,17 +68,17 @@ public class IdentityService {
         this.ociContext = ociContext;
         this.serviceRegistry = serviceRegistry;
         this.workRequests = workRequests;
-        this.compartments = storageFactory.create("identity", "identity-compartments.json",
+        this.compartments = storageFactory.createGlobal("identity", "identity-compartments.json",
                 new TypeReference<Map<String, StoredCompartment>>() {});
-        this.users = storageFactory.create("identity", "identity-users.json",
+        this.users = storageFactory.createGlobal("identity", "identity-users.json",
                 new TypeReference<Map<String, StoredUser>>() {});
-        this.groups = storageFactory.create("identity", "identity-groups.json",
+        this.groups = storageFactory.createGlobal("identity", "identity-groups.json",
                 new TypeReference<Map<String, StoredGroup>>() {});
-        this.memberships = storageFactory.create("identity", "identity-memberships.json",
+        this.memberships = storageFactory.createGlobal("identity", "identity-memberships.json",
                 new TypeReference<Map<String, StoredUserGroupMembership>>() {});
-        this.policies = storageFactory.create("identity", "identity-policies.json",
+        this.policies = storageFactory.createGlobal("identity", "identity-policies.json",
                 new TypeReference<Map<String, StoredPolicy>>() {});
-        this.regionSubscriptions = storageFactory.create("identity",
+        this.regionSubscriptions = storageFactory.createGlobal("identity",
                 "identity-region-subscriptions.json",
                 new TypeReference<Map<String, StoredRegionSubscription>>() {});
     }

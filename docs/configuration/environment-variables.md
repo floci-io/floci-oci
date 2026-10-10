@@ -9,7 +9,7 @@ All configuration lives under the `floci-oci.*` prefix; every property maps to a
 | `FLOCI_OCI_PORT` | `4599` | Listen port |
 | `FLOCI_OCI_BASE_URL` | `http://localhost:4599` | Base URL used in returned URLs |
 | `FLOCI_OCI_HOSTNAME` | – | Overrides the hostname in returned URLs (multi-container setups) |
-| `FLOCI_OCI_DEFAULT_REGION` | `us-ashburn-1` | Region for OCIDs and reference data |
+| `FLOCI_OCI_DEFAULT_REGION` | `us-ashburn-1` | Home region of the tenancy, and the region for requests whose `Host` names no OCI region |
 | `FLOCI_OCI_DEFAULT_REALM` | `oc1` | Realm key for OCIDs when the region is not a known OCI region; known regions use their own realm (e.g. `uk-gov-london-1` is `oc4`) |
 | `FLOCI_OCI_DEFAULT_TENANCY_ID` | `ocid1.tenancy.oc1..flocilocal…` | Tenancy used for unsigned requests |
 | `FLOCI_OCI_DEFAULT_NAMESPACE` | `floci-local` | Object Storage namespace |

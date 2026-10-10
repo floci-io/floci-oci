@@ -18,6 +18,8 @@ import static org.mockito.Mockito.when;
 class WorkRequestServiceTest {
 
     private static final String TENANCY = "ocid1.tenancy.oc1..workrequesttenancy";
+    private static final String REGION = "us-phoenix-1";
+    private static final String PARTITION = TenancyAwareStorageBackend.regionalPartition(TENANCY, REGION);
 
     private StorageBackend<String, StoredWorkRequest> raw;
     private WorkRequestService workRequests;
@@ -27,7 +29,7 @@ class WorkRequestServiceTest {
         EmulatorConfig config = mock(EmulatorConfig.class);
         when(config.defaultRegion()).thenReturn("us-ashburn-1");
         raw = new InMemoryStorage<>();
-        workRequests = new WorkRequestService(new TenancyAwareStorageBackend<>(raw, null, TENANCY), config);
+        workRequests = new WorkRequestService(new TenancyAwareStorageBackend<>(raw, () -> PARTITION), config);
     }
 
     @Test
@@ -44,12 +46,12 @@ class WorkRequestServiceTest {
     }
 
     @Test
-    void finishWritesIntoTheGivenTenancyOutsideARequest() {
+    void finishWritesIntoTheGivenTenancyAndRegionOutsideARequest() {
         String id = workRequests.inProgress("oke", "CLUSTER_CREATE", "ocid1.compartment.oc1..c", List.of());
 
-        workRequests.finish(TENANCY, id, "SUCCEEDED");
+        workRequests.finish(TENANCY, REGION, id, "SUCCEEDED");
 
-        StoredWorkRequest wr = raw.get(TENANCY + "/" + id).orElseThrow();
+        StoredWorkRequest wr = raw.get(PARTITION + "/" + id).orElseThrow();
         assertEquals("SUCCEEDED", wr.getStatus());
         assertEquals(100.0f, wr.getPercentComplete().floatValue());
         assertNotNull(wr.getTimeFinished());
@@ -59,17 +61,50 @@ class WorkRequestServiceTest {
     @Test
     void finishLeavesAnAlreadyFinishedWorkRequestAlone() {
         String id = workRequests.inProgress("oke", "CLUSTER_CREATE", "ocid1.compartment.oc1..c", List.of());
-        workRequests.finish(TENANCY, id, "FAILED");
+        workRequests.finish(TENANCY, REGION, id, "FAILED");
 
-        workRequests.finish(TENANCY, id, "SUCCEEDED");
+        workRequests.finish(TENANCY, REGION, id, "SUCCEEDED");
 
         assertEquals("FAILED", workRequests.get(id).getStatus());
     }
 
     @Test
     void finishOfAnUnknownWorkRequestIsANoOp() {
-        workRequests.finish(TENANCY, "ocid1.coreservicesworkrequest.oc1..missing", "SUCCEEDED");
+        workRequests.finish(TENANCY, REGION, "ocid1.coreservicesworkrequest.oc1..missing", "SUCCEEDED");
 
         assertEquals(0, raw.keys().size());
+    }
+
+    @Test
+    void finishInAnotherRegionLeavesTheWorkRequestInProgress() {
+        String id = workRequests.inProgress("oke", "CLUSTER_CREATE", "ocid1.compartment.oc1..c", List.of());
+
+        workRequests.finish(TENANCY, "us-ashburn-1", id, "SUCCEEDED");
+
+        assertEquals("IN_PROGRESS", workRequests.get(id).getStatus());
+        assertEquals(1, raw.keys().size());
+    }
+
+    @Test
+    void identityWorkRequestsInTheRegionalStoreMoveToTheGlobalStore() {
+        StorageBackend<String, StoredWorkRequest> globalRaw = new InMemoryStorage<>();
+        TenancyAwareStorageBackend<StoredWorkRequest> global =
+                new TenancyAwareStorageBackend<>(globalRaw, () -> TENANCY);
+        EmulatorConfig config = mock(EmulatorConfig.class);
+        when(config.defaultRegion()).thenReturn("us-ashburn-1");
+        WorkRequestService service = new WorkRequestService(
+                new TenancyAwareStorageBackend<>(raw, () -> PARTITION), global, config);
+        StoredWorkRequest identity = new StoredWorkRequest();
+        identity.setService("identity");
+        StoredWorkRequest queue = new StoredWorkRequest();
+        queue.setService("queue");
+        raw.put(PARTITION + "/wr-identity", identity);
+        raw.put(PARTITION + "/wr-queue", queue);
+
+        service.moveIdentityWorkRequestsToGlobalStore();
+        service.moveIdentityWorkRequestsToGlobalStore();
+
+        assertEquals("identity", globalRaw.get(TENANCY + "/wr-identity").orElseThrow().getService());
+        assertEquals(List.of("wr-queue"), raw.keys().stream().map(k -> k.substring(k.indexOf('/') + 1)).toList());
     }
 }

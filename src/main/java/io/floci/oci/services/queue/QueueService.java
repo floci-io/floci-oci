@@ -101,7 +101,7 @@ public class QueueService {
         q.setTimeCreated(now);
         q.setTimeUpdated(now);
         q.setLifecycleState("ACTIVE");
-        q.setMessagesEndpoint(config.effectiveBaseUrl());
+        q.setMessagesEndpoint(ociContext.baseUrl());
         q.setRetentionInSeconds(retentionInSeconds != null ? retentionInSeconds : DEFAULT_RETENTION_SECONDS);
         q.setVisibilityInSeconds(visibilityInSeconds != null ? visibilityInSeconds : DEFAULT_VISIBILITY_SECONDS);
         q.setTimeoutInSeconds(timeoutInSeconds != null ? timeoutInSeconds : DEFAULT_TIMEOUT_SECONDS);

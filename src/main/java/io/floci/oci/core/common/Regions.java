@@ -136,6 +136,24 @@ public final class Regions {
                 .orElseGet(() -> name.replaceAll("[^a-z]", "").substring(0, 3));
     }
 
+    /**
+     * The region named by a request {@code Host}, e.g. {@code us-phoenix-1} for
+     * {@code queue.us-phoenix-1.oci.oraclecloud.com:443}: the first dot-separated label that
+     * is a known region name. Empty for hosts such as {@code localhost:4599}.
+     */
+    public static Optional<String> inHost(String host) {
+        if (host == null || host.isBlank()) {
+            return Optional.empty();
+        }
+        String hostname = host.replaceFirst(":\\d+$", "").toLowerCase(Locale.ROOT);
+        for (String label : hostname.split("\\.")) {
+            if (BY_NAME.containsKey(label)) {
+                return Optional.of(label);
+            }
+        }
+        return Optional.empty();
+    }
+
     /** The uppercase region key, e.g. {@code IAD}. */
     public static String key(String name) {
         return code(name).toUpperCase(Locale.ROOT);

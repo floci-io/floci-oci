@@ -11,6 +11,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -47,6 +48,13 @@ public class PersistentStorage<K, V> implements StorageBackend<K, V> {
     @Override
     public void put(K key, V value) {
         store.put(key, value);
+        persistToDisk();
+    }
+
+    @Override
+    public void putAllAndDelete(Map<K, V> puts, Collection<K> deletes) {
+        store.putAll(puts);
+        deletes.forEach(store::remove);
         persistToDisk();
     }
 
