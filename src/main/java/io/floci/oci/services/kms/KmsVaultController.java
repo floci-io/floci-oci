@@ -1,6 +1,7 @@
 package io.floci.oci.services.kms;
 
 import io.floci.oci.core.common.OciPage;
+import io.floci.oci.services.identity.CompartmentValidator;
 import io.floci.oci.services.kms.model.StoredVault;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -31,14 +32,17 @@ import java.util.Map;
 public class KmsVaultController {
 
     private final KmsService service;
+    private final CompartmentValidator compartments;
 
     @Inject
-    public KmsVaultController(KmsService service) {
+    public KmsVaultController(KmsService service, CompartmentValidator compartments) {
         this.service = service;
+        this.compartments = compartments;
     }
 
     @POST
     public Response createVault(Map<String, Object> body) {
+        compartments.requireInBody(str(body, "compartmentId"));
         StoredVault v = service.createVault(str(body, "compartmentId"), str(body, "displayName"),
                 str(body, "vaultType"), stringMap(body, "freeformTags"), definedTags(body));
         return Response.ok(vaultJson(v)).header("etag", v.getEtag()).build();
@@ -55,6 +59,7 @@ public class KmsVaultController {
     public Response listVaults(@QueryParam("compartmentId") String compartmentId,
                                @QueryParam("limit") Integer limit,
                                @QueryParam("page") String page) {
+        compartments.requireInQuery(compartmentId);
         List<Map<String, Object>> summaries = service.listVaults(compartmentId).stream()
                 .map(this::vaultSummaryJson).toList();
         OciPage.Page<Map<String, Object>> result = OciPage.paginate(summaries, limit, page);
@@ -97,6 +102,7 @@ public class KmsVaultController {
     public Response changeCompartment(@PathParam("vaultId") String vaultId,
                                       @HeaderParam("if-match") String ifMatch,
                                       Map<String, Object> body) {
+        compartments.requireInBody(str(body, "compartmentId"));
         service.changeVaultCompartment(vaultId, str(body, "compartmentId"), ifMatch);
         StoredVault v = service.getVault(vaultId);
         // ChangeVaultCompartment has no body — only etag + opc-request-id.

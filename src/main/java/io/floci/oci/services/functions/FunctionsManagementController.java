@@ -3,6 +3,7 @@ package io.floci.oci.services.functions;
 import io.floci.oci.core.common.OciPage;
 import io.floci.oci.services.functions.model.StoredApplication;
 import io.floci.oci.services.functions.model.StoredFunction;
+import io.floci.oci.services.identity.CompartmentValidator;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.Consumes;
@@ -34,10 +35,13 @@ import java.util.Map;
 public class FunctionsManagementController {
 
     private final FunctionsService service;
+    private final CompartmentValidator compartments;
 
     @Inject
-    public FunctionsManagementController(FunctionsService service) {
+    public FunctionsManagementController(FunctionsService service,
+                                         CompartmentValidator compartments) {
         this.service = service;
+        this.compartments = compartments;
     }
 
     // ── Applications ───────────────────────────────────────────────────────────
@@ -45,6 +49,7 @@ public class FunctionsManagementController {
     @POST
     @Path("/applications")
     public Response createApplication(Map<String, Object> body) {
+        compartments.requireInBody(str(body, "compartmentId"));
         StoredApplication app = service.createApplication(
                 str(body, "compartmentId"), str(body, "displayName"),
                 stringList(body, "subnetIds"), stringMap(body, "config"),
@@ -67,6 +72,7 @@ public class FunctionsManagementController {
                                      @QueryParam("lifecycleState") String lifecycleState,
                                      @QueryParam("limit") Integer limit,
                                      @QueryParam("page") String page) {
+        compartments.requireInQuery(compartmentId);
         List<Map<String, Object>> summaries = service.listApplications(compartmentId, displayName, id)
                 .stream()
                 .filter(a -> lifecycleState == null || lifecycleState.equals(a.getLifecycleState()))
@@ -98,6 +104,7 @@ public class FunctionsManagementController {
     public Response changeApplicationCompartment(@PathParam("applicationId") String applicationId,
                                                  @HeaderParam("if-match") String ifMatch,
                                                  Map<String, Object> body) {
+        compartments.requireInBody(str(body, "compartmentId"));
         service.changeApplicationCompartment(applicationId, str(body, "compartmentId"), ifMatch);
         return Response.ok().build();
     }

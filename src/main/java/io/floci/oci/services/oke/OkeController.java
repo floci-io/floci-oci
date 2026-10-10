@@ -4,6 +4,7 @@ import io.floci.oci.core.common.OciException;
 import io.floci.oci.core.common.OciPage;
 import io.floci.oci.core.workrequest.StoredWorkRequest;
 import io.floci.oci.core.workrequest.WorkRequestService;
+import io.floci.oci.services.identity.CompartmentValidator;
 import io.floci.oci.services.oke.model.StoredNodePool;
 import io.floci.oci.services.oke.model.StoredOkeCluster;
 import jakarta.inject.Inject;
@@ -35,12 +36,15 @@ public class OkeController {
             List.of("LEGACY_KUBERNETES", "PUBLIC_ENDPOINT", "PRIVATE_ENDPOINT", "VCN_HOSTNAME");
 
     private final OkeService service;
+    private final CompartmentValidator compartments;
     private final OkeKubeconfigGenerator kubeconfigGenerator;
     private final WorkRequestService workRequests;
 
     @Inject
-    public OkeController(OkeService service, OkeKubeconfigGenerator kubeconfigGenerator, WorkRequestService workRequests) {
+    public OkeController(OkeService service, OkeKubeconfigGenerator kubeconfigGenerator,
+                         WorkRequestService workRequests, CompartmentValidator compartments) {
         this.service = service;
+        this.compartments = compartments;
         this.kubeconfigGenerator = kubeconfigGenerator;
         this.workRequests = workRequests;
     }
@@ -51,6 +55,7 @@ public class OkeController {
     @Path("/clusters")
     public Response createCluster(CreateClusterDetails details) {
         CreateClusterDetails req = details != null ? details : new CreateClusterDetails();
+        compartments.requireInBody(req.compartmentId);
         OkeService.CreateClusterResult result = service.createCluster(
             req.compartmentId,
             req.name,
@@ -77,6 +82,7 @@ public class OkeController {
     @GET
     @Path("/clusters")
     public Response listClusters(@QueryParam("compartmentId") String compartmentId) {
+        compartments.requireInQuery(compartmentId);
         List<Map<String, Object>> clusters = service.listClusters(compartmentId).stream()
                 .map(StoredOkeCluster::toWire)
                 .toList();
@@ -130,6 +136,7 @@ public class OkeController {
     @Path("/nodePools")
     public Response createNodePool(CreateNodePoolDetails details) {
         CreateNodePoolDetails req = details != null ? details : new CreateNodePoolDetails();
+        compartments.requireInBody(req.compartmentId);
         OkeService.CreateNodePoolResult result = service.createNodePool(
             req.compartmentId,
             req.clusterId,
@@ -158,6 +165,7 @@ public class OkeController {
     @Path("/nodePools")
     public Response listNodePools(@QueryParam("compartmentId") String compartmentId,
                                   @QueryParam("clusterId") String clusterId) {
+        compartments.requireInQuery(compartmentId);
         List<StoredNodePool> pools = service.listNodePools(compartmentId, clusterId);
         return Response.ok(pools).build();
     }
@@ -220,6 +228,7 @@ public class OkeController {
     public Response listWorkRequests(@QueryParam("compartmentId") String compartmentId,
                                       @QueryParam("limit") Integer limit,
                                       @QueryParam("page") String page) {
+        compartments.requireInQuery(compartmentId);
         OciPage.Page<Map<String, Object>> result = OciPage.paginate(
                 workRequests.list("oke", compartmentId).stream()
                         .map(StoredWorkRequest::toWire).toList(), limit, page);

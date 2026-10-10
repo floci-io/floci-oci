@@ -1,6 +1,7 @@
 package io.floci.oci.services.vault;
 
 import io.floci.oci.core.common.OciPage;
+import io.floci.oci.services.identity.CompartmentValidator;
 import io.floci.oci.services.vault.model.StoredVaultSecret;
 import io.floci.oci.services.vault.model.StoredVaultSecret.StoredSecretVersion;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -34,14 +35,17 @@ import java.util.Map;
 public class VaultSecretsController {
 
     private final VaultSecretsService service;
+    private final CompartmentValidator compartments;
 
     @Inject
-    public VaultSecretsController(VaultSecretsService service) {
+    public VaultSecretsController(VaultSecretsService service, CompartmentValidator compartments) {
         this.service = service;
+        this.compartments = compartments;
     }
 
     @POST
     public Response createSecret(Map<String, Object> body) {
+        compartments.requireInBody(str(body, "compartmentId"));
         StoredVaultSecret secret = service.createSecret(
                 str(body, "compartmentId"), str(body, "vaultId"), str(body, "keyId"),
                 str(body, "secretName"), str(body, "description"),
@@ -63,6 +67,7 @@ public class VaultSecretsController {
                                 @QueryParam("name") String name,
                                 @QueryParam("limit") Integer limit,
                                 @QueryParam("page") String page) {
+        compartments.requireInQuery(compartmentId);
         List<Map<String, Object>> summaries = service.listSecrets(compartmentId, vaultId, name)
                 .stream().map(VaultSecretsController::secretJson).toList();
         OciPage.Page<Map<String, Object>> result = OciPage.paginate(summaries, limit, page);
@@ -108,6 +113,7 @@ public class VaultSecretsController {
     public Response changeCompartment(@PathParam("secretId") String secretId,
                                       @HeaderParam("if-match") String ifMatch,
                                       Map<String, Object> body) {
+        compartments.requireInBody(str(body, "compartmentId"));
         service.changeSecretCompartment(secretId, str(body, "compartmentId"), ifMatch);
         return Response.ok().build();
     }

@@ -3,6 +3,7 @@ package io.floci.oci.services.streaming;
 import io.floci.oci.core.common.OciPage;
 import io.floci.oci.core.workrequest.StoredWorkRequest;
 import io.floci.oci.core.workrequest.WorkRequestService;
+import io.floci.oci.services.identity.CompartmentValidator;
 import io.floci.oci.services.streaming.model.StoredStream;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -36,17 +37,21 @@ import java.util.Map;
 public class StreamAdminController {
 
     private final StreamingService service;
+    private final CompartmentValidator compartments;
     private final WorkRequestService workRequests;
 
     @Inject
-    public StreamAdminController(StreamingService service, WorkRequestService workRequests) {
+    public StreamAdminController(StreamingService service, WorkRequestService workRequests,
+                                 CompartmentValidator compartments) {
         this.service = service;
+        this.compartments = compartments;
         this.workRequests = workRequests;
     }
 
     @POST
     @Path("/streams")
     public Response createStream(Map<String, Object> body) {
+        compartments.requireInBody(str(body, "compartmentId"));
         StreamingService.CreatedStream created = service.createStream(
                 str(body, "name"), integer(body, "partitions"), integer(body, "retentionInHours"),
                 str(body, "compartmentId"), str(body, "streamPoolId"),
@@ -71,6 +76,7 @@ public class StreamAdminController {
                                 @QueryParam("name") String name,
                                 @QueryParam("limit") Integer limit,
                                 @QueryParam("page") String page) {
+        compartments.requireInQuery(compartmentId);
         List<Map<String, Object>> summaries = service.listStreams(compartmentId, streamPoolId, name)
                 .stream().map(this::streamSummaryJson).toList();
         OciPage.Page<Map<String, Object>> result = OciPage.paginate(summaries, limit, page);
@@ -116,6 +122,7 @@ public class StreamAdminController {
     public Response listWorkRequests(@QueryParam("compartmentId") String compartmentId,
                                      @QueryParam("limit") Integer limit,
                                      @QueryParam("page") String page) {
+        compartments.requireInQuery(compartmentId);
         List<Map<String, Object>> items = workRequests.list(StreamingService.WR_SERVICE, compartmentId)
                 .stream().map(StoredWorkRequest::toWire).toList();
         OciPage.Page<Map<String, Object>> result = OciPage.paginate(items, limit, page);

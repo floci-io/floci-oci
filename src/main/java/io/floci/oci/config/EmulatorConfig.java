@@ -200,6 +200,10 @@ public interface EmulatorConfig {
         interface IdentityServiceConfig {
             @WithDefault("true")
             boolean enabled();
+
+            /** Reject unknown or non-ACTIVE compartments in other services' requests. */
+            @WithDefault("false")
+            boolean strictCompartments();
         }
 
         interface ObjectStorageServiceConfig {
