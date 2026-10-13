@@ -90,8 +90,9 @@ public class FnServerManager {
                 .withNamedVolume(iofsVolume, "/iofs")
                 .withDockerNetwork(config.services().dockerNetwork())
                 .withLogRotation()
-                .withLabels(ContainerStorageHelper.resourceIdentityLabels(
-                        "functions", null, null, config.defaultRegion()))
+                // One Fn server serves every tenancy and region, so it names no resource,
+                // compartment or region.
+                .withLabels(ContainerStorageHelper.resourceIdentityLabels("functions", null, null, null))
                 .build();
         ContainerLifecycleManager.ContainerInfo info = lifecycleManager.createAndStart(spec);
         containerId = info.containerId();

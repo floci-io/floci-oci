@@ -68,7 +68,7 @@ class FnServerManagerTest {
         ArgumentCaptor<ContainerSpec> spec = ArgumentCaptor.forClass(ContainerSpec.class);
         verify(lifecycleManager).createAndStart(spec.capture());
         assertEquals(
-                Map.of("io.floci", "oci", "io.floci.service", "functions", "io.floci.region", "us-ashburn-1"),
+                Map.of("io.floci", "oci", "io.floci.service", "functions"),
                 spec.getValue().labels());
     }
 }

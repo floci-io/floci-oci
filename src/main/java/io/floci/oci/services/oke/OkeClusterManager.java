@@ -152,7 +152,7 @@ public class OkeClusterManager implements Resettable {
                         .withHostDockerInternalOnLinux()
                         .withPrivileged(true)
                         .withLabels(ContainerStorageHelper.resourceIdentityLabels(
-                                "oke", cluster.getId(), cluster.getCompartmentId(), config.defaultRegion()))
+                                "oke", cluster.getId(), cluster.getCompartmentId(), clusterRegion(cluster)))
                         .build();
 
                 lifecycleManager.createAndStart(spec);
@@ -310,6 +310,11 @@ public class OkeClusterManager implements Resettable {
         return config.services().dockerNetwork()
                 .filter(n -> !n.isBlank())
                 .or(networkResolver::resolveNetworkName);
+    }
+
+    /** The region the cluster was created in; clusters persisted before regions were recorded use the default. */
+    private String clusterRegion(StoredOkeCluster cluster) {
+        return cluster.getRegion() != null ? cluster.getRegion() : config.defaultRegion();
     }
 
     private String containerName(StoredOkeCluster cluster) {

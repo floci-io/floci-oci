@@ -466,4 +466,25 @@ class OkeClusterManagerTest {
                         "io.floci.region", "us-ashburn-1"),
                 spec.getValue().labels());
     }
+
+    @Test
+    void startClusterLabelsContainerWithTheClusterRegion() {
+        OkeClusterManager labelledManager = new OkeClusterManager(
+                new ContainerBuilder(config, mock(DockerHostResolver.class), null), lifecycleManager, portAllocator,
+                dockerHostResolver, containerDetector, networkResolver, config);
+        when(portAllocator.allocate(6443, 6543)).thenReturn(6443);
+        when(lifecycleManager.createAndStart(any())).thenReturn(new ContainerLifecycleManager.ContainerInfo("c-1", Map.of()));
+        StoredOkeCluster cluster = new StoredOkeCluster();
+        cluster.setId("ocid1.cluster.oc1.phx.labelled002");
+        cluster.setCompartmentId("ocid1.compartment.oc1..labelled");
+        cluster.setName("phoenix-cluster");
+        cluster.setApiToken("token-labelled002");
+        cluster.setRegion("us-phoenix-1");
+
+        labelledManager.startCluster(cluster);
+
+        ArgumentCaptor<ContainerSpec> spec = ArgumentCaptor.forClass(ContainerSpec.class);
+        verify(lifecycleManager).createAndStart(spec.capture());
+        assertEquals("us-phoenix-1", spec.getValue().labels().get("io.floci.region"));
+    }
 }

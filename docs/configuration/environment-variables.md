@@ -59,7 +59,7 @@ it back to that resource, additive to the base labels:
 | `io.floci.service` | e.g. `oke` | The OCI service the container backs |
 | `io.floci.resource-id` | e.g. `ocid1.cluster.oc1.iad.…` | The resource OCID, as the OCI CLI and SDKs take it |
 | `io.floci.compartment` | the compartment OCID | The compartment the resource belongs to |
-| `io.floci.region` | e.g. `us-ashburn-1` | The region the resource belongs to (`FLOCI_OCI_DEFAULT_REGION`) |
+| `io.floci.region` | e.g. `us-ashburn-1` | The region the resource belongs to (an OKE cluster's own region). The shared Fn server serves every region and carries no region label |
 | `floci_service` | same value as `io.floci.service` | Legacy alias, written alongside `io.floci.service`; prefer the new key |
 
 This makes `docker ps --filter label=io.floci.resource-id=<cluster-ocid>` resolve an emulated
