@@ -35,6 +35,24 @@ public class OciContext {
         return RequestContext.currentTenancyId(requestContext, config.defaultTenancyId());
     }
 
+    /**
+     * The user OCID from the request's signing key, or the tenancy OCID for unsigned requests
+     * and outside a request scope, where no user is known.
+     */
+    public String userIdOrTenancy() {
+        if (requestContext != null) {
+            try {
+                String userId = requestContext.get().getUserId();
+                if (userId != null) {
+                    return userId;
+                }
+            } catch (ContextNotActiveException ignored) {
+                // Outside request scope: fall through to the tenancy.
+            }
+        }
+        return tenancyId();
+    }
+
     /** The region the request addresses, e.g. {@code us-ashburn-1}. */
     public String region() {
         if (requestContext != null) {

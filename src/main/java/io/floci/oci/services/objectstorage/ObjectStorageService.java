@@ -104,8 +104,8 @@ public class ObjectStorageService {
     public Map<String, Object> namespaceMetadata(String namespaceName) {
         return Map.of(
                 "namespace", namespace(),
-                "defaultS3CompartmentId", config.defaultTenancyId(),
-                "defaultSwiftCompartmentId", config.defaultTenancyId());
+                "defaultS3CompartmentId", ociContext.tenancyId(),
+                "defaultSwiftCompartmentId", ociContext.tenancyId());
     }
 
     // ── Buckets ────────────────────────────────────────────────────────────────
@@ -130,7 +130,7 @@ public class ObjectStorageService {
         b.setName(name);
         b.setCompartmentId(compartmentId);
         b.setMetadata(metadata == null ? Map.of() : metadata);
-        b.setCreatedBy(config.defaultTenancyId());
+        b.setCreatedBy(ociContext.userIdOrTenancy());
         b.setTimeCreated(Instant.now().toString());
         b.setEtag(Etags.newEtag());
         b.setPublicAccessType(publicAccessType != null ? publicAccessType : "NoPublicAccess");

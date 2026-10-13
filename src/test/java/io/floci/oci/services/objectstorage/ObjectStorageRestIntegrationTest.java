@@ -417,4 +417,36 @@ class ObjectStorageRestIntegrationTest {
                 .body("code", equalTo("InvalidParameter"));
         given().when().delete("/n/" + NS + "/b/" + bucket).then().statusCode(204);
     }
+
+    @Test
+    void namespaceDefaultsAndBucketCreatorComeFromTheSigningKey() {
+        String tenancy = "ocid1.tenancy.oc1..itossigner";
+        String user = "ocid1.user.oc1..itossuser";
+        String auth = "Signature version=\"1\",keyId=\"" + tenancy + "/" + user + "/aa:bb\","
+                + "algorithm=\"rsa-sha256\",headers=\"date (request-target) host\","
+                + "signature=\"ZmFrZXNpZ25hdHVyZQ==\"";
+
+        given().header("Authorization", auth)
+            .when().get("/n/" + NS)
+            .then().statusCode(200)
+                .body("defaultS3CompartmentId", equalTo(tenancy))
+                .body("defaultSwiftCompartmentId", equalTo(tenancy));
+
+        given().header("Authorization", auth)
+                .contentType("application/json")
+                .body(Map.of("name", "it-signed-" + System.nanoTime(), "compartmentId", tenancy))
+            .when().post("/n/" + NS + "/b")
+            .then().statusCode(200)
+                .body("createdBy", equalTo(user));
+    }
+
+    @Test
+    void unsignedBucketCreatorFallsBackToTheDefaultTenancy() {
+        given()
+                .contentType("application/json")
+                .body(Map.of("name", "it-unsigned-" + System.nanoTime(), "compartmentId", COMPARTMENT))
+            .when().post("/n/" + NS + "/b")
+            .then().statusCode(200)
+                .body("createdBy", startsWith("ocid1.tenancy."));
+    }
 }
