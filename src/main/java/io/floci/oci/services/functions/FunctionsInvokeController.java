@@ -1,5 +1,6 @@
 package io.floci.oci.services.functions;
 
+import io.floci.oci.core.common.RequestContextPropagation;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.Consumes;
@@ -9,6 +10,7 @@ import jakarta.ws.rs.Path;
 import jakarta.ws.rs.PathParam;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
+import org.jboss.logging.Logger;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -23,11 +25,16 @@ import java.io.InputStream;
 @ApplicationScoped
 public class FunctionsInvokeController {
 
+    private static final Logger LOG = Logger.getLogger(FunctionsInvokeController.class);
+
     private final FunctionsService service;
+    private final RequestContextPropagation contextPropagation;
 
     @Inject
-    public FunctionsInvokeController(FunctionsService service) {
+    public FunctionsInvokeController(FunctionsService service,
+                                     RequestContextPropagation contextPropagation) {
         this.service = service;
+        this.contextPropagation = contextPropagation;
     }
 
     @POST
@@ -43,15 +50,17 @@ public class FunctionsInvokeController {
         }
         byte[] payload = body != null ? body.readAllBytes() : new byte[0];
         if ("detached".equalsIgnoreCase(invokeType)) {
-            // Detached: fire on a worker thread, respond immediately with an empty body.
-            Thread.ofVirtual().start(() -> {
+            // Detached: validate now, then run on a worker thread as the caller (same tenancy and
+            // region) and respond immediately with an empty body.
+            service.getFunction(functionId);
+            Thread.ofVirtual().start(contextPropagation.withCurrentContext(() -> {
                 try {
                     service.invoke(functionId, payload, contentType);
-                } catch (RuntimeException ignored) {
-                    // Detached invocations report nothing back.
+                } catch (RuntimeException e) {
+                    // The client has already had its 202; the log is the only place this can surface.
+                    LOG.warnv("Detached invocation of {0} failed: {1}", functionId, e.getMessage());
                 }
-            });
-            service.getFunction(functionId);
+            }));
             return Response.accepted().build();
         }
         FunctionsService.InvokeResult result = service.invoke(functionId, payload, contentType);
