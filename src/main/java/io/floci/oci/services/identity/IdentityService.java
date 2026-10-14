@@ -682,6 +682,23 @@ public class IdentityService {
         return sub;
     }
 
+    /**
+     * Whether the caller's tenancy is subscribed to {@code regionName}. The home region always
+     * is; a region in another realm never is.
+     *
+     * <p>Called for every request, so it takes no lock and writes nothing.
+     */
+    public boolean isSubscribed(String regionName) {
+        String home = tenancies.homeRegionOrDefault(tenancyId());
+        if (regionName.equals(home)) {
+            return true;
+        }
+        return Regions.byName(regionName)
+                .filter(region -> region.realm().equals(ociContext.realmOf(home)))
+                .flatMap(region -> regionSubscriptions.get(region.key()))
+                .isPresent();
+    }
+
     public Map<String, Object> tenancy(String tenancyOcid) {
         if (!tenancyOcid.equals(tenancyId())) {
             throw notFound("tenancy", tenancyOcid);

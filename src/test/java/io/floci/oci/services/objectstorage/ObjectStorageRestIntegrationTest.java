@@ -1,6 +1,7 @@
 package io.floci.oci.services.objectstorage;
 
 import io.floci.oci.config.EmulatorConfig;
+import io.floci.oci.testing.TestRegions;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.Test;
@@ -519,6 +520,7 @@ class ObjectStorageRestIntegrationTest {
     @Test
     void copyObjectWritesIntoTheDestinationRegion() {
         String phoenix = "objectstorage.us-phoenix-1.oraclecloud.com";
+        TestRegions.subscribe("ocid1.tenancy.oc1..flocitesttenancy00000000000000000000000000000000000000000", "PHX");
         String source = uniqueBucket("it-copy-src");
         String target = uniqueBucket("it-copy-dst");
         createBucket(source);

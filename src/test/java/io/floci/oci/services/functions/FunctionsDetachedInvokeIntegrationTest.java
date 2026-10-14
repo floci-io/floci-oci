@@ -6,11 +6,14 @@ import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.Test;
 
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 import static io.restassured.RestAssured.given;
+import static org.hamcrest.Matchers.anyOf;
+import static org.hamcrest.Matchers.is;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
@@ -35,6 +38,12 @@ class FunctionsDetachedInvokeIntegrationTest {
 
     @Test
     void detachedInvokeRunsAsTheCallerAfterTheResponse() throws Exception {
+        given()
+                .header("Authorization", AUTH)
+                .contentType("application/json")
+                .body(Map.of("regionKey", "PHX"))
+            .when().post("/20160918/tenancies/" + TENANCY + "/regionSubscriptions")
+            .then().statusCode(anyOf(is(200), is(409)));
         CountDownLatch responded = new CountDownLatch(1);
         CompletableFuture<String> seen = new CompletableFuture<>();
         when(service.invoke(eq(FUNCTION_ID), any(), any())).thenAnswer(invocation -> {

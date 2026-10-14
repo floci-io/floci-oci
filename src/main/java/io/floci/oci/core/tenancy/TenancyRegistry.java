@@ -81,6 +81,15 @@ public class TenancyRegistry {
         return TenancyAwareStorageBackend.getIn(tenancies, tenancyId, tenancyId);
     }
 
+    /**
+     * The home region of {@code tenancyId} without registering it: a tenancy that is not
+     * registered yet has {@code default-region}, which is what registering it would record.
+     * Safe on the path of every request, since it never writes.
+     */
+    public String homeRegionOrDefault(String tenancyId) {
+        return find(tenancyId).map(StoredTenancy::getHomeRegion).orElse(config.defaultRegion());
+    }
+
     public String homeRegion(String tenancyId) {
         return get(tenancyId).getHomeRegion();
     }

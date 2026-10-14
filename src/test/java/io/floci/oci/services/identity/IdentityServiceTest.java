@@ -270,6 +270,18 @@ class IdentityServiceTest {
         return context;
     }
 
+    @Test
+    void onlyTheHomeRegionAndSubscribedRegionsOfItsRealmAreSubscribed() {
+        assertTrue(service.isSubscribed("us-ashburn-1"));
+        assertFalse(service.isSubscribed("us-phoenix-1"));
+
+        service.createRegionSubscription("PHX");
+
+        assertTrue(service.isSubscribed("us-phoenix-1"));
+        assertFalse(service.isSubscribed("uk-gov-london-1"));
+        assertFalse(service.isSubscribed("not-a-region"));
+    }
+
     // Reads without a request context fall back to readsAs, standing in for the signed tenancy.
     private static <V> TenancyAwareStorageBackend<V> tenancyAware(String readsAs) {
         return new TenancyAwareStorageBackend<>(new InMemoryStorage<>(), null, readsAs);

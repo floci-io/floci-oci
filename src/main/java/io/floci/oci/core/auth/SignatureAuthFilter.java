@@ -44,10 +44,10 @@ public class SignatureAuthFilter implements ContainerRequestFilter {
     jakarta.inject.Provider<EmulatorConfig> configProvider;
 
     @Inject
-    RequestContext requestContext;
+    jakarta.inject.Provider<TenancyRegistry> tenancies;
 
     @Inject
-    jakarta.inject.Provider<TenancyRegistry> tenancies;
+    RequestContext requestContext;
 
     @Override
     public void filter(ContainerRequestContext ctx) {
@@ -78,7 +78,9 @@ public class SignatureAuthFilter implements ContainerRequestFilter {
         }
         String host = ctx.getHeaderString(HttpHeaders.HOST);
         Optional<String> hostRegion = Regions.inHost(host);
-        requestContext.setRegion(hostRegion.orElse(config.defaultRegion()));
+        // A host that names no region (localhost) reaches the tenancy's home region.
+        requestContext.setRegion(hostRegion.orElseGet(
+                () -> tenancies.get().homeRegionOrDefault(requestContext.getTenancyId())));
         if (hostRegion.isPresent()) {
             requestContext.setBaseUrl(ctx.getUriInfo().getBaseUri().getScheme() + "://" + host);
         }

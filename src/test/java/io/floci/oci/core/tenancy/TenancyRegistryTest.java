@@ -52,6 +52,16 @@ class TenancyRegistryTest {
     }
 
     @Test
+    void homeRegionOrDefaultAnswersWithoutRegistering() {
+        StoredTenancy child = registry.registerChild(TENANCY, "child", "us-phoenix-1");
+        int stored = raw.keys().size();
+
+        assertEquals("us-phoenix-1", registry.homeRegionOrDefault(child.getId()));
+        assertEquals("us-ashburn-1", registry.homeRegionOrDefault("ocid1.tenancy.oc1..unseen"));
+        assertEquals(stored, raw.keys().size());
+    }
+
+    @Test
     void findDoesNotRegister() {
         assertTrue(registry.find("ocid1.tenancy.oc1..unseen").isEmpty());
         assertEquals(0, raw.keys().size());

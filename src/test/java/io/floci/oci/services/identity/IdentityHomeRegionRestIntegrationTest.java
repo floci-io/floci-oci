@@ -1,6 +1,7 @@
 package io.floci.oci.services.identity;
 
 import io.floci.oci.core.tenancy.TenancyRegistry;
+import io.floci.oci.testing.TestRegions;
 import io.quarkus.test.junit.QuarkusTest;
 import io.restassured.response.Response;
 import io.restassured.specification.RequestSpecification;
@@ -9,11 +10,13 @@ import jakarta.ws.rs.DELETE;
 import jakarta.ws.rs.POST;
 import jakarta.ws.rs.PUT;
 import jakarta.ws.rs.Path;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.equalTo;
@@ -43,6 +46,11 @@ class IdentityHomeRegionRestIntegrationTest {
                 + "signature=\"ZmFrZXNpZ25hdHVyZQ==\"";
     }
 
+    @BeforeEach
+    void subscribePhoenix() {
+        TestRegions.subscribe(TENANCY, "PHX");
+    }
+
     @Test
     void everyWriteOutsideTheHomeRegionIsNotAllowed() {
         List<Method> writes = writes(false);
@@ -66,6 +74,10 @@ class IdentityHomeRegionRestIntegrationTest {
     @Test
     void writesFollowTheCallersOwnHomeRegion() {
         String child = tenancies.registerChild(TENANCY, "phoenix-writer", "us-phoenix-1").getId();
+        given().header("Authorization", signedAs(child)).contentType("application/json")
+                .body(Map.of("regionKey", "IAD"))
+            .when().post("/20160918/tenancies/" + child + "/regionSubscriptions")
+            .then().statusCode(200);
         for (Method write : writes(false)) {
             assertNotEquals(403, send(write, PHOENIX_IDENTITY, child).statusCode(), write.getName());
             send(write, ASHBURN_IDENTITY, child)

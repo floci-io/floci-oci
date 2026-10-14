@@ -1,6 +1,7 @@
 package io.floci.oci.services.oke;
 
 import io.floci.oci.config.EmulatorConfig;
+import io.floci.oci.testing.TestRegions;
 import io.quarkus.test.junit.QuarkusTest;
 import io.restassured.http.ContentType;
 import io.restassured.path.json.JsonPath;
@@ -228,6 +229,7 @@ class OkeRestIntegrationTest {
 
     @Test
     void tokenWebhookAuthenticatesATokenForAClusterInAnotherRegion() {
+        TestRegions.subscribe(config.defaultTenancyId(), "PHX");
         String clusterId = given()
             .header("Host", "containerengine.us-phoenix-1.oci.oraclecloud.com")
             .contentType(ContentType.JSON)
