@@ -587,7 +587,8 @@ public class ContainerLifecycleManager {
         }
         if (!finished) {
             return new ExecResult(-1, stdout.toString(StandardCharsets.UTF_8),
-                    "timed out after " + timeout.toSeconds() + "s");
+                    stderr.toString(StandardCharsets.UTF_8)
+                            + "\ntimed out after " + timeout.toSeconds() + "s");
         }
         Long exitCode = dockerClient.inspectExecCmd(execId).exec().getExitCodeLong();
         return new ExecResult(exitCode == null ? -1 : exitCode.intValue(),
