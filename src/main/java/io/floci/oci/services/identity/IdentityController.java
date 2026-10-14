@@ -320,7 +320,9 @@ public class IdentityController {
         return Response.ok(service.regionSubscriptions()).build();
     }
 
+    // The SDKs tie only the bulk operations to the home region, not region subscriptions.
     @POST
+    @AnyRegionWrite
     @Path("/tenancies/{tenancyId}/regionSubscriptions")
     public Response createRegionSubscription(@PathParam("tenancyId") String tenancyId,
                                              Map<String, Object> body) {

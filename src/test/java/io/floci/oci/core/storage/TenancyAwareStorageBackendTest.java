@@ -58,4 +58,26 @@ class TenancyAwareStorageBackendTest {
         region.set("us-ashburn-1");
         assertEquals("pre-tenancy", store.get("bucket/object").orElseThrow());
     }
+
+    @Test
+    void getInAndPutInReachAnotherPartition() {
+        TenancyAwareStorageBackend<String> store = new TenancyAwareStorageBackend<>(
+                new InMemoryStorage<>(), () -> TENANCY + ":us-ashburn-1");
+        String phoenix = TenancyAwareStorageBackend.regionalPartition(TENANCY, "us-phoenix-1");
+
+        TenancyAwareStorageBackend.putIn(store, phoenix, "q1", "phoenix");
+
+        assertTrue(store.get("q1").isEmpty());
+        assertEquals("phoenix", TenancyAwareStorageBackend.getIn(store, phoenix, "q1").orElseThrow());
+    }
+
+    @Test
+    void getInAndPutInTreatAPlainStoreAsOnePartition() {
+        InMemoryStorage<String, String> plain = new InMemoryStorage<>();
+
+        TenancyAwareStorageBackend.putIn(plain, "ignored", "q1", "value");
+
+        assertEquals("value", plain.get("q1").orElseThrow());
+        assertEquals("value", TenancyAwareStorageBackend.getIn(plain, "other", "q1").orElseThrow());
+    }
 }

@@ -30,11 +30,6 @@ public class OciException extends RuntimeException {
         return new OciException("NotAuthenticated", message, 401);
     }
 
-    /** IAM writes are only accepted at the tenancy's home region endpoint. */
-    public static OciException notAllowed(String message) {
-        return new OciException("NotAllowed", message, 403);
-    }
-
     /** OCI deliberately reports missing resources and denied access identically. */
     public static OciException notAuthorizedOrNotFound(String message) {
         return new OciException("NotAuthorizedOrNotFound", message, 404);

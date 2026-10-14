@@ -70,10 +70,7 @@ public class TenancyRegistry {
 
     /** The tenancy {@code tenancyId} if it is registered, without registering it. */
     public Optional<StoredTenancy> find(String tenancyId) {
-        if (tenancies instanceof TenancyAwareStorageBackend<StoredTenancy> tenancyAware) {
-            return tenancyAware.getForTenancy(tenancyId, tenancyId);
-        }
-        return tenancies.get(tenancyId);
+        return TenancyAwareStorageBackend.getIn(tenancies, tenancyId, tenancyId);
     }
 
     public String homeRegion(String tenancyId) {
@@ -103,10 +100,6 @@ public class TenancyRegistry {
     }
 
     private void save(StoredTenancy tenancy) {
-        if (tenancies instanceof TenancyAwareStorageBackend<StoredTenancy> tenancyAware) {
-            tenancyAware.putForTenancy(tenancy.getId(), tenancy.getId(), tenancy);
-        } else {
-            tenancies.put(tenancy.getId(), tenancy);
-        }
+        TenancyAwareStorageBackend.putIn(tenancies, tenancy.getId(), tenancy.getId(), tenancy);
     }
 }

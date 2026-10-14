@@ -190,6 +190,26 @@ public class TenancyAwareStorageBackend<V> implements StorageBackend<String, V> 
         return result;
     }
 
+    /**
+     * Reads {@code key} from {@code partition} of {@code store}, whatever partition the current
+     * request addresses. A store that is not tenancy-aware (unit tests) has one partition.
+     */
+    public static <V> Optional<V> getIn(StorageBackend<String, V> store, String partition, String key) {
+        if (store instanceof TenancyAwareStorageBackend<V> tenancyAware) {
+            return tenancyAware.getForTenancy(partition, key);
+        }
+        return store.get(key);
+    }
+
+    /** Writes {@code key} into {@code partition} of {@code store}; see {@link #getIn}. */
+    public static <V> void putIn(StorageBackend<String, V> store, String partition, String key, V value) {
+        if (store instanceof TenancyAwareStorageBackend<V> tenancyAware) {
+            tenancyAware.putForTenancy(partition, key, value);
+        } else {
+            store.put(key, value);
+        }
+    }
+
     public Optional<V> getForTenancy(String tenancyId, String key) {
         return delegate.get(tenancyId + "/" + key);
     }

@@ -49,6 +49,8 @@ oci iam compartment list --endpoint http://localhost:4599 --compartment-id "$TEN
   home region."). Reads work in every region, and changes are visible everywhere at once (real
   OCI takes a few minutes to propagate them). Clients that never set a region host use
   `default-region`, which is the default home, so they are unaffected.
+  `CreateRegionSubscription` is accepted in every region: the SDKs do not tie it to the home
+  region, so floci-oci does not either.
 - Policy statements are stored verbatim; the policy language is not parsed or enforced.
 - Identity domains, API keys, auth tokens, dynamic groups and tag namespaces are not
   implemented yet.
