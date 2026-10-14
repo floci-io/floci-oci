@@ -186,6 +186,7 @@ public class IdentityService {
     public synchronized StoredCompartment createCompartment(String parentId, String name, String description,
                                                Map<String, String> freeformTags,
                                                Map<String, Map<String, Object>> definedTags) {
+        requireHomeRegion();
         requireNonBlank(name, "name");
         requireNonBlank(description, "description");
         String parent = parentId != null ? parentId : tenancyId();
@@ -243,6 +244,7 @@ public class IdentityService {
                                                Map<String, String> freeformTags,
                                                Map<String, Map<String, Object>> definedTags,
                                                String ifMatch) {
+        requireHomeRegion();
         StoredCompartment c = getCompartment(compartmentId);
         Etags.checkIfMatch(ifMatch, c.getEtag());
         if (name != null) {
@@ -264,6 +266,7 @@ public class IdentityService {
 
     /** Deletion is async on real OCI: returns the work-request OCID for the 202 response. */
     public synchronized String deleteCompartment(String compartmentId, String ifMatch) {
+        requireHomeRegion();
         StoredCompartment c = compartments.get(compartmentId)
                 .orElseThrow(() -> notFound("compartment", compartmentId));
         Etags.checkIfMatch(ifMatch, c.getEtag());
@@ -285,6 +288,7 @@ public class IdentityService {
     /** Moving is async on real OCI: returns the work-request OCID for the 202 response. */
     public synchronized String moveCompartment(String compartmentId, String targetCompartmentId,
                                                String ifMatch) {
+        requireHomeRegion();
         requireNonBlank(targetCompartmentId, "targetCompartmentId");
         if (compartmentId.equals(tenancyId())) {
             throw OciException.invalidParameter("The root compartment cannot be moved.");
@@ -310,6 +314,7 @@ public class IdentityService {
     }
 
     public synchronized StoredCompartment recoverCompartment(String compartmentId, String ifMatch) {
+        requireHomeRegion();
         StoredCompartment c = compartments.get(compartmentId)
                 .orElseThrow(() -> notFound("compartment", compartmentId));
         Etags.checkIfMatch(ifMatch, c.getEtag());
@@ -331,6 +336,7 @@ public class IdentityService {
     public StoredUser createUser(String name, String description, String email,
                                  Map<String, String> freeformTags,
                                  Map<String, Map<String, Object>> definedTags) {
+        requireHomeRegion();
         requireNonBlank(name, "name");
         requireNonBlank(description, "description");
         boolean duplicate = users.scan(k -> true).stream()
@@ -370,6 +376,7 @@ public class IdentityService {
                                  Map<String, String> freeformTags,
                                  Map<String, Map<String, Object>> definedTags,
                                  String ifMatch) {
+        requireHomeRegion();
         StoredUser u = getUser(userId);
         Etags.checkIfMatch(ifMatch, u.getEtag());
         if (description != null) {
@@ -390,6 +397,7 @@ public class IdentityService {
     }
 
     public void deleteUser(String userId, String ifMatch) {
+        requireHomeRegion();
         StoredUser u = getUser(userId);
         Etags.checkIfMatch(ifMatch, u.getEtag());
         memberships.scan(k -> true).stream()
@@ -403,6 +411,7 @@ public class IdentityService {
     public StoredGroup createGroup(String name, String description,
                                    Map<String, String> freeformTags,
                                    Map<String, Map<String, Object>> definedTags) {
+        requireHomeRegion();
         requireNonBlank(name, "name");
         requireNonBlank(description, "description");
         boolean duplicate = groups.scan(k -> true).stream()
@@ -438,6 +447,7 @@ public class IdentityService {
                                    Map<String, String> freeformTags,
                                    Map<String, Map<String, Object>> definedTags,
                                    String ifMatch) {
+        requireHomeRegion();
         StoredGroup g = getGroup(groupId);
         Etags.checkIfMatch(ifMatch, g.getEtag());
         if (description != null) {
@@ -455,6 +465,7 @@ public class IdentityService {
     }
 
     public void deleteGroup(String groupId, String ifMatch) {
+        requireHomeRegion();
         StoredGroup g = getGroup(groupId);
         Etags.checkIfMatch(ifMatch, g.getEtag());
         memberships.scan(k -> true).stream()
@@ -466,6 +477,7 @@ public class IdentityService {
     // ── User group memberships ─────────────────────────────────────────────────
 
     public StoredUserGroupMembership addUserToGroup(String userId, String groupId) {
+        requireHomeRegion();
         getUser(userId);
         getGroup(groupId);
         boolean duplicate = memberships.scan(k -> true).stream()
@@ -499,6 +511,7 @@ public class IdentityService {
     }
 
     public void removeUserFromGroup(String membershipId) {
+        requireHomeRegion();
         getMembership(membershipId);
         memberships.delete(membershipId);
     }
@@ -509,6 +522,7 @@ public class IdentityService {
                                      List<String> statements, String versionDate,
                                      Map<String, String> freeformTags,
                                      Map<String, Map<String, Object>> definedTags) {
+        requireHomeRegion();
         requireNonBlank(name, "name");
         requireNonBlank(description, "description");
         if (statements == null || statements.isEmpty()) {
@@ -553,6 +567,7 @@ public class IdentityService {
                                      Map<String, String> freeformTags,
                                      Map<String, Map<String, Object>> definedTags,
                                      String ifMatch) {
+        requireHomeRegion();
         StoredPolicy p = getPolicy(policyId);
         Etags.checkIfMatch(ifMatch, p.getEtag());
         if (description != null) {
@@ -576,6 +591,7 @@ public class IdentityService {
     }
 
     public void deletePolicy(String policyId, String ifMatch) {
+        requireHomeRegion();
         StoredPolicy p = getPolicy(policyId);
         Etags.checkIfMatch(ifMatch, p.getEtag());
         policies.delete(policyId);
@@ -714,6 +730,16 @@ public class IdentityService {
     }
 
     // ── Helpers ────────────────────────────────────────────────────────────────
+
+    /**
+     * IAM resources "can only be changed" in the tenancy's home region: writes sent to any
+     * other region's endpoint are rejected with 403 NotAllowed. Reads work everywhere.
+     */
+    private void requireHomeRegion() {
+        if (!ociContext.region().equals(homeRegion())) {
+            throw OciException.notAllowed("This operation must be directed at the home region.");
+        }
+    }
 
     private String tenancyId() {
         return ociContext.tenancyId();

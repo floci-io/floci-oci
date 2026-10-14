@@ -7,6 +7,7 @@ import java.util.Map;
 
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.equalTo;
+import static org.hamcrest.Matchers.notNullValue;
 import static org.hamcrest.Matchers.startsWith;
 
 /** Regional resources are scoped to the region in the Host header; Identity is global. */
@@ -53,7 +54,6 @@ class RegionIsolationIntegrationTest {
     @Test
     void identityIsGlobalAcrossRegions() {
         String compartmentId = given()
-                .header("Host", PHOENIX_IDENTITY)
                 .contentType("application/json")
                 .body(Map.of("compartmentId", TENANCY, "name", "region-c-" + System.nanoTime(),
                         "description", "global"))
@@ -61,18 +61,32 @@ class RegionIsolationIntegrationTest {
             .then().statusCode(200)
                 .extract().path("id");
 
-        given()
+        given().header("Host", PHOENIX_IDENTITY)
             .when().get("/20160918/compartments/" + compartmentId)
             .then().statusCode(200).body("id", equalTo(compartmentId));
 
-        String workRequestId = given().header("Host", PHOENIX_IDENTITY)
+        String workRequestId = given()
             .when().delete("/20160918/compartments/" + compartmentId)
             .then().statusCode(202)
                 .extract().header("opc-work-request-id");
 
-        given()
+        given().header("Host", PHOENIX_IDENTITY)
             .when().get("/20160918/workRequests/" + workRequestId)
             .then().statusCode(200).body("status", equalTo("SUCCEEDED"));
+    }
+
+    @Test
+    void identityWritesOutsideTheHomeRegionAreNotAllowed() {
+        given()
+                .header("Host", PHOENIX_IDENTITY)
+                .contentType("application/json")
+                .body(Map.of("compartmentId", TENANCY, "name", "region-x-" + System.nanoTime(),
+                        "description", "not home"))
+            .when().post("/20160918/compartments")
+            .then().statusCode(403)
+                .header("opc-request-id", notNullValue())
+                .body("code", equalTo("NotAllowed"))
+                .body("message", equalTo("This operation must be directed at the home region."));
     }
 
     @Test

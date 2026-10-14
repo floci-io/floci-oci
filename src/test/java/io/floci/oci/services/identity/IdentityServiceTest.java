@@ -16,6 +16,7 @@ import io.floci.oci.services.identity.model.StoredUser;
 import io.floci.oci.services.identity.model.StoredUserGroupMembership;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.function.Executable;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -263,11 +264,63 @@ class IdentityServiceTest {
     }
 
     private static OciContext signedAs(String tenancy) {
+        return signedAs(tenancy, "us-ashburn-1");
+    }
+
+    private static OciContext signedAs(String tenancy, String region) {
         OciContext context = mock(OciContext.class);
         lenient().when(context.tenancyId()).thenReturn(tenancy);
         lenient().when(context.realm()).thenReturn("oc1");
-        lenient().when(context.region()).thenReturn("us-ashburn-1");
+        lenient().when(context.region()).thenReturn(region);
         return context;
+    }
+
+    @Test
+    void iamWritesOutsideTheHomeRegionAreNotAllowed() {
+        StorageBackend<String, StoredCompartment> compartments = new InMemoryStorage<>();
+        StorageBackend<String, StoredUser> users = new InMemoryStorage<>();
+        StorageBackend<String, StoredGroup> groups = new InMemoryStorage<>();
+        StorageBackend<String, StoredUserGroupMembership> memberships = new InMemoryStorage<>();
+        StorageBackend<String, StoredPolicy> policies = new InMemoryStorage<>();
+        IdentityService home = new IdentityService(compartments, users, groups, memberships,
+                policies, new InMemoryStorage<>(), config, workRequests, signedAs(TENANCY));
+        IdentityService phoenix = new IdentityService(compartments, users, groups, memberships,
+                policies, new InMemoryStorage<>(), config, workRequests,
+                signedAs(TENANCY, "us-phoenix-1"));
+        StoredCompartment dev = home.createCompartment(null, "dev", "d", null, null);
+        StoredUser alice = home.createUser("alice", "d", null, null, null);
+        StoredGroup admins = home.createGroup("admins", "d", null, null);
+        String membership = home.addUserToGroup(alice.getId(), admins.getId()).getId();
+        List<String> statements = List.of("Allow group admins to manage all-resources in tenancy");
+        StoredPolicy policy = home.createPolicy(TENANCY, "p", "d", statements, null, null, null);
+
+        List<Executable> writes = List.of(
+                () -> phoenix.createCompartment(null, "x", "d", null, null),
+                () -> phoenix.updateCompartment(dev.getId(), "y", null, null, null, null),
+                () -> phoenix.deleteCompartment(dev.getId(), null),
+                () -> phoenix.moveCompartment(dev.getId(), TENANCY, null),
+                () -> phoenix.recoverCompartment(dev.getId(), null),
+                () -> phoenix.createUser("bob", "d", null, null, null),
+                () -> phoenix.updateUser(alice.getId(), "d2", null, null, null, null),
+                () -> phoenix.deleteUser(alice.getId(), null),
+                () -> phoenix.createGroup("ops", "d", null, null),
+                () -> phoenix.updateGroup(admins.getId(), "d2", null, null, null),
+                () -> phoenix.deleteGroup(admins.getId(), null),
+                () -> phoenix.addUserToGroup(alice.getId(), admins.getId()),
+                () -> phoenix.removeUserFromGroup(membership),
+                () -> phoenix.createPolicy(TENANCY, "q", "d", statements, null, null, null),
+                () -> phoenix.updatePolicy(policy.getId(), "d2", null, null, null, null, null),
+                () -> phoenix.deletePolicy(policy.getId(), null));
+        for (Executable write : writes) {
+            OciException e = assertThrows(OciException.class, write);
+            assertEquals(403, e.getHttpStatus());
+            assertEquals("NotAllowed", e.getCode());
+            assertEquals("This operation must be directed at the home region.", e.getMessage());
+        }
+
+        assertEquals("dev", phoenix.getCompartment(dev.getId()).getName());
+        assertEquals(List.of(alice.getId()), phoenix.listUsers().stream().map(StoredUser::getId).toList());
+        assertDoesNotThrow(() -> home.updateCompartment(dev.getId(), "dev2", null, null, null, null));
     }
 
     // Reads without a request context fall back to readsAs, standing in for the signed tenancy.
