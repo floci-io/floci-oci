@@ -1,8 +1,10 @@
 package io.floci.oci.core.common.docker;
 
 import com.github.dockerjava.api.DockerClient;
+import com.github.dockerjava.api.async.ResultCallback;
 import com.github.dockerjava.api.command.CreateContainerCmd;
 import com.github.dockerjava.api.command.CreateContainerResponse;
+import com.github.dockerjava.api.command.ExecCreateCmd;
 import com.github.dockerjava.api.command.InspectContainerResponse;
 import com.github.dockerjava.api.exception.DockerException;
 import com.github.dockerjava.api.exception.NotFoundException;
@@ -10,17 +12,23 @@ import com.github.dockerjava.api.model.Bind;
 import com.github.dockerjava.api.model.Container;
 import com.github.dockerjava.api.model.ContainerNetwork;
 import com.github.dockerjava.api.model.ExposedPort;
+import com.github.dockerjava.api.model.Frame;
 import com.github.dockerjava.api.model.HostConfig;
 import com.github.dockerjava.api.model.Mount;
 import com.github.dockerjava.api.model.MountType;
 import com.github.dockerjava.api.model.Ports;
+import com.github.dockerjava.api.model.StreamType;
 import com.github.dockerjava.core.command.WaitContainerResultCallback;
 import io.floci.oci.config.EmulatorConfig;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
+import java.io.ByteArrayOutputStream;
 import java.io.Closeable;
+import java.net.URI;
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -501,6 +509,97 @@ public class ContainerLifecycleManager {
     public EndpointInfo resolveEndpoint(String containerId, int containerPort, String preferredNetwork) {
         InspectContainerResponse inspect = dockerClient.inspectContainerCmd(containerId).exec();
         return resolveEndpoint(inspect, containerPort, preferredNetwork);
+    }
+
+    /**
+     * The address a client uses for a sidecar port that is published on the host, following
+     * {@code floci-oci.docker.endpoint-mode}. On the host, and always in {@code published} mode,
+     * that is the Docker daemon's host and {@code hostPort}. In a container in {@code auto}
+     * mode it is the sidecar's own name and {@code containerPort}, which other containers on
+     * the shared network resolve.
+     */
+    public EndpointInfo clientEndpoint(String containerName, int containerPort, int hostPort) {
+        boolean published = config.docker().endpointMode() == EmulatorConfig.DockerEndpointMode.PUBLISHED;
+        if (published || !containerDetector.isRunningInContainer()) {
+            return new EndpointInfo(daemonHost(), hostPort);
+        }
+        return new EndpointInfo(containerName, containerPort);
+    }
+
+    /**
+     * The host published sidecar ports are reached at: the host of a {@code tcp://} Docker
+     * daemon, or {@code localhost} for a local socket.
+     */
+    String daemonHost() {
+        return daemonHostname(DockerClientProducer.resolveEffectiveDockerHost(
+                config.docker().dockerHost(), System.getenv("DOCKER_HOST")));
+    }
+
+    static String daemonHostname(String dockerHost) {
+        if (dockerHost != null && !dockerHost.isBlank()) {
+            try {
+                URI uri = URI.create(dockerHost);
+                String scheme = uri.getScheme();
+                String host = uri.getHost();
+                if (scheme != null && host != null && !host.isBlank()
+                        && (scheme.equalsIgnoreCase("tcp") || scheme.equalsIgnoreCase("http")
+                            || scheme.equalsIgnoreCase("https"))) {
+                    return host;
+                }
+            } catch (IllegalArgumentException e) {
+                LOG.debugv("Could not parse Docker host {0}: {1}", dockerHost, e.getMessage());
+            }
+        }
+        return "localhost";
+    }
+
+    /**
+     * Runs a command inside a running container and returns its exit code and output. Used to
+     * drive in-container CLIs (for example {@code psql}) without opening a network connection
+     * from the emulator to the sidecar. Gives up after {@code timeout} with exit code -1.
+     */
+    public ExecResult exec(String containerId, List<String> env, List<String> command, Duration timeout) {
+        ExecCreateCmd createCmd = dockerClient.execCreateCmd(containerId)
+                .withAttachStdout(true)
+                .withAttachStderr(true)
+                .withCmd(command.toArray(new String[0]));
+        if (env != null && !env.isEmpty()) {
+            createCmd.withEnv(env);
+        }
+        String execId = createCmd.exec().getId();
+        ByteArrayOutputStream stdout = new ByteArrayOutputStream();
+        ByteArrayOutputStream stderr = new ByteArrayOutputStream();
+        boolean finished;
+        try {
+            finished = dockerClient.execStartCmd(execId)
+                    .exec(new ResultCallback.Adapter<Frame>() {
+                        @Override
+                        public void onNext(Frame frame) {
+                            ByteArrayOutputStream target =
+                                    frame.getStreamType() == StreamType.STDERR ? stderr : stdout;
+                            target.writeBytes(frame.getPayload());
+                        }
+                    })
+                    .awaitCompletion(timeout.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return new ExecResult(-1, "", "interrupted while waiting for the command");
+        }
+        if (!finished) {
+            return new ExecResult(-1, stdout.toString(StandardCharsets.UTF_8),
+                    "timed out after " + timeout.toSeconds() + "s");
+        }
+        Long exitCode = dockerClient.inspectExecCmd(execId).exec().getExitCodeLong();
+        return new ExecResult(exitCode == null ? -1 : exitCode.intValue(),
+                stdout.toString(StandardCharsets.UTF_8), stderr.toString(StandardCharsets.UTF_8));
+    }
+
+    /** The outcome of {@link #exec}: {@code exitCode} is -1 when the command did not finish. */
+    public record ExecResult(int exitCode, String stdout, String stderr) {
+
+        public boolean succeeded() {
+            return exitCode == 0;
+        }
     }
 
     /**

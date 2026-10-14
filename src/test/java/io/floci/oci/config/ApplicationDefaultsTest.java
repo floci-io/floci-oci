@@ -6,6 +6,7 @@ import jakarta.inject.Inject;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Method;
+import java.util.Locale;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -36,6 +37,8 @@ class ApplicationDefaultsTest {
                 config.services().oke().kubeconfigAuth());
         assertEquals(annotationDefault(EmulatorConfig.ServicesConfig.OkeServiceConfig.class, "readyTimeoutSeconds"),
                 String.valueOf(config.services().oke().readyTimeoutSeconds()));
+        assertEquals(annotationDefault(EmulatorConfig.DockerConfig.class, "endpointMode"),
+                config.docker().endpointMode().name().toLowerCase(Locale.ROOT));
     }
 
     @Test

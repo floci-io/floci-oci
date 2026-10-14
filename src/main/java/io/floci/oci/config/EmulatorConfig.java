@@ -357,6 +357,18 @@ public interface EmulatorConfig {
         String dockerHost();
 
         /**
+         * How a sidecar's published port is addressed in the endpoints handed to clients.
+         *
+         * <p>{@code auto}: {@code localhost} and the published port when floci-oci runs on the
+         * host, the container's name and internal port when it runs in a container.
+         * {@code published}: always the Docker daemon's host and the published port. Use it when
+         * the daemon is remote (docker-in-docker, a daemon on another machine), or when clients
+         * run on the host while floci-oci runs in a container.
+         */
+        @WithDefault("auto")
+        DockerEndpointMode endpointMode();
+
+        /**
          * Optional override for the address at which spawned containers reach the emulator.
          * When empty it is auto-detected (container IP inside Docker, host.docker.internal
          * on the host).
@@ -393,5 +405,10 @@ public interface EmulatorConfig {
 
             String password();
         }
+    }
+
+    enum DockerEndpointMode {
+        AUTO,
+        PUBLISHED
     }
 }

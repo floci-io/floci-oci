@@ -79,6 +79,10 @@ floci-oci:
     log-max-size: 10m
     log-max-file: "3"
     docker-host: unix:///var/run/docker.sock
+    # FLOCI_OCI_DOCKER_ENDPOINT_MODE: how a sidecar's published port is addressed for clients.
+    # auto = localhost on the host, the container name inside a container;
+    # published = always the Docker daemon's host and the published port.
+    endpoint-mode: auto
     resource-namespace: ""
     docker-config-path: ""
   init-hooks:
