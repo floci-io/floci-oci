@@ -34,7 +34,6 @@ class OciContextTest {
     void outsideARequestTheDefaultsApply() {
         OciContext ctx = context("sa-saopaulo-1", "oc1");
         assertEquals("sa-saopaulo-1", ctx.region());
-        assertEquals("sa-saopaulo-1", ctx.homeRegion());
         assertEquals("ocid1.tenancy.oc1..t", ctx.tenancyId());
     }
 }

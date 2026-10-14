@@ -1,6 +1,8 @@
 package io.floci.oci.services.identity;
 
+import io.floci.oci.core.tenancy.TenancyRegistry;
 import io.quarkus.test.junit.QuarkusTest;
+import jakarta.inject.Inject;
 import org.junit.jupiter.api.MethodOrderer;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestMethodOrder;
@@ -18,6 +20,9 @@ class IdentityRestIntegrationTest {
     private static final String TENANCY =
             "ocid1.tenancy.oc1..flocitesttenancy00000000000000000000000000000000000000000";
     private static final String OTHER_TENANCY = "ocid1.tenancy.oc1..itothertenancy";
+
+    @Inject
+    TenancyRegistry tenancies;
 
     private static String signedAs(String tenancyId) {
         return "Signature version=\"1\",keyId=\"" + tenancyId + "/ocid1.user.oc1..ituser/aa:bb\","
@@ -356,5 +361,27 @@ class IdentityRestIntegrationTest {
             .then()
                 .statusCode(200)
                 .extract().path("id");
+    }
+
+    @Test
+    void tenancyReportsItsOwnHomeRegion() {
+        String child = tenancies.registerChild(TENANCY, "phoenix-home", "us-phoenix-1").getId();
+
+        given().header("Authorization", signedAs(child))
+            .when().get("/20160918/tenancies/" + child)
+            .then().statusCode(200)
+                .header("opc-request-id", notNullValue())
+                .body("id", equalTo(child))
+                .body("name", equalTo("phoenix-home"))
+                .body("homeRegionKey", equalTo("PHX"));
+
+        given().header("Authorization", signedAs(child))
+            .when().get("/20160918/tenancies/" + child + "/regionSubscriptions")
+            .then().statusCode(200)
+                .body("[0].regionName", equalTo("us-phoenix-1"))
+                .body("[0].isHomeRegion", equalTo(true));
+
+        given().when().get("/20160918/tenancies/" + TENANCY)
+            .then().statusCode(200).body("homeRegionKey", equalTo("IAD"));
     }
 }

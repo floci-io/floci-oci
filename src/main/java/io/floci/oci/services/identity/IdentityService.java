@@ -9,9 +9,12 @@ import io.floci.oci.core.common.Ocids;
 import io.floci.oci.core.common.Regions;
 import io.floci.oci.core.common.ServiceDescriptor;
 import io.floci.oci.core.common.ServiceRegistry;
+import io.floci.oci.core.storage.InMemoryStorage;
 import io.floci.oci.core.storage.StorageBackend;
 import io.floci.oci.core.storage.StorageFactory;
 import io.floci.oci.core.storage.TenancyAwareStorageBackend;
+import io.floci.oci.core.tenancy.StoredTenancy;
+import io.floci.oci.core.tenancy.TenancyRegistry;
 import io.floci.oci.core.workrequest.WorkRequestService;
 import io.floci.oci.services.identity.model.StoredCompartment;
 import io.floci.oci.services.identity.model.StoredGroup;
@@ -28,6 +31,7 @@ import org.jboss.logging.Logger;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -59,13 +63,15 @@ public class IdentityService {
     private final ServiceRegistry serviceRegistry;
     private final WorkRequestService workRequests;
     private final OciContext ociContext;
+    private final TenancyRegistry tenancies;
 
     @Inject
     public IdentityService(StorageFactory storageFactory, EmulatorConfig config,
                            ServiceRegistry serviceRegistry, WorkRequestService workRequests,
-                           OciContext ociContext) {
+                           OciContext ociContext, TenancyRegistry tenancies) {
         this.config = config;
         this.ociContext = ociContext;
+        this.tenancies = tenancies;
         this.serviceRegistry = serviceRegistry;
         this.workRequests = workRequests;
         this.compartments = storageFactory.createGlobal("identity", "identity-compartments.json",
@@ -105,6 +111,7 @@ public class IdentityService {
                     WorkRequestService workRequests,
                     OciContext ociContext) {
         this.ociContext = ociContext;
+        this.tenancies = new TenancyRegistry(new InMemoryStorage<>(), config, ociContext);
         this.compartments = compartments;
         this.users = users;
         this.groups = groups;
@@ -634,17 +641,18 @@ public class IdentityService {
                 .filter(r -> r.realm().equals(ociContext.realm()))
                 .map(r -> Map.of("key", r.key(), "name", r.name()))
                 .toList());
+        String homeRegion = homeRegion();
         boolean homeListed = regions.stream()
-                .anyMatch(r -> r.get("name").equals(ociContext.homeRegion()));
+                .anyMatch(r -> r.get("name").equals(homeRegion));
         if (!homeListed) {
-            regions.addFirst(Map.of("key", regionKey(), "name", ociContext.homeRegion()));
+            regions.addFirst(Map.of("key", regionKey(), "name", homeRegion));
         }
         return regions;
     }
 
     public List<StoredRegionSubscription> regionSubscriptions() {
         List<StoredRegionSubscription> result = new ArrayList<>();
-        result.add(new StoredRegionSubscription(regionKey(), ociContext.homeRegion(), "READY", true));
+        result.add(new StoredRegionSubscription(regionKey(), homeRegion(), "READY", true));
         regionSubscriptions.scan(k -> true).stream()
                 .sorted(Comparator.comparing(StoredRegionSubscription::getRegionName))
                 .forEach(result::add);
@@ -658,7 +666,7 @@ public class IdentityService {
     public synchronized StoredRegionSubscription createRegionSubscription(String regionKey) {
         requireNonBlank(regionKey, "regionKey");
         Regions.Region region = Regions.all().stream()
-                .filter(r -> r.realm().equals(ociContext.realmOf(ociContext.homeRegion())))
+                .filter(r -> r.realm().equals(ociContext.realmOf(homeRegion())))
                 .filter(r -> r.key().equalsIgnoreCase(regionKey))
                 .findFirst()
                 .orElseThrow(() -> OciException.invalidParameter("Unknown region key: " + regionKey));
@@ -678,16 +686,31 @@ public class IdentityService {
         if (!tenancyOcid.equals(tenancyId())) {
             throw notFound("tenancy", tenancyOcid);
         }
-        return Map.of(
-                "id", tenancyId(),
-                "name", "floci-local",
-                "description", "floci-oci emulated tenancy",
-                "homeRegionKey", regionKey());
+        StoredTenancy tenancy = tenancies.current();
+        Map<String, Object> wire = new LinkedHashMap<>();
+        wire.put("id", tenancy.getId());
+        wire.put("name", tenancy.getName());
+        if (tenancy.getDescription() != null) {
+            wire.put("description", tenancy.getDescription());
+        }
+        wire.put("homeRegionKey", Regions.key(tenancy.getHomeRegion()));
+        if (tenancy.getFreeformTags() != null) {
+            wire.put("freeformTags", tenancy.getFreeformTags());
+        }
+        if (tenancy.getDefinedTags() != null) {
+            wire.put("definedTags", tenancy.getDefinedTags());
+        }
+        return wire;
     }
 
-    /** The home region key, e.g. us-ashburn-1 → IAD. */
+    /** The calling tenancy's home region key, e.g. us-ashburn-1 → IAD. */
     String regionKey() {
-        return Regions.key(ociContext.homeRegion());
+        return Regions.key(homeRegion());
+    }
+
+    /** The calling tenancy's home region, pinned when the tenancy was first registered. */
+    public String homeRegion() {
+        return tenancies.current().getHomeRegion();
     }
 
     // ── Helpers ────────────────────────────────────────────────────────────────

@@ -36,8 +36,10 @@ oci iam compartment list --endpoint http://localhost:4599 --compartment-id "$TEN
   `opc-work-request-id`, terminal status `SUCCEEDED`.
 - `compartmentIdInSubtree=true` is only accepted on the tenancy (root compartment), as on
   real OCI. `accessLevel` is validated but not enforced: every compartment is accessible.
-- Region subscriptions complete immediately with status `READY`. The home region is the
-  configured `default-region`.
+- Region subscriptions complete immediately with status `READY`. Each tenancy has its own home
+  region, reported by `GetTenancy` as `homeRegionKey`: a tenancy seen for the first time gets
+  `default-region` and keeps it, so changing `default-region` later does not move an existing
+  tenancy's home.
 - Other services accept any `compartmentId` by default. Set
   `FLOCI_OCI_SERVICES_IDENTITY_STRICT_COMPARTMENTS=true` to require an ACTIVE compartment
   created here (or the tenancy), as real OCI does.

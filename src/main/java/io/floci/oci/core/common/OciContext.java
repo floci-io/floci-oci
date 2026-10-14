@@ -95,11 +95,6 @@ public class OciContext {
         return realmOf(region());
     }
 
-    /** The tenancy's home region: always the configured default region. */
-    public String homeRegion() {
-        return config.defaultRegion();
-    }
-
     public String realmOf(String region) {
         return Regions.byName(region).map(Regions.Region::realm).orElse(config.defaultRealm());
     }

@@ -267,7 +267,6 @@ class IdentityServiceTest {
         lenient().when(context.tenancyId()).thenReturn(tenancy);
         lenient().when(context.realm()).thenReturn("oc1");
         lenient().when(context.region()).thenReturn("us-ashburn-1");
-        lenient().when(context.homeRegion()).thenReturn("us-ashburn-1");
         return context;
     }
 
@@ -371,8 +370,12 @@ class IdentityServiceTest {
     void regionsAlwaysListTheHomeRegion() {
         assertEquals(1, service.regions().stream()
                 .filter(r -> r.get("name").equals("us-ashburn-1")).count());
+    }
 
+    @Test
+    void regionsListAHomeRegionOutsideTheTableFirst() {
         lenient().when(config.defaultRegion()).thenReturn("xx-floci-1");
+
         List<Map<String, String>> regions = service.regions();
         assertEquals("xx-floci-1", regions.getFirst().get("name"));
         assertEquals(service.regionKey(), regions.getFirst().get("key"));

@@ -76,7 +76,8 @@ works in `us-phoenix-1`. Any other host, such as `localhost:4599`, uses
 `floci-oci.default-region`.
 
 Identity is global, as on real OCI: compartments, users, groups and policies are shared by
-every region of the tenancy. The tenancy's home region is always `default-region`.
+every region of the tenancy. Each tenancy has its own home region: a tenancy seen for the
+first time gets `default-region`, and keeps it if `default-region` changes later.
 
 Data persisted by an older floci-oci, before region partitioning, is moved into
 `default-region` on startup.
