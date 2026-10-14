@@ -205,14 +205,17 @@ public class OkeClusterManager implements Resettable {
     }
 
     /**
-     * A running sidecar is adopted only when it was created with this cluster's token and current
-     * webhook address. One left by an older floci-oci, or by one reachable at another address,
-     * would reject the exec credentials, so it is recreated on the same volume, keeping its CA.
+     * A running sidecar is adopted only when it was created with this cluster's token, current
+     * webhook address and region label. One left by an older floci-oci, or by one reachable at
+     * another address, would reject the exec credentials or stay labelled with the wrong region,
+     * so it is recreated on the same volume, keeping its CA.
      */
     private boolean createdForThisCluster(String containerName, StoredOkeCluster cluster) {
         List<String> env = lifecycleManager.containerEnv(containerName);
         return env.contains(API_TOKEN_ENV + "=" + cluster.getApiToken())
-                && env.contains(WEBHOOK_KUBECONFIG_ENV + "=" + webhookKubeconfig(cluster));
+                && env.contains(WEBHOOK_KUBECONFIG_ENV + "=" + webhookKubeconfig(cluster))
+                && clusterRegion(cluster).equals(
+                        lifecycleManager.containerLabels(containerName).get(ContainerStorageHelper.REGION_LABEL));
     }
 
     /**

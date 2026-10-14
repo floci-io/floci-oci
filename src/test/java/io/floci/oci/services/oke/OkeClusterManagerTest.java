@@ -391,10 +391,31 @@ class OkeClusterManagerTest {
         when(lifecycleManager.containerEnv(anyString())).thenReturn(List.of(
                 OkeClusterManager.API_TOKEN_ENV + "=" + cluster.getApiToken(),
                 OkeClusterManager.WEBHOOK_KUBECONFIG_ENV + "=" + webhookKubeconfig));
+        when(lifecycleManager.containerLabels(anyString())).thenReturn(
+                Map.of(ContainerStorageHelper.REGION_LABEL, "us-ashburn-1"));
 
         manager.startCluster(cluster);
 
         verify(lifecycleManager, never()).createAndStart(any());
+    }
+
+    @Test
+    void startClusterRecreatesARunningSidecarLabelledWithAnotherRegion() {
+        StoredOkeCluster cluster = adoptableCluster("ocid1.cluster.oc1.phx.adopt003");
+        cluster.setRegion("us-phoenix-1");
+        String webhookKubeconfig = manager.webhookKubeconfig(cluster);
+        when(lifecycleManager.isContainerRunning(anyString())).thenReturn(true);
+        when(lifecycleManager.containerEnv(anyString())).thenReturn(List.of(
+                OkeClusterManager.API_TOKEN_ENV + "=" + cluster.getApiToken(),
+                OkeClusterManager.WEBHOOK_KUBECONFIG_ENV + "=" + webhookKubeconfig));
+        when(lifecycleManager.containerLabels(anyString())).thenReturn(
+                Map.of(ContainerStorageHelper.REGION_LABEL, "us-ashburn-1"));
+        when(lifecycleManager.createAndStart(any())).thenReturn(new ContainerLifecycleManager.ContainerInfo("c-new", Map.of()));
+
+        manager.startCluster(cluster);
+
+        verify(lifecycleManager).removeIfExists(anyString());
+        verify(lifecycleManager).createAndStart(any());
     }
 
     @Test

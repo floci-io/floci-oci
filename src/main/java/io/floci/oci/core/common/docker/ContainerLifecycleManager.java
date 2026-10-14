@@ -474,6 +474,13 @@ public class ContainerLifecycleManager {
         return env != null ? List.of(env) : List.of();
     }
 
+    /** The labels an existing container was created with. */
+    public Map<String, String> containerLabels(String containerId) {
+        InspectContainerResponse inspect = dockerClient.inspectContainerCmd(containerId).exec();
+        Map<String, String> labels = inspect.getConfig() != null ? inspect.getConfig().getLabels() : null;
+        return labels != null ? Map.copyOf(labels) : Map.of();
+    }
+
     /**
      * Resolves the endpoint (host and port) to connect to a specific container port.
      *
