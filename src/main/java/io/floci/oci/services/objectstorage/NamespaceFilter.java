@@ -38,9 +38,7 @@ public class NamespaceFilter implements ContainerRequestFilter {
 
     @Override
     public void filter(ContainerRequestContext ctx) {
-        EmulatorConfig.ServicesConfig.ObjectStorageServiceConfig objectStorage =
-                configProvider.get().services().objectstorage();
-        if (!objectStorage.enabled() || !objectStorage.strictNamespace()) {
+        if (!configProvider.get().services().objectstorage().enabled()) {
             return;
         }
         Matcher matcher = NAMESPACE_PATH.matcher(ctx.getUriInfo().getPath());

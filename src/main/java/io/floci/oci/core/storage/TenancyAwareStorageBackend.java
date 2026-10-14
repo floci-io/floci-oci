@@ -210,6 +210,32 @@ public class TenancyAwareStorageBackend<V> implements StorageBackend<String, V> 
         }
     }
 
+    /** An entry of a regional store and the tenancy whose partition holds it. */
+    public record Owned<V>(String tenancyId, V value) {
+    }
+
+    /**
+     * Finds {@code key} in {@code region} without knowing its tenancy, for requests that carry
+     * no signature (a pre-authenticated request). A store that is not tenancy-aware (unit tests)
+     * has one partition, owned by {@code soleTenancyId}.
+     */
+    public static <V> Optional<Owned<V>> findInRegion(StorageBackend<String, V> store, String region,
+                                                       String key, String soleTenancyId) {
+        if (!(store instanceof TenancyAwareStorageBackend<V> tenancyAware)) {
+            return store.get(key).map(value -> new Owned<>(soleTenancyId, value));
+        }
+        for (String partition : tenancyAware.tenancies()) {
+            String tenancyId = tenancyOf(partition);
+            if (partition.equals(regionalPartition(tenancyId, region))) {
+                Optional<V> value = tenancyAware.getForTenancy(partition, key);
+                if (value.isPresent()) {
+                    return Optional.of(new Owned<>(tenancyId, value.get()));
+                }
+            }
+        }
+        return Optional.empty();
+    }
+
     public Optional<V> getForTenancy(String tenancyId, String key) {
         return delegate.get(tenancyId + "/" + key);
     }

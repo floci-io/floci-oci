@@ -11,6 +11,7 @@ import io.floci.oci.core.common.ServiceRegistry;
 import io.floci.oci.core.storage.StorageBackend;
 import io.floci.oci.core.storage.StorageFactory;
 import io.floci.oci.core.storage.TenancyAwareStorageBackend;
+import io.floci.oci.core.tenancy.TenancyNames;
 import io.floci.oci.core.workrequest.WorkRequestService;
 import io.floci.oci.services.objectstorage.model.StoredBucket;
 import io.floci.oci.services.objectstorage.model.StoredMultipartUpload;
@@ -23,7 +24,6 @@ import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
 import java.io.ByteArrayOutputStream;
-import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
@@ -112,17 +112,7 @@ public class ObjectStorageService {
         if (tenancyId == null || tenancyId.equals(config.defaultTenancyId())) {
             return config.defaultNamespace();
         }
-        try {
-            byte[] digest = MessageDigest.getInstance("SHA-256")
-                    .digest(tenancyId.getBytes(StandardCharsets.UTF_8));
-            StringBuilder namespace = new StringBuilder(NAMESPACE_LENGTH);
-            for (int i = 0; namespace.length() < NAMESPACE_LENGTH; i++) {
-                namespace.append(NAMESPACE_ALPHABET.charAt((digest[i] & 0xff) % NAMESPACE_ALPHABET.length()));
-            }
-            return namespace.toString();
-        } catch (NoSuchAlgorithmException e) {
-            throw new IllegalStateException("SHA-256 is unavailable", e);
-        }
+        return TenancyNames.derive(tenancyId, NAMESPACE_ALPHABET, NAMESPACE_LENGTH);
     }
 
     /**
@@ -140,12 +130,9 @@ public class ObjectStorageService {
         return Ocids.isOfType(compartmentId, "tenancy") ? namespaceOf(compartmentId) : namespace();
     }
 
-    /**
-     * With {@code strict-namespace} on, a namespace in the path that is not the caller's is
-     * 404 NamespaceNotFound, as on real OCI. Off (the default), any namespace is accepted.
-     */
+    /** A namespace in the path that is not the caller's is 404 NamespaceNotFound, as on real OCI. */
     public void requireNamespace(String namespaceName) {
-        if (config.services().objectstorage().strictNamespace() && !namespace().equals(namespaceName)) {
+        if (!namespace().equals(namespaceName)) {
             throw OciException.namespaceNotFound("Either the namespace " + namespaceName
                     + " does not exist or you are not authorized to access it.");
         }
@@ -386,8 +373,8 @@ public class ObjectStorageService {
         return source;
     }
 
-    /** Copy is async on real OCI: returns the work-request OCID for the 202 response. */
     /**
+     * Copy is async on real OCI: returns the work-request OCID for the 202 response.
      * CopyObject runs against the source region's endpoint and copies "within a region or to
      * another region": the destination bucket is looked up, and the copy written, in
      * {@code destRegion}. The work request stays in the source region, where clients poll it.
@@ -398,11 +385,7 @@ public class ObjectStorageService {
         StoredOsObject source = getObject(namespaceName, bucketName, sourceObjectName);
         Etags.checkIfMatch(sourceIfMatch, source.getEtag());
         String destPartition = TenancyAwareStorageBackend.regionalPartition(ociContext.tenancyId(), destRegion);
-        boolean sameRegion = destRegion.equals(ociContext.region());
-        Optional<StoredBucket> target = sameRegion || !(buckets instanceof TenancyAwareStorageBackend<StoredBucket> regionalBuckets)
-                ? buckets.get(destBucket)
-                : regionalBuckets.getForTenancy(destPartition, destBucket);
-        if (target.isEmpty()) {
+        if (TenancyAwareStorageBackend.getIn(buckets, destPartition, destBucket).isEmpty()) {
             throw OciException.bucketNotFound("Either the bucket named '" + destBucket
                     + "' does not exist in the namespace '" + destNamespace + "' in region " + destRegion
                     + " or you are not authorized to access it");
@@ -419,11 +402,7 @@ public class ObjectStorageService {
         copy.setTimeCreated(now);
         copy.setTimeModified(now);
         copy.setMetadata(source.getMetadata());
-        if (sameRegion || !(objects instanceof TenancyAwareStorageBackend<StoredOsObject> regionalObjects)) {
-            objects.put(objectKey(destBucket, destObjectName), copy);
-        } else {
-            regionalObjects.putForTenancy(destPartition, objectKey(destBucket, destObjectName), copy);
-        }
+        TenancyAwareStorageBackend.putIn(objects, destPartition, objectKey(destBucket, destObjectName), copy);
 
         StoredBucket bucket = getBucket(namespaceName, bucketName);
         // Object Storage work requests terminate in COMPLETED (Identity uses SUCCEEDED).
@@ -571,7 +550,6 @@ public class ObjectStorageService {
         pars.delete(par.getToken());
     }
 
-    /** Resolves a PAR token for the anonymous /p/{token}/… data path. */
     /** A pre-authenticated request and the tenancy that created it, which the token acts as. */
     public record ParAccess(StoredPar par, String tenancyId) {
     }
@@ -594,19 +572,8 @@ public class ObjectStorageService {
     }
 
     private Optional<ParAccess> findPar(String token) {
-        if (pars instanceof TenancyAwareStorageBackend<StoredPar> regional) {
-            String region = ":" + ociContext.region();
-            for (String partition : regional.tenancies()) {
-                if (partition.endsWith(region)) {
-                    Optional<StoredPar> par = regional.getForTenancy(partition, token);
-                    if (par.isPresent()) {
-                        return Optional.of(new ParAccess(par.get(), TenancyAwareStorageBackend.tenancyOf(partition)));
-                    }
-                }
-            }
-            return Optional.empty();
-        }
-        return pars.get(token).map(par -> new ParAccess(par, ociContext.tenancyId()));
+        return TenancyAwareStorageBackend.findInRegion(pars, ociContext.region(), token, ociContext.tenancyId())
+                .map(found -> new ParAccess(found.value(), found.tenancyId()));
     }
 
     // ── Helpers ────────────────────────────────────────────────────────────────

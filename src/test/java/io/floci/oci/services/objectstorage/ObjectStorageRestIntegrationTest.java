@@ -432,8 +432,13 @@ class ObjectStorageRestIntegrationTest {
                 + "algorithm=\"rsa-sha256\",headers=\"date (request-target) host\","
                 + "signature=\"ZmFrZXNpZ25hdHVyZQ==\"";
 
+        String namespace = given().header("Authorization", auth)
+            .when().get("/n")
+            .then().statusCode(200)
+                .extract().as(String.class);
+
         given().header("Authorization", auth)
-            .when().get("/n/" + NS)
+            .when().get("/n/" + namespace)
             .then().statusCode(200)
                 .body("defaultS3CompartmentId", equalTo(tenancy))
                 .body("defaultSwiftCompartmentId", equalTo(tenancy));
@@ -441,7 +446,7 @@ class ObjectStorageRestIntegrationTest {
         given().header("Authorization", auth)
                 .contentType("application/json")
                 .body(Map.of("name", "it-signed-" + System.nanoTime(), "compartmentId", tenancy))
-            .when().post("/n/" + NS + "/b")
+            .when().post("/n/" + namespace + "/b")
             .then().statusCode(200)
                 .body("createdBy", equalTo(user));
     }

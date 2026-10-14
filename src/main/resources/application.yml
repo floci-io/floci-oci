@@ -95,7 +95,6 @@ floci-oci:
       strict-compartments: false  # FLOCI_OCI_SERVICES_IDENTITY_STRICT_COMPARTMENTS: reject unknown/inactive compartmentIds in other services
     objectstorage:
       enabled: true
-      strict-namespace: false  # FLOCI_OCI_SERVICES_OBJECTSTORAGE_STRICT_NAMESPACE: 404 NamespaceNotFound for a namespace that is not the caller's
     queue:
       enabled: true
     kms:

@@ -37,9 +37,8 @@ oci os object get $E --namespace floci-local --bucket-name demo \
   (default `floci-local`); any other signing tenancy gets a stable 12 character namespace
   derived from its OCID. `GetNamespace` returns the caller's, and with `?compartmentId=<tenancy
   OCID>` that tenancy's (a compartment OCID resolves to the caller's namespace).
-- Any namespace in the path is accepted by default. Set
-  `FLOCI_OCI_SERVICES_OBJECTSTORAGE_STRICT_NAMESPACE=true` to answer a namespace that is not
-  the caller's with `404 NamespaceNotFound`, as real OCI does.
+- A namespace in the path that is not the caller's is answered with `404 NamespaceNotFound`,
+  as on real OCI. Ask `GetNamespace` for the namespace instead of hard-coding one.
 - Pre-authenticated request URLs work for every tenancy: the token is looked up across tenancies
   in the request's region, must match the namespace in the URL, and acts as the tenancy that
   created it.

@@ -26,7 +26,6 @@ import java.util.stream.Stream;
 import static io.floci.oci.services.objectstorage.ObjectStorageController.batchDeleteItems;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.junit.jupiter.params.provider.Arguments.argumentSet;
-import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 
@@ -305,19 +304,9 @@ class ObjectStorageServiceTest {
     }
 
     @Test
-    void strictNamespaceRejectsAnotherTenancysNamespace() {
-        EmulatorConfig strict = mock(EmulatorConfig.class, RETURNS_DEEP_STUBS);
-        lenient().when(strict.defaultTenancyId()).thenReturn(TENANCY);
-        lenient().when(strict.defaultNamespace()).thenReturn(NS);
-        ObjectStorageService strictService = new ObjectStorageService(new InMemoryStorage<>(),
-                new InMemoryStorage<>(), new InMemoryStorage<>(), new InMemoryStorage<>(), strict, workRequests);
-
-        lenient().when(strict.services().objectstorage().strictNamespace()).thenReturn(false);
-        assertDoesNotThrow(() -> strictService.requireNamespace("someoneelses"));
-
-        lenient().when(strict.services().objectstorage().strictNamespace()).thenReturn(true);
-        assertDoesNotThrow(() -> strictService.requireNamespace(NS));
-        OciException e = assertThrows(OciException.class, () -> strictService.requireNamespace("someoneelses"));
+    void anotherTenancysNamespaceIsNamespaceNotFound() {
+        assertDoesNotThrow(() -> service.requireNamespace(NS));
+        OciException e = assertThrows(OciException.class, () -> service.requireNamespace("someoneelses"));
         assertEquals(404, e.getHttpStatus());
         assertEquals("NamespaceNotFound", e.getCode());
     }

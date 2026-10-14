@@ -80,4 +80,20 @@ class TenancyAwareStorageBackendTest {
         assertEquals("value", plain.get("q1").orElseThrow());
         assertEquals("value", TenancyAwareStorageBackend.getIn(plain, "other", "q1").orElseThrow());
     }
+
+    @Test
+    void findInRegionLooksAcrossTenanciesButNotAcrossRegions() {
+        String other = "ocid1.tenancy.oc1..other";
+        TenancyAwareStorageBackend<String> store = new TenancyAwareStorageBackend<>(
+                new InMemoryStorage<>(), () -> TENANCY + ":us-ashburn-1");
+        TenancyAwareStorageBackend.putIn(store, other + ":us-ashburn-1", "token", "ashburn");
+        TenancyAwareStorageBackend.putIn(store, other + ":us-phoenix-1", "elsewhere", "phoenix");
+
+        TenancyAwareStorageBackend.Owned<String> found = TenancyAwareStorageBackend
+                .findInRegion(store, "us-ashburn-1", "token", TENANCY).orElseThrow();
+
+        assertEquals(other, found.tenancyId());
+        assertEquals("ashburn", found.value());
+        assertTrue(TenancyAwareStorageBackend.findInRegion(store, "us-ashburn-1", "elsewhere", TENANCY).isEmpty());
+    }
 }
