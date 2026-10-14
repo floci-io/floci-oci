@@ -1,6 +1,8 @@
 package io.floci.oci.services.objectstorage;
 
+import io.floci.oci.config.EmulatorConfig;
 import io.quarkus.test.junit.QuarkusTest;
+import jakarta.inject.Inject;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -14,6 +16,9 @@ class ObjectStorageRestIntegrationTest {
 
     private static final String NS = "floci-test";
     private static final String COMPARTMENT = "ocid1.compartment.oc1..ittestcompartment";
+
+    @Inject
+    EmulatorConfig config;
 
     private static String uniqueBucket(String prefix) {
         return prefix + "-" + System.nanoTime();
@@ -447,6 +452,6 @@ class ObjectStorageRestIntegrationTest {
                 .body(Map.of("name", "it-unsigned-" + System.nanoTime(), "compartmentId", COMPARTMENT))
             .when().post("/n/" + NS + "/b")
             .then().statusCode(200)
-                .body("createdBy", startsWith("ocid1.tenancy."));
+                .body("createdBy", equalTo(config.defaultTenancyId()));
     }
 }
