@@ -56,7 +56,15 @@ public class TenancyRegistry {
     }
 
     /** The tenancy {@code tenancyId}, registering it with the default home region on first sight. */
-    public synchronized StoredTenancy get(String tenancyId) {
+    public StoredTenancy get(String tenancyId) {
+        Optional<StoredTenancy> existing = find(tenancyId);
+        if (existing.isPresent()) {
+            return existing.get();
+        }
+        return register(tenancyId);
+    }
+
+    private synchronized StoredTenancy register(String tenancyId) {
         Optional<StoredTenancy> existing = find(tenancyId);
         if (existing.isPresent()) {
             return existing.get();

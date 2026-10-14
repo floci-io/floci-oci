@@ -4,6 +4,7 @@ import io.floci.oci.config.EmulatorConfig;
 import io.floci.oci.core.common.OciErrorResponse;
 import io.floci.oci.core.common.Regions;
 import io.floci.oci.core.common.RequestContext;
+import io.floci.oci.core.tenancy.TenancyRegistry;
 import jakarta.annotation.Priority;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.Priorities;
@@ -45,6 +46,9 @@ public class SignatureAuthFilter implements ContainerRequestFilter {
     @Inject
     RequestContext requestContext;
 
+    @Inject
+    jakarta.inject.Provider<TenancyRegistry> tenancies;
+
     @Override
     public void filter(ContainerRequestContext ctx) {
         EmulatorConfig config = configProvider.get();
@@ -58,6 +62,9 @@ public class SignatureAuthFilter implements ContainerRequestFilter {
         if (auth.isPresent()) {
             requestContext.setTenancyId(auth.get().tenancyId());
             requestContext.setUserId(auth.get().userId());
+            // Pins the home region on first sight, so a tenancy that only reads keeps it across
+            // a later default-region change.
+            tenancies.get().get(auth.get().tenancyId());
         } else {
             if (!exempt && config.auth().requireSignature()) {
                 ctx.abortWith(Response.status(401)
