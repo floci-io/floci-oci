@@ -10,6 +10,7 @@ import io.floci.oci.core.common.ServiceDescriptor;
 import io.floci.oci.core.common.ServiceRegistry;
 import io.floci.oci.core.storage.StorageBackend;
 import io.floci.oci.core.storage.StorageFactory;
+import io.floci.oci.core.storage.TenancyAwareStorageBackend;
 import io.floci.oci.core.workrequest.WorkRequestService;
 import io.floci.oci.services.objectstorage.model.StoredBucket;
 import io.floci.oci.services.objectstorage.model.StoredMultipartUpload;
@@ -32,6 +33,7 @@ import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
@@ -552,15 +554,41 @@ public class ObjectStorageService {
     }
 
     /** Resolves a PAR token for the anonymous /p/{token}/… data path. */
-    public StoredPar resolveParToken(String token) {
-        StoredPar par = pars.get(token)
+    /** A pre-authenticated request and the tenancy that created it, which the token acts as. */
+    public record ParAccess(StoredPar par, String tenancyId) {
+    }
+
+    /**
+     * Resolves a PAR token for the anonymous {@code /p/{token}/n/{namespace}/…} data path. The
+     * request carries no signature, so the token is looked up in every tenancy's partition for
+     * the request region, and must have been created under the namespace in the path.
+     */
+    public ParAccess resolveParToken(String token, String namespaceName) {
+        ParAccess access = findPar(token)
+                .filter(found -> found.par().getNamespace().equals(namespaceName))
                 .orElseThrow(() -> OciException.notAuthorizedOrNotFound(
                         "The pre-authenticated request does not exist or is expired."));
-        if (Instant.parse(par.getTimeExpires()).isBefore(Instant.now())) {
+        if (Instant.parse(access.par().getTimeExpires()).isBefore(Instant.now())) {
             throw OciException.notAuthorizedOrNotFound(
                     "The pre-authenticated request does not exist or is expired.");
         }
-        return par;
+        return access;
+    }
+
+    private Optional<ParAccess> findPar(String token) {
+        if (pars instanceof TenancyAwareStorageBackend<StoredPar> regional) {
+            String region = ":" + ociContext.region();
+            for (String partition : regional.tenancies()) {
+                if (partition.endsWith(region)) {
+                    Optional<StoredPar> par = regional.getForTenancy(partition, token);
+                    if (par.isPresent()) {
+                        return Optional.of(new ParAccess(par.get(), TenancyAwareStorageBackend.tenancyOf(partition)));
+                    }
+                }
+            }
+            return Optional.empty();
+        }
+        return pars.get(token).map(par -> new ParAccess(par, ociContext.tenancyId()));
     }
 
     // ── Helpers ────────────────────────────────────────────────────────────────

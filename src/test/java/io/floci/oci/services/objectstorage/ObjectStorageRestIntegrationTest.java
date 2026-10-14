@@ -476,4 +476,38 @@ class ObjectStorageRestIntegrationTest {
             .when().get("/n")
             .then().statusCode(200).body(equalTo("\"" + NS + "\""));
     }
+
+    @Test
+    void preauthenticatedRequestOfAnotherTenancyIsReachable() {
+        String signer = "Signature version=\"1\",keyId=\"ocid1.tenancy.oc1..itpartenancy"
+                + "/ocid1.user.oc1..ituser/aa:bb\",algorithm=\"rsa-sha256\",signature=\"x\"";
+        String ns = given().header("Authorization", signer)
+            .when().get("/n").then().statusCode(200).extract().as(String.class);
+        String bucket = uniqueBucket("it-par-tenancy");
+        given().header("Authorization", signer).contentType("application/json")
+                .body(Map.of("name", bucket, "compartmentId", COMPARTMENT))
+            .when().post("/n/" + ns + "/b")
+            .then().statusCode(200);
+        given().header("Authorization", signer).contentType("text/plain").body("tenancy-payload")
+            .when().put("/n/" + ns + "/b/" + bucket + "/o/shared.txt")
+            .then().statusCode(200);
+        String accessUri = given().header("Authorization", signer)
+                .contentType("application/json")
+                .body(Map.of("name", "share", "accessType", "ObjectRead",
+                        "timeExpires", "2999-01-01T00:00:00Z", "objectName", "shared.txt"))
+            .when().post("/n/" + ns + "/b/" + bucket + "/p")
+            .then().statusCode(200)
+                .body("accessUri", startsWith("/p/"))
+                .extract().path("accessUri");
+
+        given()
+            .when().get(accessUri)
+            .then().statusCode(200).body(equalTo("tenancy-payload"));
+
+        given()
+            .when().get(accessUri.replace("/n/" + ns + "/", "/n/" + NS + "/"))
+            .then().statusCode(404)
+                .header("opc-request-id", notNullValue())
+                .body("code", equalTo("NotAuthorizedOrNotFound"));
+    }
 }

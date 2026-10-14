@@ -1,6 +1,7 @@
 package io.floci.oci.services.objectstorage;
 
 import io.floci.oci.core.common.OciException;
+import io.floci.oci.core.common.RequestContext;
 import io.floci.oci.services.objectstorage.model.StoredOsObject;
 import io.floci.oci.services.objectstorage.model.StoredPar;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -34,10 +35,12 @@ public class ParAccessController {
             Set.of("AnyObjectRead", "AnyObjectWrite", "AnyObjectReadWrite");
 
     private final ObjectStorageService service;
+    private final RequestContext requestContext;
 
     @Inject
-    public ParAccessController(ObjectStorageService service) {
+    public ParAccessController(ObjectStorageService service, RequestContext requestContext) {
         this.service = service;
+        this.requestContext = requestContext;
     }
 
     @GET
@@ -47,7 +50,7 @@ public class ParAccessController {
                               @PathParam("bucketName") String bucketName,
                               @PathParam("objectName") String objectName,
                               @HeaderParam("Range") String range) {
-        StoredPar par = authorize(parToken, bucketName, objectName, READ_TYPES);
+        StoredPar par = authorize(parToken, namespaceName, bucketName, objectName, READ_TYPES);
         StoredOsObject o = service.getObject(namespaceName, par.getBucket(), objectName);
         return ObjectStorageController.objectResponse(o, range, true);
     }
@@ -62,15 +65,20 @@ public class ParAccessController {
                               @HeaderParam("Content-MD5") String contentMd5,
                               @Context HttpHeaders headers,
                               InputStream body) throws IOException {
-        StoredPar par = authorize(parToken, bucketName, objectName, WRITE_TYPES);
+        StoredPar par = authorize(parToken, namespaceName, bucketName, objectName, WRITE_TYPES);
         StoredOsObject o = service.putObject(namespaceName, par.getBucket(), objectName,
                 body.readAllBytes(), contentType, contentMd5, null, null, null);
         return Response.ok().header("etag", o.getEtag()).header("opc-content-md5", o.getMd5()).build();
     }
 
-    private StoredPar authorize(String parToken, String bucketName, String objectName,
-                                Set<String> allowedTypes) {
-        StoredPar par = service.resolveParToken(parToken);
+    /**
+     * Resolves the token and makes the rest of the request act as the tenancy that created it,
+     * so the bucket and object are read from that tenancy's partition.
+     */
+    private StoredPar authorize(String parToken, String namespaceName, String bucketName,
+                                String objectName, Set<String> allowedTypes) {
+        ObjectStorageService.ParAccess access = service.resolveParToken(parToken, namespaceName);
+        StoredPar par = access.par();
         if (!par.getBucket().equals(bucketName)) {
             throw OciException.notAuthorizedOrNotFound(
                     "The pre-authenticated request does not grant access to this bucket.");
@@ -87,6 +95,7 @@ public class ParAccessController {
             throw OciException.notAuthorizedOrNotFound(
                     "The pre-authenticated request does not permit this operation.");
         }
+        requestContext.setTenancyId(access.tenancyId());
         return par;
     }
 }

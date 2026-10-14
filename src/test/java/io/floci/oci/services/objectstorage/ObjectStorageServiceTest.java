@@ -264,12 +264,12 @@ class ObjectStorageServiceTest {
                 Instant.now().plusSeconds(3600).toString(), "secret.txt", null);
         assertNotNull(par.getToken());
 
-        StoredPar resolved = service.resolveParToken(par.getToken());
+        StoredPar resolved = service.resolveParToken(par.getToken(), NS).par();
         assertEquals("par", resolved.getBucket());
 
         assertEquals(1, service.listPars(NS, "par").size());
         service.deletePar(NS, "par", par.getId());
-        assertThrows(OciException.class, () -> service.resolveParToken(par.getToken()));
+        assertThrows(OciException.class, () -> service.resolveParToken(par.getToken(), NS));
     }
 
     @Test
@@ -278,7 +278,7 @@ class ObjectStorageServiceTest {
         StoredPar par = service.createPar(NS, "par2", "old", "ObjectRead",
                 Instant.now().minusSeconds(60).toString(), null, null);
         OciException e = assertThrows(OciException.class,
-                () -> service.resolveParToken(par.getToken()));
+                () -> service.resolveParToken(par.getToken(), NS));
         assertEquals(404, e.getHttpStatus());
     }
 
