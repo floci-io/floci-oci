@@ -21,7 +21,8 @@ class ContainerLifecycleManagerClientEndpointTest {
     @BeforeEach
     void setUp() {
         config = mock(EmulatorConfig.class, RETURNS_DEEP_STUBS);
-        when(config.docker().dockerHost()).thenReturn("unix:///var/run/docker.sock");
+        // A configured daemon, so the DOCKER_HOST of the machine running the tests cannot change the answer.
+        when(config.docker().dockerHost()).thenReturn("tcp://daemon.example:2375");
         when(config.docker().endpointMode()).thenReturn(EmulatorConfig.DockerEndpointMode.AUTO);
         containerDetector = mock(ContainerDetector.class);
         manager = new ContainerLifecycleManager(mock(DockerClient.class), mock(ImageCacheService.class),
@@ -29,10 +30,10 @@ class ContainerLifecycleManagerClientEndpointTest {
     }
 
     @Test
-    void onTheHostClientsUseLocalhostAndThePublishedPort() {
+    void onTheHostClientsUseTheDaemonHostAndThePublishedPort() {
         when(containerDetector.isRunningInContainer()).thenReturn(false);
 
-        assertEquals(new EndpointInfo("localhost", 15432), manager.clientEndpoint("floci-oci-db", 5432, 15432));
+        assertEquals(new EndpointInfo("daemon.example", 15432), manager.clientEndpoint("floci-oci-db", 5432, 15432));
     }
 
     @Test
@@ -47,7 +48,7 @@ class ContainerLifecycleManagerClientEndpointTest {
         when(containerDetector.isRunningInContainer()).thenReturn(true);
         when(config.docker().endpointMode()).thenReturn(EmulatorConfig.DockerEndpointMode.PUBLISHED);
 
-        assertEquals(new EndpointInfo("localhost", 15432), manager.clientEndpoint("floci-oci-db", 5432, 15432));
+        assertEquals(new EndpointInfo("daemon.example", 15432), manager.clientEndpoint("floci-oci-db", 5432, 15432));
     }
 
     @Test
