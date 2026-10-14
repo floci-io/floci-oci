@@ -86,7 +86,7 @@ class RegionIsolationIntegrationTest {
         given().header("Host", PHOENIX_IDENTITY).queryParam("compartmentId", TENANCY)
             .when().get("/20160918/availabilityDomains")
             .then().statusCode(200)
-                .body("[0].name", equalTo("Floc:US-PHOENIX-1-AD-1"));
+                .body("[0].name", equalTo("Floc:PHX-AD-1"));
 
         given().header("Host", PHOENIX_IDENTITY)
             .when().get("/20160918/tenancies/" + TENANCY + "/regionSubscriptions")

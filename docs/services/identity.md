@@ -34,6 +34,11 @@ oci iam compartment list --endpoint http://localhost:4599 --compartment-id "$TEN
 - The root compartment is the tenancy itself; `GET /compartments/{tenancyOcid}` returns it.
 - Deleting a compartment is asynchronous, exactly like real OCI: `202` +
   `opc-work-request-id`, terminal status `SUCCEEDED`.
+- Availability domains follow the real naming, `<prefix>:<region>-AD-<n>`: the prefix is `Floc`
+  for the default tenancy and a stable four letters derived from the OCID for any other, and the
+  region part is `PHX` and `US-ASHBURN` for the two original regions and the upper-cased region
+  name elsewhere (`Floc:US-ASHBURN-AD-1`, `Floc:PHX-AD-1`, `Floc:US-CHICAGO-1-AD-1`). Fault
+  domains are `FAULT-DOMAIN-1` to `FAULT-DOMAIN-3`.
 - `compartmentIdInSubtree=true` is only accepted on the tenancy (root compartment), as on
   real OCI. `accessLevel` is validated but not enforced: every compartment is accessible.
 - Region subscriptions complete immediately with status `READY`. Each tenancy has its own home

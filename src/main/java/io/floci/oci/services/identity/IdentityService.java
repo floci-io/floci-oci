@@ -14,6 +14,7 @@ import io.floci.oci.core.storage.StorageBackend;
 import io.floci.oci.core.storage.StorageFactory;
 import io.floci.oci.core.storage.TenancyAwareStorageBackend;
 import io.floci.oci.core.tenancy.StoredTenancy;
+import io.floci.oci.core.tenancy.TenancyNames;
 import io.floci.oci.core.tenancy.TenancyRegistry;
 import io.floci.oci.core.workrequest.WorkRequestService;
 import io.floci.oci.services.identity.model.StoredCompartment;
@@ -52,6 +53,12 @@ public class IdentityService {
     private static final Set<String> SORT_ORDERS = Set.of("ASC", "DESC");
     private static final Set<String> COMPARTMENT_STATES =
             Set.of("CREATING", "ACTIVE", "INACTIVE", "DELETING", "DELETED");
+
+    private static final String DEFAULT_AD_PREFIX = "Floc";
+    private static final String AD_PREFIX_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+    /** The original regions keep historical AD names (oci-go-sdk examples: PHX-AD-1, US-ASHBURN-AD-1). */
+    private static final Map<String, String> LEGACY_AD_REGION_PARTS =
+            Map.of("us-phoenix-1", "PHX", "us-ashburn-1", "US-ASHBURN");
 
     private final StorageBackend<String, StoredCompartment> compartments;
     private final StorageBackend<String, StoredUser> users;
@@ -625,11 +632,27 @@ public class IdentityService {
                 .toList();
     }
 
+    /**
+     * Real AD names are {@code <prefix>:<region>-AD-<n>}: a four letter prefix that differs per
+     * tenancy (e.g. {@code Uocm}, {@code fHBa}), and a region part that is historical for the
+     * two original regions ({@code PHX-AD-1}, {@code US-ASHBURN-AD-1}) and the upper-cased
+     * region identifier everywhere else ({@code US-CHICAGO-1-AD-2}).
+     */
     private List<String> availabilityDomainNames() {
-        String regionUpper = ociContext.region().toUpperCase(Locale.ROOT);
+        String region = ociContext.region();
+        String regionPart = LEGACY_AD_REGION_PARTS.getOrDefault(region, region.toUpperCase(Locale.ROOT));
+        String prefix = availabilityDomainPrefix(tenancyId());
         return IntStream.rangeClosed(1, AVAILABILITY_DOMAINS)
-                .mapToObj(i -> "Floc:" + regionUpper + "-AD-" + i)
+                .mapToObj(i -> prefix + ":" + regionPart + "-AD-" + i)
                 .toList();
+    }
+
+    /** {@code Floc} for the default tenancy; a stable mixed-case four letters for any other. */
+    private String availabilityDomainPrefix(String tenancyId) {
+        if (tenancyId.equals(config.defaultTenancyId())) {
+            return DEFAULT_AD_PREFIX;
+        }
+        return TenancyNames.derive(tenancyId, AD_PREFIX_ALPHABET, 4);
     }
 
     /**

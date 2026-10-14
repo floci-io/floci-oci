@@ -263,10 +263,14 @@ class IdentityServiceTest {
     }
 
     private static OciContext signedAs(String tenancy) {
+        return signedAs(tenancy, "us-ashburn-1");
+    }
+
+    private static OciContext signedAs(String tenancy, String region) {
         OciContext context = mock(OciContext.class);
         lenient().when(context.tenancyId()).thenReturn(tenancy);
         lenient().when(context.realm()).thenReturn("oc1");
-        lenient().when(context.region()).thenReturn("us-ashburn-1");
+        lenient().when(context.region()).thenReturn(region);
         return context;
     }
 
@@ -436,6 +440,34 @@ class IdentityServiceTest {
             }
         }
         assertEquals(1, succeeded);
+    }
+
+    @Test
+    void availabilityDomainNamesFollowTheRealFormat() {
+        assertEquals(List.of("Floc:US-ASHBURN-AD-1", "Floc:US-ASHBURN-AD-2", "Floc:US-ASHBURN-AD-3"),
+                adNames(service));
+        assertEquals("Floc:PHX-AD-1", adNames(identityIn(TENANCY, "us-phoenix-1")).getFirst());
+        assertEquals("Floc:US-CHICAGO-1-AD-1", adNames(identityIn(TENANCY, "us-chicago-1")).getFirst());
+
+        String other = adNames(identityIn(OTHER_TENANCY, "us-ashburn-1")).getFirst();
+        assertTrue(other.matches("[A-Za-z]{4}:US-ASHBURN-AD-1"), other);
+        assertNotEquals("Floc", other.substring(0, 4));
+        assertEquals(other, adNames(identityIn(OTHER_TENANCY, "us-ashburn-1")).getFirst());
+
+        IdentityService phoenix = identityIn(TENANCY, "us-phoenix-1");
+        assertEquals("FAULT-DOMAIN-1", phoenix.faultDomains(TENANCY, "Floc:PHX-AD-2").getFirst().get("name"));
+        assertEquals("InvalidParameter", assertThrows(OciException.class,
+                () -> phoenix.faultDomains(TENANCY, "Floc:US-PHOENIX-1-AD-1")).getCode());
+    }
+
+    private IdentityService identityIn(String tenancy, String region) {
+        return new IdentityService(new InMemoryStorage<>(), new InMemoryStorage<>(), new InMemoryStorage<>(),
+                new InMemoryStorage<>(), new InMemoryStorage<>(), new InMemoryStorage<>(), config,
+                workRequests, signedAs(tenancy, region));
+    }
+
+    private static List<String> adNames(IdentityService identity) {
+        return identity.availabilityDomains(null).stream().map(ad -> (String) ad.get("name")).toList();
     }
 
     @Test
