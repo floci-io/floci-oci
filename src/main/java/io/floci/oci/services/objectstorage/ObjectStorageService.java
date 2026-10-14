@@ -22,6 +22,7 @@ import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
 import java.io.ByteArrayOutputStream;
+import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
@@ -38,6 +39,9 @@ import java.util.UUID;
 public class ObjectStorageService {
 
     private static final Logger LOG = Logger.getLogger(ObjectStorageService.class);
+
+    private static final String NAMESPACE_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789";
+    private static final int NAMESPACE_LENGTH = 12;
 
     private final StorageBackend<String, StoredBucket> buckets;
     private final StorageBackend<String, StoredOsObject> objects;
@@ -92,13 +96,57 @@ public class ObjectStorageService {
 
     // ── Namespace ──────────────────────────────────────────────────────────────
 
+    /** The namespace of the calling tenancy: one per tenancy, the same in every region. */
     public String namespace() {
-        return config.defaultNamespace();
+        return namespaceOf(ociContext.tenancyId());
     }
 
-    /** Any namespace value is accepted on read; only the configured one exists. */
+    /**
+     * Each tenancy has one unique, uneditable namespace. The default tenancy keeps
+     * {@code default-namespace}; any other gets a stable 12 character lowercase string derived
+     * from its OCID, the shape real namespaces have (e.g. {@code axzbp3kgiaim}).
+     */
+    public String namespaceOf(String tenancyId) {
+        if (tenancyId == null || tenancyId.equals(config.defaultTenancyId())) {
+            return config.defaultNamespace();
+        }
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256")
+                    .digest(tenancyId.getBytes(StandardCharsets.UTF_8));
+            StringBuilder namespace = new StringBuilder(NAMESPACE_LENGTH);
+            for (int i = 0; namespace.length() < NAMESPACE_LENGTH; i++) {
+                namespace.append(NAMESPACE_ALPHABET.charAt((digest[i] & 0xff) % NAMESPACE_ALPHABET.length()));
+            }
+            return namespace.toString();
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 is unavailable", e);
+        }
+    }
+
+    /**
+     * GetNamespace with its optional {@code compartmentId}: a tenancy OCID names that tenancy's
+     * namespace. A compartment OCID resolves to the caller's namespace, because the emulator
+     * does not look compartments up across tenancies.
+     */
+    public String namespaceFor(String compartmentId) {
+        if (compartmentId == null || compartmentId.isBlank()) {
+            return namespace();
+        }
+        if (!Ocids.isValid(compartmentId)) {
+            throw OciException.invalidParameter("compartmentId is not a valid OCID: " + compartmentId);
+        }
+        return Ocids.isOfType(compartmentId, "tenancy") ? namespaceOf(compartmentId) : namespace();
+    }
+
+    /**
+     * With {@code strict-namespace} on, a namespace in the path that is not the caller's is
+     * 404 NamespaceNotFound, as on real OCI. Off (the default), any namespace is accepted.
+     */
     public void requireNamespace(String namespaceName) {
-        // Real OCI would 404 foreign namespaces; the emulator accepts any to ease fixtures.
+        if (config.services().objectstorage().strictNamespace() && !namespace().equals(namespaceName)) {
+            throw OciException.namespaceNotFound("Either the namespace " + namespaceName
+                    + " does not exist or you are not authorized to access it.");
+        }
     }
 
     public Map<String, Object> namespaceMetadata(String namespaceName) {

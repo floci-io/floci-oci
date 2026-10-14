@@ -209,6 +209,13 @@ public interface EmulatorConfig {
         interface ObjectStorageServiceConfig {
             @WithDefault("true")
             boolean enabled();
+
+            /**
+             * Reject a namespace in the path that is not the caller's tenancy's with 404
+             * NamespaceNotFound. Off: any namespace is accepted.
+             */
+            @WithDefault("false")
+            boolean strictNamespace();
         }
 
         interface QueueServiceConfig {

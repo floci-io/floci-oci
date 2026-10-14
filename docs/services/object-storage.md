@@ -32,8 +32,14 @@ oci os object get $E --namespace floci-local --bucket-name demo \
 
 ## Notes & limitations
 
-- The namespace is deterministic and configurable (`floci-oci.default-namespace`,
-  default `floci-local`); any namespace value is accepted on read.
+- Each tenancy has its own namespace, the same in every region, as on real OCI. The default
+  tenancy (unsigned requests, or `default-tenancy-id`) uses `floci-oci.default-namespace`
+  (default `floci-local`); any other signing tenancy gets a stable 12 character namespace
+  derived from its OCID. `GetNamespace` returns the caller's, and with `?compartmentId=<tenancy
+  OCID>` that tenancy's (a compartment OCID resolves to the caller's namespace).
+- Any namespace in the path is accepted by default. Set
+  `FLOCI_OCI_SERVICES_OBJECTSTORAGE_STRICT_NAMESPACE=true` to answer a namespace that is not
+  the caller's with `404 NamespaceNotFound`, as real OCI does.
 - `Content-MD5` is verified on upload; `opc-content-md5` is returned.
 - Object versioning, retention rules, lifecycle policies, replication and the
   Amazon S3 Compatibility API are not implemented yet.

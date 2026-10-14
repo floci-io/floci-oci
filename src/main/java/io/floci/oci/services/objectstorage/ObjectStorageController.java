@@ -65,9 +65,10 @@ public class ObjectStorageController {
 
     @GET
     @Path("/n")
-    public Response getNamespace() {
+    public Response getNamespace(@QueryParam("compartmentId") String compartmentId) {
         // The body is a bare JSON string.
-        return Response.ok("\"" + service.namespace() + "\"", MediaType.APPLICATION_JSON).build();
+        return Response.ok("\"" + service.namespaceFor(compartmentId) + "\"", MediaType.APPLICATION_JSON)
+                .build();
     }
 
     @GET

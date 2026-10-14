@@ -10,6 +10,7 @@ import java.util.Map;
 
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.*;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @QuarkusTest
 class ObjectStorageRestIntegrationTest {
@@ -453,5 +454,26 @@ class ObjectStorageRestIntegrationTest {
             .when().post("/n/" + NS + "/b")
             .then().statusCode(200)
                 .body("createdBy", equalTo(config.defaultTenancyId()));
+    }
+
+    @Test
+    void eachTenancyGetsItsOwnNamespace() {
+        String other = "ocid1.tenancy.oc1..itnamespacetenancy";
+        String signed = given()
+                .header("Authorization", "Signature version=\"1\",keyId=\"" + other
+                        + "/ocid1.user.oc1..ituser/aa:bb\",algorithm=\"rsa-sha256\",signature=\"x\"")
+            .when().get("/n")
+            .then().statusCode(200)
+                .header("opc-request-id", notNullValue())
+                .extract().as(String.class);
+        assertTrue(signed.matches("[a-z0-9]{12}"), signed);
+
+        given().queryParam("compartmentId", other)
+            .when().get("/n")
+            .then().statusCode(200).body(equalTo("\"" + signed + "\""));
+
+        given()
+            .when().get("/n")
+            .then().statusCode(200).body(equalTo("\"" + NS + "\""));
     }
 }
