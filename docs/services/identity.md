@@ -48,7 +48,9 @@ oci iam compartment list --endpoint http://localhost:4599 --compartment-id "$TEN
   region in the `Host` header returns `403 NotAllowed` ("This operation must be directed at the
   home region."). Reads work in every region, and changes are visible everywhere at once (real
   OCI takes a few minutes to propagate them). Clients that never set a region host use
-  `default-region`, which is the default home, so they are unaffected.
+  `default-region`, which is the default home, so they are unaffected. The exception is a
+  `default-region` changed after a tenancy was registered: the tenancy keeps its saved home, so
+  its writes must then name that home region in the `Host` header.
   `CreateRegionSubscription` is accepted in every region: the SDKs do not tie it to the home
   region, so floci-oci does not either.
 - Policy statements are stored verbatim; the policy language is not parsed or enforced.
