@@ -3,6 +3,7 @@ package io.floci.oci.services.objectstorage;
 import io.floci.oci.config.EmulatorConfig;
 import io.floci.oci.core.common.OciException;
 import io.floci.oci.core.storage.InMemoryStorage;
+import io.floci.oci.core.storage.TenancyAwareStorageBackend;
 import io.floci.oci.core.workrequest.WorkRequestService;
 import io.floci.oci.services.objectstorage.ObjectStorageService.ObjectListing;
 import io.floci.oci.services.objectstorage.model.StoredBucket;
@@ -35,12 +36,13 @@ class ObjectStorageServiceTest {
     private static final String NS = "floci-test";
     private static final String COMPARTMENT = "ocid1.compartment.oc1..testcompartment";
 
+    private EmulatorConfig config;
     private ObjectStorageService service;
     private WorkRequestService workRequests;
 
     @BeforeEach
     void setUp() {
-        EmulatorConfig config = mock(EmulatorConfig.class);
+        config = mock(EmulatorConfig.class);
         lenient().when(config.defaultTenancyId()).thenReturn(TENANCY);
         lenient().when(config.defaultRealm()).thenReturn("oc1");
         lenient().when(config.defaultRegion()).thenReturn("us-ashburn-1");
@@ -309,5 +311,38 @@ class ObjectStorageServiceTest {
         OciException e = assertThrows(OciException.class, () -> service.requireNamespace("someoneelses"));
         assertEquals(404, e.getHttpStatus());
         assertEquals("NamespaceNotFound", e.getCode());
+    }
+
+    @Test
+    void migrateSavedNamespacesMovesEachTenancysBucketsAndUploadsToItsOwnNamespace() {
+        String other = "ocid1.tenancy.oc1..othertenancy";
+        String otherPartition = TenancyAwareStorageBackend.regionalPartition(other, "us-ashburn-1");
+        String ownPartition = TenancyAwareStorageBackend.regionalPartition(TENANCY, "us-ashburn-1");
+        TenancyAwareStorageBackend<StoredBucket> buckets =
+                new TenancyAwareStorageBackend<>(new InMemoryStorage<>(), () -> ownPartition);
+        TenancyAwareStorageBackend<StoredMultipartUpload> uploads =
+                new TenancyAwareStorageBackend<>(new InMemoryStorage<>(), () -> ownPartition);
+        StoredBucket saved = new StoredBucket();
+        saved.setName("saved");
+        saved.setNamespace(NS);
+        buckets.putForTenancy(otherPartition, "saved", saved);
+        StoredBucket own = new StoredBucket();
+        own.setName("own");
+        own.setNamespace(NS);
+        buckets.putForTenancy(ownPartition, "own", own);
+        StoredMultipartUpload upload = new StoredMultipartUpload();
+        upload.setNamespace(NS);
+        uploads.putForTenancy(otherPartition, "saved/u-1", upload);
+        ObjectStorageService upgraded = new ObjectStorageService(buckets, new InMemoryStorage<>(), uploads,
+                new InMemoryStorage<>(), config, workRequests);
+
+        assertEquals(2, upgraded.migrateSavedNamespaces());
+
+        String otherNamespace = upgraded.namespaceOf(other);
+        assertNotEquals(NS, otherNamespace);
+        assertEquals(otherNamespace, buckets.getForTenancy(otherPartition, "saved").orElseThrow().getNamespace());
+        assertEquals(otherNamespace, uploads.getForTenancy(otherPartition, "saved/u-1").orElseThrow().getNamespace());
+        assertEquals(NS, buckets.getForTenancy(ownPartition, "own").orElseThrow().getNamespace());
+        assertEquals(0, upgraded.migrateSavedNamespaces());
     }
 }

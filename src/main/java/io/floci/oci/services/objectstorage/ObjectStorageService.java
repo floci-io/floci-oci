@@ -30,12 +30,16 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.BiConsumer;
+import java.util.function.Function;
 
 @ApplicationScoped
 public class ObjectStorageService {
@@ -53,6 +57,11 @@ public class ObjectStorageService {
     private final OciContext ociContext;
     private final ServiceRegistry serviceRegistry;
     private final WorkRequestService workRequests;
+    /**
+     * The tenancy each pre-authenticated request token was last found in, so a token in use is not
+     * looked up across every partition each time. Checked against the store on every use.
+     */
+    private final Map<String, String> parOwners = new ConcurrentHashMap<>();
 
     @Inject
     public ObjectStorageService(StorageFactory storageFactory, EmulatorConfig config,
@@ -70,6 +79,7 @@ public class ObjectStorageService {
                 new TypeReference<Map<String, StoredMultipartUpload>>() {});
         this.pars = storageFactory.create("objectstorage", "objectstorage-pars.json",
                 new TypeReference<Map<String, StoredPar>>() {});
+        storageFactory.afterLoad(this::migrateSavedNamespaces);
     }
 
     ObjectStorageService(StorageBackend<String, StoredBucket> buckets,
@@ -86,6 +96,52 @@ public class ObjectStorageService {
         this.config = config;
         this.serviceRegistry = null;
         this.workRequests = workRequests;
+    }
+
+    /**
+     * Rewrites the namespace saved on buckets and multipart uploads to their tenancy's own. Data
+     * written before each tenancy had its own namespace carries the configured default, which
+     * clients would send back and get 404 NamespaceNotFound for. Pre-authenticated requests keep
+     * theirs: it is part of the access URI already handed out.
+     *
+     * @return the number of entries rewritten
+     */
+    int migrateSavedNamespaces() {
+        int rewritten = migrateSavedNamespaces(buckets, StoredBucket::getNamespace, StoredBucket::setNamespace)
+                + migrateSavedNamespaces(uploads, StoredMultipartUpload::getNamespace,
+                        StoredMultipartUpload::setNamespace);
+        if (rewritten > 0) {
+            LOG.infov("Moved {0} Object Storage buckets and uploads to their tenancy's namespace", rewritten);
+        }
+        return rewritten;
+    }
+
+    private <V> int migrateSavedNamespaces(StorageBackend<String, V> store, Function<V, String> namespaceOfEntry,
+                                           BiConsumer<V, String> setNamespace) {
+        if (!(store instanceof TenancyAwareStorageBackend<V> tenancyAware)) {
+            return 0;
+        }
+        int rewritten = 0;
+        for (String partition : tenancyAware.tenancies()) {
+            String namespace = namespaceOf(TenancyAwareStorageBackend.tenancyOf(partition));
+            Map<String, V> updates = new LinkedHashMap<>();
+            for (String key : tenancyAware.keysForTenancy(partition)) {
+                tenancyAware.getForTenancy(partition, key)
+                        .filter(entry -> !namespace.equals(namespaceOfEntry.apply(entry)))
+                        .ifPresent(entry -> {
+                            setNamespace.accept(entry, namespace);
+                            updates.put(key, entry);
+                        });
+            }
+            if (!updates.isEmpty()) {
+                tenancyAware.putAllForTenancy(partition, updates);
+                rewritten += updates.size();
+            }
+        }
+        if (rewritten > 0) {
+            tenancyAware.flush();
+        }
+        return rewritten;
     }
 
     void onStart(@Observes StartupEvent ev) {
@@ -572,8 +628,19 @@ public class ObjectStorageService {
     }
 
     private Optional<ParAccess> findPar(String token) {
-        return TenancyAwareStorageBackend.findInRegion(pars, ociContext.region(), token, ociContext.tenancyId())
-                .map(found -> new ParAccess(found.value(), found.tenancyId()));
+        String region = ociContext.region();
+        String owner = parOwners.get(token);
+        if (owner != null) {
+            Optional<StoredPar> par = TenancyAwareStorageBackend.getIn(pars,
+                    TenancyAwareStorageBackend.regionalPartition(owner, region), token);
+            if (par.isPresent()) {
+                return Optional.of(new ParAccess(par.get(), owner));
+            }
+        }
+        Optional<ParAccess> found = TenancyAwareStorageBackend.findInRegion(pars, region, token, ociContext.tenancyId())
+                .map(owned -> new ParAccess(owned.value(), owned.tenancyId()));
+        found.ifPresentOrElse(access -> parOwners.put(token, access.tenancyId()), () -> parOwners.remove(token));
+        return found;
     }
 
     // ── Helpers ────────────────────────────────────────────────────────────────
