@@ -510,4 +510,59 @@ class ObjectStorageRestIntegrationTest {
                 .header("opc-request-id", notNullValue())
                 .body("code", equalTo("NotAuthorizedOrNotFound"));
     }
+
+    @Test
+    void copyObjectWritesIntoTheDestinationRegion() {
+        String phoenix = "objectstorage.us-phoenix-1.oraclecloud.com";
+        String source = uniqueBucket("it-copy-src");
+        String target = uniqueBucket("it-copy-dst");
+        createBucket(source);
+        given().header("Host", phoenix).contentType("application/json")
+                .body(Map.of("name", target, "compartmentId", COMPARTMENT))
+            .when().post("/n/" + NS + "/b")
+            .then().statusCode(200);
+        given().contentType("text/plain").body("cross-region")
+            .when().put("/n/" + NS + "/b/" + source + "/o/original.txt")
+            .then().statusCode(200);
+
+        String workRequestId = given().contentType("application/json")
+                .body(Map.of("sourceObjectName", "original.txt", "destinationRegion", "us-phoenix-1",
+                        "destinationNamespace", NS, "destinationBucket", target,
+                        "destinationObjectName", "copied.txt"))
+            .when().post("/n/" + NS + "/b/" + source + "/actions/copyObject")
+            .then().statusCode(202)
+                .extract().header("opc-work-request-id");
+
+        given()
+            .when().get("/workRequests/" + workRequestId)
+            .then().statusCode(200).body("status", equalTo("COMPLETED"));
+        given().header("Host", phoenix)
+            .when().get("/n/" + NS + "/b/" + target + "/o/copied.txt")
+            .then().statusCode(200).body(equalTo("cross-region"));
+        given()
+            .when().get("/n/" + NS + "/b/" + source + "/o/copied.txt")
+            .then().statusCode(404);
+    }
+
+    @Test
+    void copyObjectRequiresAKnownDestinationRegion() {
+        String bucket = uniqueBucket("it-copy-region");
+        createBucket(bucket);
+        given().contentType("text/plain").body("x")
+            .when().put("/n/" + NS + "/b/" + bucket + "/o/o.txt")
+            .then().statusCode(200);
+
+        given().contentType("application/json")
+                .body(Map.of("sourceObjectName", "o.txt", "destinationNamespace", NS,
+                        "destinationBucket", bucket, "destinationObjectName", "c.txt"))
+            .when().post("/n/" + NS + "/b/" + bucket + "/actions/copyObject")
+            .then().statusCode(400).body("code", equalTo("MissingParameter"));
+
+        given().contentType("application/json")
+                .body(Map.of("sourceObjectName", "o.txt", "destinationRegion", "xx-nowhere-1",
+                        "destinationNamespace", NS, "destinationBucket", bucket,
+                        "destinationObjectName", "c.txt"))
+            .when().post("/n/" + NS + "/b/" + bucket + "/actions/copyObject")
+            .then().statusCode(400).body("code", equalTo("InvalidParameter"));
+    }
 }

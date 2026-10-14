@@ -387,12 +387,26 @@ public class ObjectStorageService {
     }
 
     /** Copy is async on real OCI: returns the work-request OCID for the 202 response. */
+    /**
+     * CopyObject runs against the source region's endpoint and copies "within a region or to
+     * another region": the destination bucket is looked up, and the copy written, in
+     * {@code destRegion}. The work request stays in the source region, where clients poll it.
+     */
     public String copyObject(String namespaceName, String bucketName, String sourceObjectName,
-                             String destNamespace, String destBucket, String destObjectName,
-                             String sourceIfMatch) {
+                             String destRegion, String destNamespace, String destBucket,
+                             String destObjectName, String sourceIfMatch) {
         StoredOsObject source = getObject(namespaceName, bucketName, sourceObjectName);
         Etags.checkIfMatch(sourceIfMatch, source.getEtag());
-        getBucket(destNamespace, destBucket);
+        String destPartition = TenancyAwareStorageBackend.regionalPartition(ociContext.tenancyId(), destRegion);
+        boolean sameRegion = destRegion.equals(ociContext.region());
+        Optional<StoredBucket> target = sameRegion || !(buckets instanceof TenancyAwareStorageBackend<StoredBucket> regionalBuckets)
+                ? buckets.get(destBucket)
+                : regionalBuckets.getForTenancy(destPartition, destBucket);
+        if (target.isEmpty()) {
+            throw OciException.bucketNotFound("Either the bucket named '" + destBucket
+                    + "' does not exist in the namespace '" + destNamespace + "' in region " + destRegion
+                    + " or you are not authorized to access it");
+        }
 
         StoredOsObject copy = new StoredOsObject();
         copy.setName(destObjectName);
@@ -405,7 +419,11 @@ public class ObjectStorageService {
         copy.setTimeCreated(now);
         copy.setTimeModified(now);
         copy.setMetadata(source.getMetadata());
-        objects.put(objectKey(destBucket, destObjectName), copy);
+        if (sameRegion || !(objects instanceof TenancyAwareStorageBackend<StoredOsObject> regionalObjects)) {
+            objects.put(objectKey(destBucket, destObjectName), copy);
+        } else {
+            regionalObjects.putForTenancy(destPartition, objectKey(destBucket, destObjectName), copy);
+        }
 
         StoredBucket bucket = getBucket(namespaceName, bucketName);
         // Object Storage work requests terminate in COMPLETED (Identity uses SUCCEEDED).

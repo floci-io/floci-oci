@@ -218,7 +218,7 @@ class ObjectStorageServiceTest {
         bucket("src");
         bucket("dst");
         put("src", "o", "payload");
-        String workRequestId = service.copyObject(NS, "src", "o", NS, "dst", "o-copy", null);
+        String workRequestId = service.copyObject(NS, "src", "o", "us-ashburn-1", NS, "dst", "o-copy", null);
         assertEquals("COMPLETED", workRequests.get(workRequestId).getStatus());
         assertArrayEquals("payload".getBytes(StandardCharsets.UTF_8),
                 service.getObject(NS, "dst", "o-copy").getData());

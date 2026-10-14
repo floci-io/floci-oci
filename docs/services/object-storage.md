@@ -43,6 +43,9 @@ oci os object get $E --namespace floci-local --bucket-name demo \
 - Pre-authenticated request URLs work for every tenancy: the token is looked up across tenancies
   in the request's region, must match the namespace in the URL, and acts as the tenancy that
   created it.
+- `CopyObject` honours `destinationRegion` (required, as on real OCI): the destination bucket
+  must exist in that region and the copy lands there. The copy completes immediately; its work
+  request (`COMPLETED`) is read from the source region.
 - `Content-MD5` is verified on upload; `opc-content-md5` is returned.
 - Object versioning, retention rules, lifecycle policies, replication and the
   Amazon S3 Compatibility API are not implemented yet.

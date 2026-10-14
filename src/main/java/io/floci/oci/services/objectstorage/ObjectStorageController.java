@@ -3,6 +3,7 @@ package io.floci.oci.services.objectstorage;
 import io.floci.oci.core.common.Etags;
 import io.floci.oci.core.common.OciException;
 import io.floci.oci.core.common.OciPage;
+import io.floci.oci.core.common.Regions;
 import io.floci.oci.core.workrequest.StoredWorkRequest;
 import io.floci.oci.core.workrequest.WorkRequestService;
 import io.floci.oci.services.identity.CompartmentValidator;
@@ -258,17 +259,21 @@ public class ObjectStorageController {
                                @PathParam("bucketName") String bucketName,
                                Map<String, Object> body) {
         String sourceObjectName = str(body, "sourceObjectName");
+        String destinationRegion = str(body, "destinationRegion");
         String destinationNamespace = str(body, "destinationNamespace");
         String destinationBucket = str(body, "destinationBucket");
         String destinationObjectName = str(body, "destinationObjectName");
-        if (sourceObjectName == null || destinationNamespace == null
+        if (sourceObjectName == null || destinationRegion == null || destinationNamespace == null
                 || destinationBucket == null || destinationObjectName == null) {
             throw OciException.missingParameter(
                     "sourceObjectName, destinationRegion, destinationNamespace, destinationBucket"
                             + " and destinationObjectName are required");
         }
+        if (Regions.byName(destinationRegion).isEmpty()) {
+            throw OciException.invalidParameter("Unknown destinationRegion: " + destinationRegion);
+        }
         String workRequestId = service.copyObject(namespaceName, bucketName, sourceObjectName,
-                destinationNamespace, destinationBucket, destinationObjectName,
+                destinationRegion, destinationNamespace, destinationBucket, destinationObjectName,
                 str(body, "sourceObjectIfMatchETag"));
         return Response.accepted().header("opc-work-request-id", workRequestId).build();
     }
