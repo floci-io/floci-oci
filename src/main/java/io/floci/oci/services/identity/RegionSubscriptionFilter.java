@@ -18,11 +18,14 @@ import java.util.regex.Pattern;
 
 /**
  * A tenancy can only use the regions it is subscribed to: a request to any other region, or to
- * one outside the tenancy's realm, is answered with 401 NotAuthenticated, as on real OCI. The
+ * one outside the tenancy's realm, is answered with 401 NotAuthenticated. Oracle's error catalog
+ * lists an unsubscribed region among that error's causes; the realm case documents no code. The
  * home region is always subscribed; CreateRegionSubscription adds another.
  *
  * <p>Runs after {@code SignatureAuthFilter}, which has already set the tenancy and region.
- * Emulator endpoints, pre-authenticated requests and CreateRegionSubscription are exempt. With
+ * Emulator endpoints, pre-authenticated requests, CreateRegionSubscription and CORS preflights are
+ * exempt: a browser sends the preflight without {@code Authorization}, so it would be checked
+ * against the default tenancy rather than the caller, and the signed request is checked anyway. With
  * Identity disabled nothing could subscribe a region, so nothing is checked.
  */
 @Provider
@@ -30,6 +33,7 @@ import java.util.regex.Pattern;
 @Priority(Priorities.AUTHENTICATION + 10)
 public class RegionSubscriptionFilter implements ContainerRequestFilter {
 
+    private static final String CORS_REQUEST_METHOD = "Access-Control-Request-Method";
     private static final Pattern CREATE_SUBSCRIPTION =
             Pattern.compile("20160918/tenancies/[^/]+/regionSubscriptions/?");
 
@@ -65,6 +69,7 @@ public class RegionSubscriptionFilter implements ContainerRequestFilter {
             path = path.substring(1);
         }
         return path.equals("health") || path.startsWith("_floci-oci") || path.startsWith("p/")
-                || (HttpMethod.POST.equals(ctx.getMethod()) && CREATE_SUBSCRIPTION.matcher(path).matches());
+                || (HttpMethod.POST.equals(ctx.getMethod()) && CREATE_SUBSCRIPTION.matcher(path).matches())
+                || (HttpMethod.OPTIONS.equals(ctx.getMethod()) && ctx.getHeaderString(CORS_REQUEST_METHOD) != null);
     }
 }

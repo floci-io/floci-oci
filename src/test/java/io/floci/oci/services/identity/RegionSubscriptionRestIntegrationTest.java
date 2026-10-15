@@ -59,4 +59,20 @@ class RegionSubscriptionRestIntegrationTest {
             .then().statusCode(401)
                 .body("code", equalTo("NotAuthenticated"));
     }
+
+    @Test
+    void corsPreflightToAnUnsubscribedRegionIsNotRejected() {
+        given().header("Host", "messaging.eu-zurich-1.oci.oraclecloud.com")
+                .header("Origin", "http://localhost:3000")
+                .header("Access-Control-Request-Method", "GET")
+                .header("Access-Control-Request-Headers", "authorization")
+            .when().options("/20210201/queues")
+            .then().statusCode(not(equalTo(401)));
+
+        given().header("Host", "messaging.eu-zurich-1.oci.oraclecloud.com")
+                .queryParam("compartmentId", TENANCY)
+            .when().get("/20210201/queues")
+            .then().statusCode(401)
+                .body("code", equalTo("NotAuthenticated"));
+    }
 }
