@@ -160,3 +160,11 @@ resource "oci_containerengine_node_pool" "tf_node_pool" {
 output "cluster_id" {
   value = oci_containerengine_cluster.tf_cluster.id
 }
+
+data "oci_tenantmanagercontrolplane_organizations" "orgs" {
+  compartment_id = var.tenancy_ocid
+}
+
+output "organizations_read" {
+  value = length(data.oci_tenantmanagercontrolplane_organizations.orgs.organization_collection)
+}
