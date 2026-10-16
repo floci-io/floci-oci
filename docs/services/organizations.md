@@ -22,6 +22,10 @@ tenancy (its OCID as the first part of the Signature `keyId`) land in that tenan
 empty storage: they see none of the parent's resources, and `GetTenancy` reports the child's
 name and home region. This mirrors how floci-aws member accounts work.
 
+A child homed in another region reaches that region by default: a request whose `Host` names
+no region (`localhost:4599`) lands in the signing tenancy's home region. Like any tenancy, the
+child can use other regions only after subscribing to them.
+
 Organizations, organization tenancies and links are stored with the parent tenancy, so a child
 lists the same organization as its parent. Only the parent can update it.
 
@@ -43,6 +47,10 @@ lists the same organization as its parent. Only the parent can update it.
 
 The OCI SDKs leave these open, so floci-oci picks:
 
+- **Organizations data is global.** Real OCI serves this API on a regional host and does not
+  say whether its data is shared across regions; floci-oci keeps organizations, organization
+  tenancies, links and their work requests tenancy-wide, like Identity, so every region of the
+  tenancy sees the same organization.
 - `homeRegion` accepts a region name (`us-phoenix-1`) or a region key (`PHX`).
 - `governanceStatus` defaults to `OPTED_IN` when omitted.
 - Organizations and links get global OCIDs: `ocid1.organization.<realm>..…` and
