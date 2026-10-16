@@ -13,7 +13,7 @@ OCI Identity and Access Management — API version `20160918`.
 | Policies | Create, Get, List, Update, Delete |
 | Availability domains | List (3 ADs) |
 | Fault domains | List (3 per AD) |
-| Regions | List (every region in the configured realm) |
+| Regions | List (every region in the realm of the request's region) |
 | Region subscriptions | List, Create |
 | Tenancies | Get |
 | Work requests | Get, List |
@@ -81,3 +81,22 @@ oci iam compartment list --endpoint http://localhost:4599 --compartment-id "$TEN
 - Policy statements are stored verbatim; the policy language is not parsed or enforced.
 - Identity domains, API keys, auth tokens, dynamic groups and tag namespaces are not
   implemented yet.
+
+## Emulator choices
+
+Behaviour that OCI's SDKs and documentation do not settle, and what floci-oci does:
+
+- **Compartment names are unique per parent.** The SDK's `CreateCompartment` comment says a
+  name must be unique across the tenancy, while the compartments documentation says two
+  compartments within the same parent can't share a name. floci-oci follows the documentation.
+- **`MoveCompartment` work requests use operation type `MOVE_COMPARTMENT`.** Identity's
+  `WorkRequest` enum only lists `DELETE_COMPARTMENT` and `DELETE_TAG_DEFINITION`.
+- **`ListRegions` lists the regions of the request's realm**, the realm of the region named by
+  the `Host` header (or the home region), since a tenancy can only use regions in its realm.
+- **Changes are immediate.** Region subscriptions are `READY` at once (OCI: `IN_PROGRESS` for
+  several minutes), IAM changes are visible in every region at once (OCI: a few minutes to
+  propagate from the home region), and compartment delete and move work requests finish at once.
+- **Error codes OCI does not document** for a rule it does document: `400 InvalidParameter` for
+  the compartment depth limit, `400 LimitExceeded` for the compartment count limit,
+  `401 NotAuthenticated` for a region outside the realm, and a `Conflict` work-request error
+  for a non-empty compartment.
