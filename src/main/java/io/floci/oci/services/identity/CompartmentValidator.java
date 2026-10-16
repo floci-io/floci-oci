@@ -7,9 +7,8 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
 /**
- * Checks that a compartment referenced by another service exists and is ACTIVE, when
- * {@code floci-oci.services.identity.strict-compartments} is on and Identity is enabled.
- * Otherwise every compartment OCID is accepted, as before.
+ * Checks that a compartment referenced by another service exists and is ACTIVE. With Identity
+ * disabled nothing could create a compartment, so every compartment OCID is accepted.
  *
  * <p>The error depends on where the OCID travels, per Oracle's error catalog: a request body
  * reference is 400 {@code RelatedResourceNotAuthorizedOrNotFound}, a URI reference is 404
@@ -46,7 +45,7 @@ public class CompartmentValidator {
     }
 
     private boolean isUnknown(String compartmentId) {
-        if (compartmentId == null || !strict()) {
+        if (compartmentId == null || !config.services().identity().enabled()) {
             return false;
         }
         if (compartmentId.isBlank()) {
@@ -61,11 +60,5 @@ public class CompartmentValidator {
             }
             throw e;
         }
-    }
-
-    private boolean strict() {
-        EmulatorConfig.ServicesConfig.IdentityServiceConfig identityConfig =
-                config.services().identity();
-        return identityConfig.enabled() && identityConfig.strictCompartments();
     }
 }

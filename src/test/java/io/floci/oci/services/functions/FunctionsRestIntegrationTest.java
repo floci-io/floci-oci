@@ -1,6 +1,8 @@
 package io.floci.oci.services.functions;
 
+import io.floci.oci.testing.TestCompartments;
 import io.quarkus.test.junit.QuarkusTest;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -14,13 +16,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 @QuarkusTest
 class FunctionsRestIntegrationTest {
 
-    private static final String COMPARTMENT = "ocid1.compartment.oc1..itfncompartment";
+    private static String compartment;
     private static final String SUBNET = "ocid1.subnet.oc1.iad.itsubnet";
 
     private String createApplication(String name) {
         return given()
                 .contentType("application/json")
-                .body(Map.of("compartmentId", COMPARTMENT, "displayName", name,
+                .body(Map.of("compartmentId", compartment, "displayName", name,
                         "subnetIds", List.of(SUBNET)))
             .when().post("/20181201/applications")
             .then().statusCode(200)
@@ -47,6 +49,13 @@ class FunctionsRestIntegrationTest {
                 .extract().path("id");
     }
 
+    @BeforeEach
+    void createTestCompartment() {
+        if (compartment == null) {
+            compartment = TestCompartments.create("itfncompartment");
+        }
+    }
+
     @Test
     void applicationAndFunctionCrudRoundtrip() {
         String suffix = String.valueOf(System.nanoTime());
@@ -55,7 +64,7 @@ class FunctionsRestIntegrationTest {
 
         // Bare-array lists; summaries drop config.
         given()
-            .queryParam("compartmentId", COMPARTMENT)
+            .queryParam("compartmentId", compartment)
             .when().get("/20181201/applications")
             .then().statusCode(200)
                 .body("size()", greaterThanOrEqualTo(1))

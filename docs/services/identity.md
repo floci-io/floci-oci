@@ -64,9 +64,12 @@ oci iam compartment list --endpoint http://localhost:4599 --compartment-id "$TEN
   the `401` there is an emulator choice. A `Host` that names no region (`localhost`) always
   reaches the tenancy's home region. Emulator endpoints, pre-authenticated requests and
   `CreateRegionSubscription` itself are never blocked.
-- Other services accept any `compartmentId` by default. Set
-  `FLOCI_OCI_SERVICES_IDENTITY_STRICT_COMPARTMENTS=true` to require an ACTIVE compartment
-  created here (or the tenancy), as real OCI does.
+- Every other service requires its `compartmentId` to be an `ACTIVE` compartment created here,
+  or the tenancy itself (the root compartment), as on real OCI: an unknown, deleted or blank
+  one is `400 RelatedResourceNotAuthorizedOrNotFound` in a request body and
+  `404 NotAuthorizedOrNotFound` in a query. Create the compartment first, or use the tenancy
+  OCID. The check is skipped only when Identity is disabled, since nothing could then create a
+  compartment.
 - As on real OCI, compartments, users, groups, group memberships and policies can only be
   created, updated or deleted through the home region's endpoint. A write sent with another
   region in the `Host` header returns `403 NotAllowed` ("This operation must be directed at the

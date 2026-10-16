@@ -1,10 +1,12 @@
 package io.floci.oci.services.oke;
 
+import io.floci.oci.testing.TestCompartments;
 import io.quarkus.test.junit.QuarkusTest;
 import io.quarkus.test.junit.QuarkusTestProfile;
 import io.quarkus.test.junit.TestProfile;
 import io.restassured.http.ContentType;
 import io.restassured.path.json.JsonPath;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.Map;
@@ -22,8 +24,15 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 @TestProfile(OkeTokenKubeconfigRestIntegrationTest.TokenKubeconfigProfile.class)
 class OkeTokenKubeconfigRestIntegrationTest {
 
-    private static final String COMPARTMENT = "ocid1.compartment.oc1..oketokenmode";
+    private static String compartment;
     private static final String VCN = "ocid1.vcn.oc1.iad.tokenmodevcn";
+
+    @BeforeEach
+    void createTestCompartment() {
+        if (compartment == null) {
+            compartment = TestCompartments.create("oketokenmode");
+        }
+    }
 
     @Test
     void kubeconfigTokenIsRandomAndNeverInClusterResponses() {
@@ -36,7 +45,7 @@ class OkeTokenKubeconfigRestIntegrationTest {
 
         String getBody = given().when().get("/20180222/clusters/{id}", clusterId)
             .then().statusCode(200).body("apiToken", nullValue()).extract().asString();
-        String listBody = given().queryParam("compartmentId", COMPARTMENT).when().get("/20180222/clusters")
+        String listBody = given().queryParam("compartmentId", compartment).when().get("/20180222/clusters")
             .then().statusCode(200).extract().asString();
         assertFalse(createBody.contains(apiToken));
         assertFalse(getBody.contains(apiToken));
@@ -46,7 +55,7 @@ class OkeTokenKubeconfigRestIntegrationTest {
     private static String createCluster(String name) {
         return given()
             .contentType(ContentType.JSON)
-            .body(Map.of("compartmentId", COMPARTMENT, "name", name, "vcnId", VCN))
+            .body(Map.of("compartmentId", compartment, "name", name, "vcnId", VCN))
             .when().post("/20180222/clusters")
             .then().statusCode(202)
             .extract().asString();

@@ -1,11 +1,13 @@
 package io.floci.oci.services.oke;
 
 import io.floci.oci.config.EmulatorConfig;
+import io.floci.oci.testing.TestCompartments;
 import io.floci.oci.testing.TestRegions;
 import io.quarkus.test.junit.QuarkusTest;
 import io.restassured.http.ContentType;
 import io.restassured.path.json.JsonPath;
 import jakarta.inject.Inject;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
@@ -25,12 +27,19 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 @QuarkusTest
 class OkeRestIntegrationTest {
 
-    private static final String COMPARTMENT = "ocid1.compartment.oc1..oketestrest";
+    private static String compartment;
     private static final String VCN = "ocid1.vcn.oc1.iad.restvcn";
     private static final String USER = "ocid1.user.oc1..restwebhookuser";
 
     @Inject
     EmulatorConfig config;
+
+    @BeforeEach
+    void createTestCompartment() {
+        if (compartment == null) {
+            compartment = TestCompartments.create("oketestrest");
+        }
+    }
 
     @Test
     void testOkeClusterAndNodePoolLifecycle() {
@@ -38,7 +47,7 @@ class OkeRestIntegrationTest {
         String clusterId = given()
             .contentType(ContentType.JSON)
             .body(Map.of(
-                "compartmentId", COMPARTMENT,
+                "compartmentId", compartment,
                 "name", "rest-cluster",
                 "vcnId", VCN,
                 "kubernetesVersion", "v1.30.1"
@@ -67,7 +76,7 @@ class OkeRestIntegrationTest {
 
         // 3. List Clusters
         given()
-            .queryParam("compartmentId", COMPARTMENT)
+            .queryParam("compartmentId", compartment)
             .when().get("/20180222/clusters")
             .then()
                 .statusCode(200)
@@ -88,7 +97,7 @@ class OkeRestIntegrationTest {
         String nodePoolId = given()
             .contentType(ContentType.JSON)
             .body(Map.of(
-                "compartmentId", COMPARTMENT,
+                "compartmentId", compartment,
                 "clusterId", clusterId,
                 "name", "pool-rest",
                 "kubernetesVersion", "v1.30.1",
@@ -233,7 +242,7 @@ class OkeRestIntegrationTest {
         String clusterId = given()
             .header("Host", "containerengine.us-phoenix-1.oci.oraclecloud.com")
             .contentType(ContentType.JSON)
-            .body(Map.of("compartmentId", COMPARTMENT, "name", "phoenix-cluster", "vcnId", VCN))
+            .body(Map.of("compartmentId", compartment, "name", "phoenix-cluster", "vcnId", VCN))
             .when().post("/20180222/clusters")
             .then().statusCode(202)
                 .body("id", startsWith("ocid1.cluster.oc1.phx."))
@@ -258,7 +267,7 @@ class OkeRestIntegrationTest {
     private static String createCluster(String name) {
         return given()
             .contentType(ContentType.JSON)
-            .body(Map.of("compartmentId", COMPARTMENT, "name", name, "vcnId", VCN))
+            .body(Map.of("compartmentId", compartment, "name", name, "vcnId", VCN))
             .when().post("/20180222/clusters")
             .then().statusCode(202)
             .extract().asString();

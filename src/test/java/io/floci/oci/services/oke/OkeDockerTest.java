@@ -1,6 +1,7 @@
 package io.floci.oci.services.oke;
 
 import io.floci.oci.config.EmulatorConfig;
+import io.floci.oci.testing.TestCompartments;
 import io.quarkus.test.junit.QuarkusTest;
 import io.quarkus.test.junit.QuarkusTestProfile;
 import io.quarkus.test.junit.TestProfile;
@@ -10,6 +11,7 @@ import io.restassured.http.ContentType;
 import io.restassured.response.Response;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.MethodOrderer;
 import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
@@ -54,7 +56,7 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 class OkeDockerTest {
 
-    private static final String COMPARTMENT = "ocid1.compartment.oc1..okedockercompartment";
+    private static String compartment;
     private static final String VCN = "ocid1.vcn.oc1.iad.dockervcn";
     private static final String USER = "ocid1.user.oc1..okedockeruser";
     private static final Duration ACTIVE_TIMEOUT = Duration.ofSeconds(120);
@@ -69,6 +71,13 @@ class OkeDockerTest {
     private String workRequestId;
     private int apiPort;
     private KeyStore clusterCa;
+
+    @BeforeEach
+    void createTestCompartment() {
+        if (compartment == null) {
+            compartment = TestCompartments.create("okedockercompartment");
+        }
+    }
 
     @BeforeAll
     void requireDocker() {
@@ -88,7 +97,7 @@ class OkeDockerTest {
         Response created = given()
             .contentType(ContentType.JSON)
             .body(Map.of(
-                "compartmentId", COMPARTMENT,
+                "compartmentId", compartment,
                 "name", "docker-oke-cluster",
                 "vcnId", VCN,
                 "kubernetesVersion", "v1.30.1"
