@@ -92,6 +92,13 @@ public final class EmulatorFixture {
         return client;
     }
 
+    public static com.oracle.bmc.psql.PostgresqlClient postgresql() {
+        var client = com.oracle.bmc.psql.PostgresqlClient.builder()
+                .region(Region.US_ASHBURN_1).build(AUTH);
+        client.setEndpoint(ENDPOINT);
+        return client;
+    }
+
     public static com.oracle.bmc.containerengine.ContainerEngineClient containerEngine() {
         var client = com.oracle.bmc.containerengine.ContainerEngineClient.builder()
                 .region(Region.US_ASHBURN_1).build(AUTH);

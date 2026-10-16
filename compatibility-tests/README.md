@@ -7,7 +7,7 @@ protocol adherence.
 |---|---|---|
 | `sdk-test-java` | oci-java-sdk (default suite) | Identity + Object Storage, incl. multipart and work requests |
 | `sdk-test-python` | oci (Python SDK) | Identity + Object Storage, incl. `UploadManager` streaming |
-| `sdk-test-cli` | oci-cli 3.89.3 (official CLI) + bats | Smoke CRUD across all 9 services, incl. error codes and PAR access |
+| `sdk-test-cli` | oci-cli 3.89.3 (official CLI) + bats | Smoke CRUD across all 10 services, incl. error codes and PAR access |
 | `compat-terraform` | Terraform + oracle/oci provider + bats | Full apply → no-drift plan → destroy cycle |
 | `compat-opentofu` | OpenTofu + oracle/oci provider + bats | Same cycle as Terraform |
 

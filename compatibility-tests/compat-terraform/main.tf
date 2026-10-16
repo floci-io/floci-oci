@@ -168,3 +168,45 @@ data "oci_tenantmanagercontrolplane_organizations" "orgs" {
 output "organizations_read" {
   value = length(data.oci_tenantmanagercontrolplane_organizations.orgs.organization_collection)
 }
+
+# ── Database with PostgreSQL ────────────────────────────────────────────────
+
+resource "oci_psql_db_system" "tf_db_system" {
+  compartment_id = var.tenancy_ocid
+  display_name   = "tf-compat-db"
+  db_version     = "15"
+  shape          = "PostgreSQL.VM.Standard.E4.Flex.2.32GB"
+
+  network_details {
+    subnet_id = "ocid1.subnet.oc1.iad.tfsubnet"
+  }
+
+  storage_details {
+    is_regionally_durable = true
+    system_type           = "OCI_OPTIMIZED_STORAGE"
+  }
+
+  credentials {
+    username = "admin_user"
+    password_details {
+      password_type = "PLAIN_TEXT"
+      password      = "BEstrO0ng_#11"
+    }
+  }
+}
+
+data "oci_psql_db_system_connection_detail" "tf_db_connection" {
+  db_system_id = oci_psql_db_system.tf_db_system.id
+}
+
+output "db_system_state" {
+  value = oci_psql_db_system.tf_db_system.state
+}
+
+output "db_system_port" {
+  value = data.oci_psql_db_system_connection_detail.tf_db_connection.primary_db_endpoint[0].port
+}
+
+output "db_system_ca_certificate" {
+  value = data.oci_psql_db_system_connection_detail.tf_db_connection.ca_certificate
+}

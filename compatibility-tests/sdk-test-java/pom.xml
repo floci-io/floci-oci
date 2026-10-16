@@ -59,6 +59,18 @@
         </dependency>
         <dependency>
             <groupId>com.oracle.oci.sdk</groupId>
+            <artifactId>oci-java-sdk-psql</artifactId>
+            <version>${oci.sdk.version}</version>
+        </dependency>
+        <!-- PsqlCompatibilityTest connects to the DB system the emulator runs, as an application would. -->
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <version>42.7.4</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.oracle.oci.sdk</groupId>
             <artifactId>oci-java-sdk-functions</artifactId>
             <version>${oci.sdk.version}</version>
         </dependency>
