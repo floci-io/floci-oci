@@ -544,7 +544,6 @@ public class OkeService implements Resettable, CompartmentUsage {
         return workRequests.succeeded("oke", "NODEPOOL_DELETE", pool.getCompartmentId(), List.of(res));
     }
 
-
     @Override
     public List<String> resourcesIn(String tenancyId, String compartmentId) {
         return Stream.concat(

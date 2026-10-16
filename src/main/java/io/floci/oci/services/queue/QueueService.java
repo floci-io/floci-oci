@@ -406,7 +406,6 @@ public class QueueService implements CompartmentUsage {
         }
     }
 
-
     @Override
     public List<String> resourcesIn(String tenancyId, String compartmentId) {
         return CompartmentUsage.live(queues, tenancyId, compartmentId, StoredQueue::getCompartmentId,
