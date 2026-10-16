@@ -63,6 +63,10 @@ public class IdentityService {
     /** The original regions keep historical AD names (oci-go-sdk examples: PHX-AD-1, US-ASHBURN-AD-1). */
     private static final Map<String, String> LEGACY_AD_REGION_PARTS =
             Map.of("us-phoenix-1", "PHX", "us-ashburn-1", "US-ASHBURN");
+    /** "Maximum nested compartment hierarchy levels: 6" (Working_with_Compartments.htm). */
+    static final int MAX_DEPTH = 6;
+    /** "Compartments in a tenancy: 1000" (the IAM table of Oracle's service limits). */
+    static final int MAX_COMPARTMENTS = 1000;
 
     private final StorageBackend<String, StoredCompartment> compartments;
     private final StorageBackend<String, StoredUser> users;
@@ -219,6 +223,14 @@ public class IdentityService {
         requireNonBlank(description, "description");
         String parent = parentId != null ? parentId : tenancyId();
         requireUniqueName(parent, name, null);
+        requireDepth(levelOf(parent) + 1);
+        long existing = compartments.scan(k -> true).stream()
+                .filter(c -> !"DELETED".equals(c.getLifecycleState()))
+                .count();
+        if (existing >= MAX_COMPARTMENTS) {
+            throw OciException.limitExceeded("Maximum number of compartments (" + MAX_COMPARTMENTS
+                    + ") reached for this tenancy.");
+        }
         StoredCompartment c = new StoredCompartment();
         c.setId(Ocids.generateGlobal("compartment", ociContext.realm()));
         c.setCompartmentId(parent);
@@ -364,6 +376,7 @@ public class IdentityService {
                     "A compartment cannot be moved into itself or one of its descendants.");
         }
         requireUniqueName(targetCompartmentId, c.getName(), compartmentId);
+        requireDepth(levelOf(targetCompartmentId) + 1 + heightBelow(compartmentId));
         c.setCompartmentId(targetCompartmentId);
         c.setEtag(Etags.newEtag());
         compartments.put(c.getId(), c);
@@ -871,6 +884,34 @@ public class IdentityService {
     private static void requireNonBlank(String value, String field) {
         if (value == null || value.isBlank()) {
             throw OciException.missingParameter("Missing required parameter: " + field);
+        }
+    }
+
+    /** The tenancy is level 0; a compartment directly under it is level 1. */
+    private int levelOf(String compartmentId) {
+        int level = 0;
+        String current = compartmentId;
+        while (current != null && !current.equals(tenancyId()) && level <= MAX_DEPTH) {
+            level++;
+            current = compartments.get(current).map(StoredCompartment::getCompartmentId).orElse(null);
+        }
+        return level;
+    }
+
+    /** How many levels of non-deleted descendants sit below {@code compartmentId} (0 for a leaf). */
+    private int heightBelow(String compartmentId) {
+        return compartments.scan(k -> true).stream()
+                .filter(child -> compartmentId.equals(child.getCompartmentId())
+                        && !"DELETED".equals(child.getLifecycleState()))
+                .mapToInt(child -> 1 + heightBelow(child.getId()))
+                .max().orElse(0);
+    }
+
+    /** OCI nests compartments at most six levels below the tenancy. */
+    private static void requireDepth(int level) {
+        if (level > MAX_DEPTH) {
+            throw OciException.invalidParameter("Compartments can be nested at most " + MAX_DEPTH
+                    + " levels below the tenancy; this would place one at level " + level + ".");
         }
     }
 

@@ -40,6 +40,11 @@ oci iam compartment list --endpoint http://localhost:4599 --compartment-id "$TEN
   ends `SUCCEEDED` and the compartment is `DELETED` with a random suffix appended to its name
   (`dev.qR5hP2BD`), which `RecoverCompartment` keeps. The work request finishes immediately
   (real OCI takes a few minutes and passes through `DELETING`).
+- Compartments nest at most six levels below the tenancy, and a tenancy holds at most 1,000
+  compartments that are not `DELETED`, as on real OCI. OCI documents both limits but not their
+  errors, so the codes are emulator choices: creating or moving a compartment past the depth
+  limit is `400 InvalidParameter`, and the count limit is `400 LimitExceeded` with a message
+  that starts "Maximum number of compartments", the text the Terraform provider looks for.
 - Availability domains follow the real naming, `<prefix>:<region>-AD-<n>`: the prefix is `Floc`
   for the default tenancy and a stable four letters derived from the OCID for any other, and the
   region part is `PHX` and `US-ASHBURN` for the two original regions and the upper-cased region

@@ -111,6 +111,55 @@ class IdentityServiceTest {
     }
 
     @Test
+    void compartmentsNestAtMostSixLevels() {
+        String parent = null;
+        for (int level = 1; level <= IdentityService.MAX_DEPTH; level++) {
+            parent = service.createCompartment(parent, "level" + level, "d", null, null).getId();
+        }
+        String sixth = parent;
+        OciException e = assertThrows(OciException.class,
+                () -> service.createCompartment(sixth, "level7", "d", null, null));
+        assertEquals(400, e.getHttpStatus());
+        assertEquals("InvalidParameter", e.getCode());
+        assertEquals("Compartments can be nested at most 6 levels below the tenancy; this would place"
+                + " one at level 7.", e.getMessage());
+    }
+
+    @Test
+    void moveCountsTheDepthOfTheMovedSubtree() {
+        StoredCompartment a = service.createCompartment(null, "a", "d", null, null);
+        StoredCompartment b = service.createCompartment(a.getId(), "b", "d", null, null);
+        service.createCompartment(b.getId(), "c", "d", null, null);
+        StoredCompartment d = service.createCompartment(null, "d", "d", null, null);
+        StoredCompartment e = service.createCompartment(d.getId(), "e", "d", null, null);
+        StoredCompartment f = service.createCompartment(e.getId(), "f", "d", null, null);
+        StoredCompartment g = service.createCompartment(f.getId(), "g", "d", null, null);
+
+        assertEquals("InvalidParameter", assertThrows(OciException.class,
+                () -> service.moveCompartment(a.getId(), g.getId(), null)).getCode());
+        assertEquals("SUCCEEDED", workRequests.get(service.moveCompartment(a.getId(), e.getId(), null)).getStatus());
+    }
+
+    @Test
+    void aTenancyHoldsAtMostAThousandCompartments() {
+        String first = null;
+        for (int i = 0; i < IdentityService.MAX_COMPARTMENTS; i++) {
+            String id = service.createCompartment(null, "c" + i, "d", null, null).getId();
+            if (first == null) {
+                first = id;
+            }
+        }
+        OciException e = assertThrows(OciException.class,
+                () -> service.createCompartment(null, "one-too-many", "d", null, null));
+        assertEquals(400, e.getHttpStatus());
+        assertEquals("LimitExceeded", e.getCode());
+        assertTrue(e.getMessage().startsWith("Maximum number of compartments"), e.getMessage());
+
+        service.deleteCompartment(first, null);
+        assertDoesNotThrow(() -> service.createCompartment(null, "after-delete", "d", null, null));
+    }
+
+    @Test
     void deleteCompartmentWithAChildFailsItsWorkRequest() {
         StoredCompartment parent = service.createCompartment(null, "parent", "p", null, null);
         StoredCompartment child = service.createCompartment(parent.getId(), "child", "c", null, null);
