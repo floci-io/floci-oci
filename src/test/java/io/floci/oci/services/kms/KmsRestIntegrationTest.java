@@ -1,6 +1,8 @@
 package io.floci.oci.services.kms;
 
+import io.floci.oci.testing.TestCompartments;
 import io.quarkus.test.junit.QuarkusTest;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.Base64;
@@ -17,12 +19,12 @@ import static org.hamcrest.Matchers.*;
 @QuarkusTest
 class KmsRestIntegrationTest {
 
-    private static final String COMPARTMENT = "ocid1.compartment.oc1..itkmscompartment";
+    private static String compartment;
 
     private String createVault(String name) {
         return given()
                 .contentType("application/json")
-                .body(Map.of("compartmentId", COMPARTMENT, "displayName", name,
+                .body(Map.of("compartmentId", compartment, "displayName", name,
                         "vaultType", "DEFAULT"))
             .when().post("/20180608/vaults")
             .then().statusCode(200)
@@ -37,7 +39,7 @@ class KmsRestIntegrationTest {
     private String createAesKey(String vaultId, String name) {
         return given()
                 .contentType("application/json")
-                .body(Map.of("compartmentId", COMPARTMENT, "displayName", name,
+                .body(Map.of("compartmentId", compartment, "displayName", name,
                         "keyShape", Map.of("algorithm", "AES", "length", 32)))
             .when().post("/20180608/keys")
             .then().statusCode(200)
@@ -46,6 +48,13 @@ class KmsRestIntegrationTest {
                 .body("keyShape.algorithm", equalTo("AES"))
                 .body("currentKeyVersion", startsWith("ocid1.keyversion."))
                 .extract().path("id");
+    }
+
+    @BeforeEach
+    void createTestCompartment() {
+        if (compartment == null) {
+            compartment = TestCompartments.create("itkmscompartment");
+        }
     }
 
     @Test
@@ -60,7 +69,7 @@ class KmsRestIntegrationTest {
 
         // Bare-array list.
         given()
-            .queryParam("compartmentId", COMPARTMENT)
+            .queryParam("compartmentId", compartment)
             .when().get("/20180608/vaults")
             .then().statusCode(200)
                 .body("size()", greaterThanOrEqualTo(1));
@@ -87,7 +96,7 @@ class KmsRestIntegrationTest {
 
         // KeySummary: flat algorithm, no keyShape.
         given()
-            .queryParam("compartmentId", COMPARTMENT)
+            .queryParam("compartmentId", compartment)
             .when().get(base)
             .then().statusCode(200)
                 .body("[0].algorithm", equalTo("AES"))
@@ -161,7 +170,7 @@ class KmsRestIntegrationTest {
         String vaultId = createVault("it-sign-" + System.nanoTime());
         String keyId = given()
                 .contentType("application/json")
-                .body(Map.of("compartmentId", COMPARTMENT, "displayName", "it-rsa",
+                .body(Map.of("compartmentId", compartment, "displayName", "it-rsa",
                         "keyShape", Map.of("algorithm", "RSA", "length", 256)))
             .when().post("/20180608/keys")
             .then().statusCode(200).extract().path("id");

@@ -31,7 +31,6 @@ class CompartmentValidatorTest {
         lenient().when(config.defaultRealm()).thenReturn("oc1");
         lenient().when(config.defaultRegion()).thenReturn("us-ashburn-1");
         lenient().when(config.services().identity().enabled()).thenReturn(true);
-        lenient().when(config.services().identity().strictCompartments()).thenReturn(true);
         identity = new IdentityService(new InMemoryStorage<>(), new InMemoryStorage<>(),
                 new InMemoryStorage<>(), new InMemoryStorage<>(), new InMemoryStorage<>(),
                 new InMemoryStorage<>(), config,
@@ -72,12 +71,9 @@ class CompartmentValidatorTest {
     }
 
     @Test
-    void anyCompartmentPassesWhenTheFlagIsOffOrIdentityDisabled() {
-        lenient().when(config.services().identity().strictCompartments()).thenReturn(false);
-        assertDoesNotThrow(() -> validator.requireInBody(UNKNOWN));
-
-        lenient().when(config.services().identity().strictCompartments()).thenReturn(true);
+    void anyCompartmentPassesWhenIdentityIsDisabled() {
         lenient().when(config.services().identity().enabled()).thenReturn(false);
+        assertDoesNotThrow(() -> validator.requireInBody(UNKNOWN));
         assertDoesNotThrow(() -> validator.requireInQuery(UNKNOWN));
     }
 }

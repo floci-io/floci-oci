@@ -1,8 +1,6 @@
 package io.floci.oci.services.identity;
 
 import io.quarkus.test.junit.QuarkusTest;
-import io.quarkus.test.junit.QuarkusTestProfile;
-import io.quarkus.test.junit.TestProfile;
 import org.junit.jupiter.api.Test;
 
 import java.util.Map;
@@ -12,8 +10,7 @@ import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.notNullValue;
 
 @QuarkusTest
-@TestProfile(StrictCompartmentsRestIntegrationTest.StrictCompartmentsProfile.class)
-class StrictCompartmentsRestIntegrationTest {
+class CompartmentValidationRestIntegrationTest {
 
     private static final String TENANCY =
             "ocid1.tenancy.oc1..flocitesttenancy00000000000000000000000000000000000000000";
@@ -67,12 +64,5 @@ class StrictCompartmentsRestIntegrationTest {
         given().queryParam("compartmentId", TENANCY)
             .when().get("/20180418/streams")
             .then().statusCode(200);
-    }
-
-    public static class StrictCompartmentsProfile implements QuarkusTestProfile {
-        @Override
-        public Map<String, String> getConfigOverrides() {
-            return Map.of("floci-oci.services.identity.strict-compartments", "true");
-        }
     }
 }

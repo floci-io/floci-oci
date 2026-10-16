@@ -20,12 +20,12 @@ All configuration lives under the `floci-oci.*` prefix; every property maps to a
 | `FLOCI_OCI_TLS_ENABLED` | `false` | Serve HTTPS + HTTP on the same port |
 | `FLOCI_OCI_TLS_HTTPS_PORT` | `443` | Extra HTTPS binding for clients that assume 443 (0 disables) |
 | `FLOCI_OCI_SERVICES_IDENTITY_ENABLED` | `true` | Enable/disable Identity |
-| `FLOCI_OCI_SERVICES_IDENTITY_STRICT_COMPARTMENTS` | `false` | Reject `compartmentId` values that are not an ACTIVE Identity compartment (or the tenancy) in other services: 400 `RelatedResourceNotAuthorizedOrNotFound` in a request body, 404 `NotAuthorizedOrNotFound` in a query |
 | `FLOCI_OCI_SERVICES_OBJECTSTORAGE_ENABLED` | `true` | Enable/disable Object Storage |
 | `FLOCI_OCI_SERVICES_QUEUE_ENABLED` | `true` | Enable/disable Queue |
 | `FLOCI_OCI_SERVICES_KMS_ENABLED` | `true` | Enable/disable KMS (vaults, keys, crypto) |
 | `FLOCI_OCI_SERVICES_VAULT_ENABLED` | `true` | Enable/disable Vault secrets + bundles |
 | `FLOCI_OCI_SERVICES_STREAMING_ENABLED` | `true` | Enable/disable Streaming |
+| `FLOCI_OCI_SERVICES_ORGANIZATIONS_ENABLED` | `true` | Enable/disable Organizations (child tenancies, organizations, links) |
 | `FLOCI_OCI_SERVICES_FUNCTIONS_ENABLED` | `true` | Enable/disable Functions |
 | `FLOCI_OCI_SERVICES_FUNCTIONS_MOCK` | `false` | Skip the Fn sidecar; invocations return a synthetic body |
 | `FLOCI_OCI_SERVICES_FUNCTIONS_SERVER_IMAGE` | `fnproject/fnserver:latest` | Fn Project server image |
@@ -36,6 +36,12 @@ All configuration lives under the `floci-oci.*` prefix; every property maps to a
 | `FLOCI_OCI_SERVICES_OKE_API_SERVER_MAX_PORT` | `6543` | Last host port for cluster API servers |
 | `FLOCI_OCI_SERVICES_OKE_KUBECONFIG_AUTH` | `exec` | Kubeconfig user: `exec` (real OKE `oci ce cluster generate-token`) or `token` (static bearer token) |
 | `FLOCI_OCI_SERVICES_OKE_READY_TIMEOUT_SECONDS` | `300` | How long a cluster may stay `CREATING` before it goes `FAILED` |
+| `FLOCI_OCI_SERVICES_PSQL_ENABLED` | `true` | Enable/disable Database with PostgreSQL |
+| `FLOCI_OCI_SERVICES_PSQL_MOCK` | `false` | Skip the PostgreSQL sidecar; DB systems become `ACTIVE` at once with nothing listening on their endpoint |
+| `FLOCI_OCI_SERVICES_PSQL_IMAGE` | `postgres:{major}-alpine` | PostgreSQL image for DB system sidecars; `{major}` is replaced with the major of the DB system's `dbVersion` |
+| `FLOCI_OCI_SERVICES_PSQL_BASE_PORT` | `15432` | First host port for DB system endpoints |
+| `FLOCI_OCI_SERVICES_PSQL_MAX_PORT` | `15531` | Last host port for DB system endpoints |
+| `FLOCI_OCI_SERVICES_PSQL_READY_TIMEOUT_SECONDS` | `120` | How long a DB system may take to accept connections before it goes `FAILED` |
 | `FLOCI_OCI_SERVICES_DOCKER_NETWORK` | – | Shared Docker network for sidecar containers |
 | `FLOCI_OCI_DOCKER_RESOURCE_NAMESPACE` | – | Namespace inserted into sidecar container/volume names (`floci-oci-<ns>-…`) so parallel emulator instances on one Docker host don't collide |
 | `FLOCI_OCI_DOCKER_ENDPOINT_MODE` | `auto` | How a sidecar's published port is addressed in the endpoints returned to clients: `auto` (`localhost` when floci-oci runs on the host, the sidecar's container name when it runs in a container) or `published` (always the Docker daemon's host and the published port; for a remote daemon, or host-side clients of a containerised floci-oci). Only services that build their client endpoint from this setting follow it: OKE cluster endpoints do not, and are always `127.0.0.1` |

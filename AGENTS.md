@@ -117,6 +117,9 @@ contract; use a current FDK image (see `src/test/resources/fn-hello/`).
   values in agreement with it.
 - When adding config: update `EmulatorConfig`, main `application.yml`, test
   `application.yml` if needed, and docs.
+- OCI resource semantics are never behind a flag. Tenancy, region, compartment and namespace
+  isolation and the rejections that come with them are always on. Opt-in flags are for
+  security controls only (signature verification, policy evaluation), as in floci-aws.
 
 ## Storage Rules
 
@@ -131,7 +134,9 @@ contract; use a current FDK image (see `src/test/resources/fn-hello/`).
 2. The service registers its own `ServiceDescriptor` at startup
 3. Add `<Svc>ServiceConfig { enabled(); }` to `EmulatorConfig.ServicesConfig`
 4. Add the YAML block to main `application.yml`
-5. Wire storage through `StorageFactory`
+5. Wire storage through `StorageFactory`; when the service keeps resources in compartments,
+   implement `CompartmentUsage` so `DeleteCompartment` sees them, and check each
+   `compartmentId` with `CompartmentValidator`
 6. Add the test trio: `<Svc>ServiceTest` (unit, package-private ctor),
    `<Svc>RestIntegrationTest` (`@QuarkusTest` + RestAssured),
    `<Svc>DisabledRestIntegrationTest` (profile flips `enabled=false`, asserts 503)
