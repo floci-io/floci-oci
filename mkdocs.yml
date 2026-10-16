@@ -72,4 +72,5 @@ nav:
     - Streaming: services/streaming.md
     - Functions: services/functions.md
     - Container Engine (OKE): services/containerengine.md
+    - Organizations: services/organizations.md
   - Contributing: contributing.md

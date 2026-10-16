@@ -18,6 +18,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * Shared work-request plane: OCI's async-operation record store. Services create a
@@ -40,7 +41,8 @@ public class WorkRequestService {
 
     private static final Logger LOG = Logger.getLogger(WorkRequestService.class);
 
-    private static final String GLOBAL_SERVICE = "identity";
+    private static final String IDENTITY_SERVICE = "identity";
+    private static final Set<String> GLOBAL_SERVICES = Set.of(IDENTITY_SERVICE, "organizations");
 
     private final StorageBackend<String, StoredWorkRequest> store;
     private final StorageBackend<String, StoredWorkRequest> globalStore;
@@ -104,7 +106,7 @@ public class WorkRequestService {
         wr.setStatus("IN_PROGRESS");
         wr.setPercentComplete(0.0f);
         wr.setTimeStarted(Instant.now().toString());
-        store.put(wr.getId(), wr);
+        storeFor(service).put(wr.getId(), wr);
         LOG.debugv("workRequest {0}: {1} IN_PROGRESS ({2})", wr.getId(), operationType, service);
         return wr.getId();
     }
@@ -201,7 +203,7 @@ public class WorkRequestService {
         for (String partition : regional.tenancies()) {
             for (String key : regional.keysForTenancy(partition)) {
                 regional.getForTenancy(partition, key)
-                        .filter(wr -> GLOBAL_SERVICE.equals(wr.getService()))
+                        .filter(wr -> IDENTITY_SERVICE.equals(wr.getService()))
                         .ifPresent(wr -> byPartition.computeIfAbsent(partition, p -> new LinkedHashMap<>())
                                 .put(key, wr));
             }
@@ -219,9 +221,12 @@ public class WorkRequestService {
                 byPartition.values().stream().mapToInt(Map::size).sum());
     }
 
-    /** Identity is global, so its work requests are too; every other service's are regional. */
+    /**
+     * Identity and Organizations are global, so their work requests are too; every other
+     * service's are regional.
+     */
     private StorageBackend<String, StoredWorkRequest> storeFor(String service) {
-        return GLOBAL_SERVICE.equals(service) ? globalStore : store;
+        return GLOBAL_SERVICES.contains(service) ? globalStore : store;
     }
 
     public static StoredWorkRequest.Resource resource(String entityType, String actionType,
