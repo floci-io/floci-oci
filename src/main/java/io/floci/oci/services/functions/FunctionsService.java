@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.floci.oci.config.EmulatorConfig;
+import io.floci.oci.core.common.CompartmentUsage;
 import io.floci.oci.core.common.Etags;
 import io.floci.oci.core.common.OciContext;
 import io.floci.oci.core.common.OciException;
@@ -34,6 +35,7 @@ import java.util.Comparator;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Stream;
 
 /**
  * OCI Functions management plane + invocation. The community reference for a
@@ -43,7 +45,7 @@ import java.util.Map;
  * invocations return a synthetic body.
  */
 @ApplicationScoped
-public class FunctionsService implements Resettable {
+public class FunctionsService implements Resettable, CompartmentUsage {
 
     private static final Logger LOG = Logger.getLogger(FunctionsService.class);
     private static final ObjectMapper MAPPER = new ObjectMapper();
@@ -447,5 +449,14 @@ public class FunctionsService implements Resettable {
     private static OciException notFound(String kind, String id) {
         return OciException.notAuthorizedOrNotFound(
                 "Authorization failed or requested resource not found: " + kind + " " + id);
+    }
+
+    @Override
+    public List<String> resourcesIn(String tenancyId, String compartmentId) {
+        return Stream.concat(
+                CompartmentUsage.live(applications, tenancyId, compartmentId, StoredApplication::getCompartmentId,
+                        StoredApplication::getLifecycleState, a -> "application " + a.getId()),
+                CompartmentUsage.live(functions, tenancyId, compartmentId, StoredFunction::getCompartmentId,
+                        StoredFunction::getLifecycleState, f -> "function " + f.getId())).toList();
     }
 }

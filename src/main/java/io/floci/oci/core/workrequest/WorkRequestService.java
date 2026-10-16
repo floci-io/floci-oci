@@ -14,6 +14,7 @@ import org.jboss.logging.Logger;
 
 import java.time.Instant;
 import java.util.LinkedHashMap;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -144,7 +145,15 @@ public class WorkRequestService {
     /** Records a failed operation and returns its work-request OCID. */
     public String failed(String service, String operationType, String compartmentId,
                          List<StoredWorkRequest.Resource> resources) {
+        return failed(service, operationType, compartmentId, resources, List.of());
+    }
+
+    /** Records a failed operation with the errors that explain it; returns its OCID. */
+    public String failed(String service, String operationType, String compartmentId,
+                         List<StoredWorkRequest.Resource> resources,
+                         List<StoredWorkRequest.ErrorEntry> errors) {
         StoredWorkRequest wr = base(service, operationType, compartmentId, resources);
+        wr.setErrors(new ArrayList<>(errors));
         wr.setStatus("FAILED");
         wr.setPercentComplete(0.0f);
         String now = Instant.now().toString();

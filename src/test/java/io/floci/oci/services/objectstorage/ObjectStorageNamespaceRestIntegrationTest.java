@@ -1,6 +1,8 @@
 package io.floci.oci.services.objectstorage;
 
+import io.floci.oci.testing.TestCompartments;
 import io.quarkus.test.junit.QuarkusTest;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import static io.restassured.RestAssured.given;
@@ -11,18 +13,25 @@ import static org.hamcrest.Matchers.notNullValue;
 class ObjectStorageNamespaceRestIntegrationTest {
 
     private static final String NS = "floci-test";
-    private static final String COMPARTMENT = "ocid1.compartment.oc1..ittestcompartment";
+    private static String compartment;
+
+    @BeforeEach
+    void createTestCompartment() {
+        if (compartment == null) {
+            compartment = TestCompartments.create("ittestcompartment");
+        }
+    }
 
     @Test
     void ownNamespaceIsServed() {
-        given().queryParam("compartmentId", COMPARTMENT)
+        given().queryParam("compartmentId", compartment)
             .when().get("/n/" + NS + "/b")
             .then().statusCode(200);
     }
 
     @Test
     void anotherNamespaceIsNamespaceNotFound() {
-        given().queryParam("compartmentId", COMPARTMENT)
+        given().queryParam("compartmentId", compartment)
             .when().get("/n/someoneelses/b")
             .then().statusCode(404)
                 .header("opc-request-id", notNullValue())

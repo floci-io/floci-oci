@@ -55,21 +55,22 @@ public class OkeController {
     @Path("/clusters")
     public Response createCluster(CreateClusterDetails details) {
         CreateClusterDetails req = details != null ? details : new CreateClusterDetails();
-        compartments.requireInBody(req.compartmentId);
-        OkeService.CreateClusterResult result = service.createCluster(
-            req.compartmentId,
-            req.name,
-            req.vcnId,
-            req.kubernetesVersion,
-            req.kmsKeyId,
-            req.freeformTags,
-            req.definedTags
-        );
+        try (CompartmentValidator.Use ignored = compartments.useInBody(req.compartmentId)) {
+            OkeService.CreateClusterResult result = service.createCluster(
+                req.compartmentId,
+                req.name,
+                req.vcnId,
+                req.kubernetesVersion,
+                req.kmsKeyId,
+                req.freeformTags,
+                req.definedTags
+            );
 
-        return Response.status(Response.Status.ACCEPTED)
-                .header("opc-work-request-id", result.workRequestId())
-                .entity(result.cluster().toWire())
-                .build();
+            return Response.status(Response.Status.ACCEPTED)
+                    .header("opc-work-request-id", result.workRequestId())
+                    .entity(result.cluster().toWire())
+                    .build();
+        }
     }
 
     @GET
@@ -136,22 +137,23 @@ public class OkeController {
     @Path("/nodePools")
     public Response createNodePool(CreateNodePoolDetails details) {
         CreateNodePoolDetails req = details != null ? details : new CreateNodePoolDetails();
-        compartments.requireInBody(req.compartmentId);
-        OkeService.CreateNodePoolResult result = service.createNodePool(
-            req.compartmentId,
-            req.clusterId,
-            req.name,
-            req.kubernetesVersion,
-            req.nodeShape,
-            req.quantityPerSubnet,
-            req.freeformTags,
-            req.definedTags
-        );
+        try (CompartmentValidator.Use ignored = compartments.useInBody(req.compartmentId)) {
+            OkeService.CreateNodePoolResult result = service.createNodePool(
+                req.compartmentId,
+                req.clusterId,
+                req.name,
+                req.kubernetesVersion,
+                req.nodeShape,
+                req.quantityPerSubnet,
+                req.freeformTags,
+                req.definedTags
+            );
 
-        return Response.status(Response.Status.ACCEPTED)
-                .header("opc-work-request-id", result.workRequestId())
-                .entity(result.nodePool())
-                .build();
+            return Response.status(Response.Status.ACCEPTED)
+                    .header("opc-work-request-id", result.workRequestId())
+                    .entity(result.nodePool())
+                    .build();
+        }
     }
 
     @GET

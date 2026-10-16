@@ -45,13 +45,14 @@ public class VaultSecretsController {
 
     @POST
     public Response createSecret(Map<String, Object> body) {
-        compartments.requireInBody(str(body, "compartmentId"));
-        StoredVaultSecret secret = service.createSecret(
-                str(body, "compartmentId"), str(body, "vaultId"), str(body, "keyId"),
-                str(body, "secretName"), str(body, "description"),
-                map(body, "secretContent"), map(body, "metadata"),
-                stringMap(body, "freeformTags"), definedTags(body));
-        return Response.ok(secretJson(secret)).header("etag", secret.getEtag()).build();
+        try (CompartmentValidator.Use ignored = compartments.useInBody(str(body, "compartmentId"))) {
+            StoredVaultSecret secret = service.createSecret(
+                    str(body, "compartmentId"), str(body, "vaultId"), str(body, "keyId"),
+                    str(body, "secretName"), str(body, "description"),
+                    map(body, "secretContent"), map(body, "metadata"),
+                    stringMap(body, "freeformTags"), definedTags(body));
+            return Response.ok(secretJson(secret)).header("etag", secret.getEtag()).build();
+        }
     }
 
     @GET
@@ -113,9 +114,10 @@ public class VaultSecretsController {
     public Response changeCompartment(@PathParam("secretId") String secretId,
                                       @HeaderParam("if-match") String ifMatch,
                                       Map<String, Object> body) {
-        compartments.requireInBody(str(body, "compartmentId"));
-        service.changeSecretCompartment(secretId, str(body, "compartmentId"), ifMatch);
-        return Response.ok().build();
+        try (CompartmentValidator.Use ignored = compartments.useInBody(str(body, "compartmentId"))) {
+            service.changeSecretCompartment(secretId, str(body, "compartmentId"), ifMatch);
+            return Response.ok().build();
+        }
     }
 
     @GET

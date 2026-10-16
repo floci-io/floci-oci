@@ -51,15 +51,16 @@ public class StreamAdminController {
     @POST
     @Path("/streams")
     public Response createStream(Map<String, Object> body) {
-        compartments.requireInBody(str(body, "compartmentId"));
-        StreamingService.CreatedStream created = service.createStream(
-                str(body, "name"), integer(body, "partitions"), integer(body, "retentionInHours"),
-                str(body, "compartmentId"), str(body, "streamPoolId"),
-                stringMap(body, "freeformTags"), definedTags(body));
-        return Response.ok(streamJson(created.stream()))
-                .header("etag", created.stream().getEtag())
-                .header("opc-work-request-id", created.workRequestId())
-                .build();
+        try (CompartmentValidator.Use ignored = compartments.useInBody(str(body, "compartmentId"))) {
+            StreamingService.CreatedStream created = service.createStream(
+                    str(body, "name"), integer(body, "partitions"), integer(body, "retentionInHours"),
+                    str(body, "compartmentId"), str(body, "streamPoolId"),
+                    stringMap(body, "freeformTags"), definedTags(body));
+            return Response.ok(streamJson(created.stream()))
+                    .header("etag", created.stream().getEtag())
+                    .header("opc-work-request-id", created.workRequestId())
+                    .build();
+        }
     }
 
     @GET
