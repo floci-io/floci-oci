@@ -2,6 +2,7 @@ package io.floci.oci.services.vault;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import io.floci.oci.config.EmulatorConfig;
+import io.floci.oci.core.common.CompartmentUsage;
 import io.floci.oci.core.common.Etags;
 import io.floci.oci.core.common.OciContext;
 import io.floci.oci.core.common.OciException;
@@ -30,7 +31,7 @@ import java.util.Map;
  * wire shape never carries content — content is only retrievable through bundles.
  */
 @ApplicationScoped
-public class VaultSecretsService {
+public class VaultSecretsService implements CompartmentUsage {
 
     private static final Logger LOG = Logger.getLogger(VaultSecretsService.class);
 
@@ -269,5 +270,11 @@ public class VaultSecretsService {
     private static OciException notFound(String what) {
         return OciException.notAuthorizedOrNotFound(
                 "Authorization failed or requested resource not found: " + what);
+    }
+
+    @Override
+    public List<String> resourcesIn(String tenancyId, String compartmentId) {
+        return CompartmentUsage.live(secrets, tenancyId, compartmentId, StoredVaultSecret::getCompartmentId,
+                        StoredVaultSecret::getLifecycleState, s -> "secret " + s.getId()).toList();
     }
 }

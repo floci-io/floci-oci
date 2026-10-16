@@ -27,6 +27,7 @@ public class StoredWorkRequest {
     private String timeStarted;
     private String timeFinished;
     private List<Resource> resources = new ArrayList<>();
+    private List<ErrorEntry> errors = new ArrayList<>();
 
     public StoredWorkRequest() {
     }
@@ -51,6 +52,14 @@ public class StoredWorkRequest {
             }
             return res;
         }).toList());
+        if (errors != null && !errors.isEmpty()) {
+            wire.put("errors", errors.stream().map(e -> {
+                Map<String, Object> err = new LinkedHashMap<>();
+                err.put("code", e.getCode());
+                err.put("message", e.getMessage());
+                return err;
+            }).toList());
+        }
         wire.put("percentComplete", percentComplete);
         wire.put("timeAccepted", timeAccepted);
         if (timeStarted != null) {
@@ -60,6 +69,45 @@ public class StoredWorkRequest {
             wire.put("timeFinished", timeFinished);
         }
         return wire;
+    }
+
+    public List<ErrorEntry> getErrors() {
+        return errors;
+    }
+
+    public void setErrors(List<ErrorEntry> errors) {
+        this.errors = errors;
+    }
+
+    /** An entry of a work request's {@code errors}: {@code {code, message}}, both mandatory. */
+    @RegisterForReflection
+    public static class ErrorEntry {
+        private String code;
+        private String message;
+
+        public ErrorEntry() {
+        }
+
+        public ErrorEntry(String code, String message) {
+            this.code = code;
+            this.message = message;
+        }
+
+        public String getCode() {
+            return code;
+        }
+
+        public void setCode(String code) {
+            this.code = code;
+        }
+
+        public String getMessage() {
+            return message;
+        }
+
+        public void setMessage(String message) {
+            this.message = message;
+        }
     }
 
     public String getService() {

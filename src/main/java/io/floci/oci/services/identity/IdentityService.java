@@ -2,6 +2,7 @@ package io.floci.oci.services.identity;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import io.floci.oci.config.EmulatorConfig;
+import io.floci.oci.core.common.CompartmentUsage;
 import io.floci.oci.core.common.Etags;
 import io.floci.oci.core.common.OciContext;
 import io.floci.oci.core.common.OciException;
@@ -16,6 +17,7 @@ import io.floci.oci.core.storage.TenancyAwareStorageBackend;
 import io.floci.oci.core.tenancy.StoredTenancy;
 import io.floci.oci.core.tenancy.TenancyNames;
 import io.floci.oci.core.tenancy.TenancyRegistry;
+import io.floci.oci.core.workrequest.StoredWorkRequest;
 import io.floci.oci.core.workrequest.WorkRequestService;
 import io.floci.oci.services.identity.model.StoredCompartment;
 import io.floci.oci.services.identity.model.StoredGroup;
@@ -26,6 +28,7 @@ import io.floci.oci.services.identity.model.StoredUserGroupMembership;
 import io.quarkus.runtime.StartupEvent;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.Observes;
+import jakarta.enterprise.inject.Instance;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
@@ -38,6 +41,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.BiConsumer;
 import java.util.function.Function;
 import java.util.stream.IntStream;
@@ -71,12 +75,15 @@ public class IdentityService {
     private final WorkRequestService workRequests;
     private final OciContext ociContext;
     private final TenancyRegistry tenancies;
+    private final Iterable<CompartmentUsage> compartmentUsages;
 
     @Inject
     public IdentityService(StorageFactory storageFactory, EmulatorConfig config,
                            ServiceRegistry serviceRegistry, WorkRequestService workRequests,
-                           OciContext ociContext, TenancyRegistry tenancies) {
+                           OciContext ociContext, TenancyRegistry tenancies,
+                           Instance<CompartmentUsage> compartmentUsages) {
         this.config = config;
+        this.compartmentUsages = compartmentUsages;
         this.ociContext = ociContext;
         this.tenancies = tenancies;
         this.serviceRegistry = serviceRegistry;
@@ -117,6 +124,21 @@ public class IdentityService {
                     EmulatorConfig config,
                     WorkRequestService workRequests,
                     OciContext ociContext) {
+        this(compartments, users, groups, memberships, policies, regionSubscriptions, config,
+                workRequests, ociContext, List.of());
+    }
+
+    IdentityService(StorageBackend<String, StoredCompartment> compartments,
+                    StorageBackend<String, StoredUser> users,
+                    StorageBackend<String, StoredGroup> groups,
+                    StorageBackend<String, StoredUserGroupMembership> memberships,
+                    StorageBackend<String, StoredPolicy> policies,
+                    StorageBackend<String, StoredRegionSubscription> regionSubscriptions,
+                    EmulatorConfig config,
+                    WorkRequestService workRequests,
+                    OciContext ociContext,
+                    Iterable<CompartmentUsage> compartmentUsages) {
+        this.compartmentUsages = compartmentUsages;
         this.ociContext = ociContext;
         this.tenancies = new TenancyRegistry(new InMemoryStorage<>(), config, ociContext);
         this.compartments = compartments;
@@ -269,27 +291,62 @@ public class IdentityService {
         return c;
     }
 
-    /** Deletion is async on real OCI: returns the work-request OCID for the 202 response. */
+    /**
+     * Deletion is async on real OCI: a work request either deletes the compartment or fails and
+     * leaves it ACTIVE. It "must be empty of all resources", in every region: child
+     * compartments, policies, and anything another service holds there. A deleted compartment
+     * gets a random suffix on its name, which recovery keeps.
+     */
     public synchronized String deleteCompartment(String compartmentId, String ifMatch) {
         StoredCompartment c = compartments.get(compartmentId)
                 .orElseThrow(() -> notFound("compartment", compartmentId));
         Etags.checkIfMatch(ifMatch, c.getEtag());
-        boolean hasChildren = compartments.scan(k -> true).stream()
-                .anyMatch(child -> compartmentId.equals(child.getCompartmentId())
-                        && "ACTIVE".equals(child.getLifecycleState()));
-        if (hasChildren) {
-            throw OciException.conflict(
-                    "Compartment " + compartmentId + " has active child compartments.");
+        String uri = "/20160918/compartments/" + compartmentId;
+        List<String> remaining = contentsOf(compartmentId);
+        if (!remaining.isEmpty()) {
+            String held = String.join(", ", remaining.subList(0, Math.min(remaining.size(), 10)))
+                    + (remaining.size() > 10 ? " and " + (remaining.size() - 10) + " more" : "");
+            return workRequests.failed("identity", "DELETE_COMPARTMENT", c.getCompartmentId(),
+                    List.of(WorkRequestService.resource("COMPARTMENT", "RELATED", compartmentId, uri)),
+                    List.of(new StoredWorkRequest.ErrorEntry("Conflict",
+                            "The compartment must be empty before you can delete it. It still holds: "
+                                    + held + ".")));
         }
+        c.setName(c.getName() + "." + deletedNameSuffix());
         c.setLifecycleState("DELETED");
         c.setEtag(Etags.newEtag());
         compartments.put(c.getId(), c);
         return workRequests.succeeded("identity", "DELETE_COMPARTMENT", c.getCompartmentId(),
-                List.of(WorkRequestService.resource("COMPARTMENT", "DELETED", compartmentId,
-                        "/20160918/compartments/" + compartmentId)));
+                List.of(WorkRequestService.resource("COMPARTMENT", "DELETED", compartmentId, uri)));
     }
 
-    /** Moving is async on real OCI: returns the work-request OCID for the 202 response. */
+    /** What still lives in a compartment: Identity's own children and policies, then every service's. */
+    private List<String> contentsOf(String compartmentId) {
+        List<String> contents = new ArrayList<>();
+        compartments.scan(k -> true).stream()
+                .filter(child -> compartmentId.equals(child.getCompartmentId())
+                        && !"DELETED".equals(child.getLifecycleState()))
+                .forEach(child -> contents.add("compartment " + child.getId()));
+        policies.scan(k -> true).stream()
+                .filter(policy -> compartmentId.equals(policy.getCompartmentId())
+                        && !"DELETED".equals(policy.getLifecycleState()))
+                .forEach(policy -> contents.add("policy " + policy.getId()));
+        for (CompartmentUsage usage : compartmentUsages) {
+            contents.addAll(usage.resourcesIn(tenancyId(), compartmentId));
+        }
+        return contents;
+    }
+
+    /** Eight random letters and digits, the shape OCI appends to a deleted compartment's name. */
+    private static String deletedNameSuffix() {
+        String alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+        StringBuilder suffix = new StringBuilder(8);
+        for (int i = 0; i < 8; i++) {
+            suffix.append(alphabet.charAt(ThreadLocalRandom.current().nextInt(alphabet.length())));
+        }
+        return suffix.toString();
+    }
+
     public synchronized String moveCompartment(String compartmentId, String targetCompartmentId,
                                                String ifMatch) {
         requireNonBlank(targetCompartmentId, "targetCompartmentId");
