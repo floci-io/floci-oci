@@ -470,6 +470,52 @@ class IdentityServiceTest {
     }
 
     @Test
+    void deletingADeletedCompartmentKeepsItsName() {
+        StoredCompartment c = service.createCompartment(null, "twice", "d", null, null);
+        service.deleteCompartment(c.getId(), null);
+        String deletedName = service.getCompartment(c.getId()).getName();
+
+        StoredWorkRequest retry = workRequests.get(service.deleteCompartment(c.getId(), null));
+
+        assertEquals("SUCCEEDED", retry.getStatus());
+        assertEquals(deletedName, service.getCompartment(c.getId()).getName());
+        assertEquals("DELETED", service.getCompartment(c.getId()).getLifecycleState());
+    }
+
+    @Test
+    void recoverCompartmentRespectsTheCountLimit() {
+        String first = service.createCompartment(null, "c0", "d", null, null).getId();
+        for (int i = 1; i < IdentityService.MAX_COMPARTMENTS; i++) {
+            service.createCompartment(null, "c" + i, "d", null, null);
+        }
+        service.deleteCompartment(first, null);
+        service.createCompartment(null, "replacement", "d", null, null);
+
+        OciException e = assertThrows(OciException.class, () -> service.recoverCompartment(first, null));
+
+        assertEquals("LimitExceeded", e.getCode());
+        assertEquals("DELETED", service.getCompartment(first).getLifecycleState());
+    }
+
+    @Test
+    void recoverCompartmentRespectsTheDepthLimit() {
+        StoredCompartment a = service.createCompartment(null, "a", "d", null, null);
+        StoredCompartment child = service.createCompartment(a.getId(), "child", "d", null, null);
+        service.deleteCompartment(child.getId(), null);
+        String parent = null;
+        for (int level = 1; level < IdentityService.MAX_DEPTH; level++) {
+            parent = service.createCompartment(parent, "level" + level, "d", null, null).getId();
+        }
+        service.moveCompartment(a.getId(), parent, null);
+
+        OciException e = assertThrows(OciException.class,
+                () -> service.recoverCompartment(child.getId(), null));
+
+        assertEquals("InvalidParameter", e.getCode());
+        assertEquals("DELETED", service.getCompartment(child.getId()).getLifecycleState());
+    }
+
+    @Test
     void regionsAreScopedToTheRealm() {
         List<Map<String, String>> regions = service.regions();
         assertTrue(regions.contains(Map.of("key", "GRU", "name", "sa-saopaulo-1")));

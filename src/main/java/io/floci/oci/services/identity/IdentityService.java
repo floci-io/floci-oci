@@ -224,13 +224,7 @@ public class IdentityService {
         String parent = parentId != null ? parentId : tenancyId();
         requireUniqueName(parent, name, null);
         requireDepth(levelOf(parent) + 1);
-        long existing = compartments.scan(k -> true).stream()
-                .filter(c -> !"DELETED".equals(c.getLifecycleState()))
-                .count();
-        if (existing >= MAX_COMPARTMENTS) {
-            throw OciException.limitExceeded("Maximum number of compartments (" + MAX_COMPARTMENTS
-                    + ") reached for this tenancy.");
-        }
+        requireCompartmentCapacity();
         StoredCompartment c = new StoredCompartment();
         c.setId(Ocids.generateGlobal("compartment", ociContext.realm()));
         c.setCompartmentId(parent);
@@ -307,13 +301,18 @@ public class IdentityService {
      * Deletion is async on real OCI: a work request either deletes the compartment or fails and
      * leaves it ACTIVE. It "must be empty of all resources", in every region: child
      * compartments, policies, and anything another service holds there. A deleted compartment
-     * gets a random suffix on its name, which recovery keeps.
+     * gets a random suffix on its name, which recovery keeps. Deleting it again changes nothing,
+     * so a retried delete does not stack suffixes.
      */
     public synchronized String deleteCompartment(String compartmentId, String ifMatch) {
         StoredCompartment c = compartments.get(compartmentId)
                 .orElseThrow(() -> notFound("compartment", compartmentId));
         Etags.checkIfMatch(ifMatch, c.getEtag());
         String uri = "/20160918/compartments/" + compartmentId;
+        if ("DELETED".equals(c.getLifecycleState())) {
+            return workRequests.succeeded("identity", "DELETE_COMPARTMENT", c.getCompartmentId(),
+                    List.of(WorkRequestService.resource("COMPARTMENT", "DELETED", compartmentId, uri)));
+        }
         List<String> remaining = contentsOf(compartmentId);
         if (!remaining.isEmpty()) {
             String held = String.join(", ", remaining.subList(0, Math.min(remaining.size(), 10)))
@@ -396,6 +395,8 @@ public class IdentityService {
         }
         requireActive(getCompartment(c.getCompartmentId()));
         requireUniqueName(c.getCompartmentId(), c.getName(), compartmentId);
+        requireDepth(levelOf(c.getCompartmentId()) + 1);
+        requireCompartmentCapacity();
         c.setLifecycleState("ACTIVE");
         c.setEtag(Etags.newEtag());
         compartments.put(c.getId(), c);
@@ -912,6 +913,16 @@ public class IdentityService {
         if (level > MAX_DEPTH) {
             throw OciException.invalidParameter("Compartments can be nested at most " + MAX_DEPTH
                     + " levels below the tenancy; this would place one at level " + level + ".");
+        }
+    }
+
+    private void requireCompartmentCapacity() {
+        long existing = compartments.scan(k -> true).stream()
+                .filter(c -> !"DELETED".equals(c.getLifecycleState()))
+                .count();
+        if (existing >= MAX_COMPARTMENTS) {
+            throw OciException.limitExceeded("Maximum number of compartments (" + MAX_COMPARTMENTS
+                    + ") reached for this tenancy.");
         }
     }
 
