@@ -179,6 +179,12 @@
             <version>4.3.0</version>
             <scope>test</scope>
         </dependency>
+        <!-- Test only: PsqlDockerTest connects to a real DB system the way an application would. -->
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>

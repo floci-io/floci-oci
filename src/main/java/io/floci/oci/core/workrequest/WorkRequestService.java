@@ -124,6 +124,12 @@ public class WorkRequestService {
      * request that is missing or already finished is left untouched.
      */
     public void finish(String tenancyId, String region, String workRequestId, String terminalStatus) {
+        finish(tenancyId, region, workRequestId, terminalStatus, List.of());
+    }
+
+    /** Like {@link #finish(String, String, String, String)}, recording the errors that explain a failure. */
+    public void finish(String tenancyId, String region, String workRequestId, String terminalStatus,
+                       List<StoredWorkRequest.ErrorEntry> errors) {
         String partition = TenancyAwareStorageBackend.regionalPartition(tenancyId, region);
         Optional<StoredWorkRequest> found = store instanceof TenancyAwareStorageBackend<StoredWorkRequest> tenancyAware
                 ? tenancyAware.getForTenancy(partition, workRequestId)
@@ -138,6 +144,9 @@ public class WorkRequestService {
             return;
         }
         wr.setStatus(terminalStatus);
+        if (!errors.isEmpty()) {
+            wr.setErrors(new ArrayList<>(errors));
+        }
         if ("SUCCEEDED".equals(terminalStatus)) {
             wr.setPercentComplete(100.0f);
         }

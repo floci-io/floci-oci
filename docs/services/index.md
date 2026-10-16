@@ -9,6 +9,7 @@
 | [Streaming](streaming.md) | `/20180418/…` | Streams, partitioned log, cursors (incl. group cursors), commit/heartbeat |
 | [Functions](functions.md) | `/20181201/…` | Applications, functions, real invocation via an `fnproject/fnserver` sidecar |
 | [Container Engine for Kubernetes (OKE)](containerengine.md) | `/20180222/…` | Clusters CRUD, Node Pools CRUD, Options, Kubeconfig generation, work requests, real k3s sidecar |
+| [Database with PostgreSQL](psql.md) | `/20220915/…` | DB systems CRUD, start/stop/restart, password reset, connection details with a CA certificate, shapes, default configurations, work requests, real PostgreSQL sidecar |
 | [Organizations](organizations.md) | `/20230401/…` | Child tenancies with their own home region and isolated storage, organizations, organization tenancies, links, work requests |
 
 ## Wire contract
@@ -36,6 +37,7 @@ FLOCI_OCI_SERVICES_VAULT_ENABLED=false
 FLOCI_OCI_SERVICES_STREAMING_ENABLED=false
 FLOCI_OCI_SERVICES_FUNCTIONS_ENABLED=false
 FLOCI_OCI_SERVICES_OKE_ENABLED=false
+FLOCI_OCI_SERVICES_PSQL_ENABLED=false
 ```
 
 Disabled services answer `503 ServiceUnavailable`.

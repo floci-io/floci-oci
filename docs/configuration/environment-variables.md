@@ -36,6 +36,12 @@ All configuration lives under the `floci-oci.*` prefix; every property maps to a
 | `FLOCI_OCI_SERVICES_OKE_API_SERVER_MAX_PORT` | `6543` | Last host port for cluster API servers |
 | `FLOCI_OCI_SERVICES_OKE_KUBECONFIG_AUTH` | `exec` | Kubeconfig user: `exec` (real OKE `oci ce cluster generate-token`) or `token` (static bearer token) |
 | `FLOCI_OCI_SERVICES_OKE_READY_TIMEOUT_SECONDS` | `300` | How long a cluster may stay `CREATING` before it goes `FAILED` |
+| `FLOCI_OCI_SERVICES_PSQL_ENABLED` | `true` | Enable/disable Database with PostgreSQL |
+| `FLOCI_OCI_SERVICES_PSQL_MOCK` | `false` | Skip the PostgreSQL sidecar; DB systems become `ACTIVE` at once with nothing listening on their endpoint |
+| `FLOCI_OCI_SERVICES_PSQL_IMAGE` | `postgres:{major}-alpine` | PostgreSQL image for DB system sidecars; `{major}` is replaced with the major of the DB system's `dbVersion` |
+| `FLOCI_OCI_SERVICES_PSQL_BASE_PORT` | `15432` | First host port for DB system endpoints |
+| `FLOCI_OCI_SERVICES_PSQL_MAX_PORT` | `15531` | Last host port for DB system endpoints |
+| `FLOCI_OCI_SERVICES_PSQL_READY_TIMEOUT_SECONDS` | `120` | How long a DB system may take to accept connections before it goes `FAILED` |
 | `FLOCI_OCI_SERVICES_DOCKER_NETWORK` | – | Shared Docker network for sidecar containers |
 | `FLOCI_OCI_DOCKER_RESOURCE_NAMESPACE` | – | Namespace inserted into sidecar container/volume names (`floci-oci-<ns>-…`) so parallel emulator instances on one Docker host don't collide |
 | `FLOCI_OCI_DOCKER_ENDPOINT_MODE` | `auto` | How a sidecar's published port is addressed in the endpoints returned to clients: `auto` (`localhost` when floci-oci runs on the host, the sidecar's container name when it runs in a container) or `published` (always the Docker daemon's host and the published port; for a remote daemon, or host-side clients of a containerised floci-oci). Only services that build their client endpoint from this setting follow it: OKE cluster endpoints do not, and are always `127.0.0.1` |
