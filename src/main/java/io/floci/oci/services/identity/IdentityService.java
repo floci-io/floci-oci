@@ -41,13 +41,13 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.BiConsumer;
 import java.util.function.Function;
 import java.util.stream.IntStream;
+import java.util.stream.Stream;
 
 @ApplicationScoped
 public class IdentityService {
@@ -70,6 +70,7 @@ public class IdentityService {
     static final int MAX_DEPTH = 6;
     /** "Compartments in a tenancy: 1000" (the IAM table of Oracle's service limits). */
     static final int MAX_COMPARTMENTS = 1000;
+    static final int COMPARTMENT_LOCK_STRIPES = 64;
 
     private final StorageBackend<String, StoredCompartment> compartments;
     private final StorageBackend<String, StoredUser> users;
@@ -84,11 +85,14 @@ public class IdentityService {
     private final TenancyRegistry tenancies;
     private final Iterable<CompartmentUsage> compartmentUsages;
     /**
-     * One lock per compartment. A service creating a resource in a compartment, or moving one into
-     * it, holds the read side from its ACTIVE check to its write; deletion holds the write side
-     * from its emptiness scan to the state change, so neither can slip between the other's steps.
+     * Compartment locks, striped. A service creating a resource in a compartment, or moving one
+     * into it, holds the read side from its ACTIVE check to its write; deletion holds the write
+     * side from its emptiness scan to the state change, so neither can slip between the other's
+     * steps. A compartment always maps to the same stripe, and the fixed count keeps request-supplied
+     * IDs, including ones that do not exist, from growing the set.
      */
-    private final Map<String, ReentrantReadWriteLock> compartmentLocks = new ConcurrentHashMap<>();
+    private final ReentrantReadWriteLock[] compartmentLocks = Stream.generate(ReentrantReadWriteLock::new)
+            .limit(COMPARTMENT_LOCK_STRIPES).toArray(ReentrantReadWriteLock[]::new);
 
     @Inject
     public IdentityService(StorageFactory storageFactory, EmulatorConfig config,
@@ -331,7 +335,7 @@ public class IdentityService {
     }
 
     private ReentrantReadWriteLock compartmentLock(String compartmentId) {
-        return compartmentLocks.computeIfAbsent(compartmentId, id -> new ReentrantReadWriteLock());
+        return compartmentLocks[Math.floorMod(compartmentId.hashCode(), COMPARTMENT_LOCK_STRIPES)];
     }
 
     private synchronized String deleteCompartmentLocked(String compartmentId, String ifMatch) {

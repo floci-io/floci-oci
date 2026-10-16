@@ -8,6 +8,9 @@ import io.floci.oci.services.identity.model.StoredCompartment;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.util.Collections;
+import java.util.IdentityHashMap;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -15,7 +18,9 @@ import java.util.concurrent.TimeoutException;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
@@ -108,5 +113,17 @@ class CompartmentValidatorTest {
                 () -> identity.deleteCompartment(gone.getId(), null));
         again.get(5, TimeUnit.SECONDS);
         assertFalse(again.isCompletedExceptionally());
+    }
+
+    @Test
+    void unknownCompartmentIdsDoNotGrowTheLocks() {
+        Set<Object> locks = Collections.newSetFromMap(new IdentityHashMap<>());
+        for (int i = 0; i < 10_000; i++) {
+            String id = "ocid1.compartment.oc1..missing" + i;
+            assertThrows(OciException.class, () -> validator.useInBody(id));
+            locks.add(identity.compartmentUseLock(id));
+        }
+        assertTrue(locks.size() <= IdentityService.COMPARTMENT_LOCK_STRIPES);
+        assertSame(identity.compartmentUseLock(UNKNOWN), identity.compartmentUseLock(UNKNOWN));
     }
 }
