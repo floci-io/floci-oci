@@ -66,7 +66,8 @@ func TestOkeClusterLifecycle(t *testing.T) {
 	client := getClient(t)
 	ctx := context.Background()
 
-	compartmentId := "ocid1.compartment.oc1..testcompartment"
+	// The tenancy is its own root compartment; any other compartment has to be created first.
+	compartmentId := "ocid1.tenancy.oc1..test"
 	name := "go-sdk-cluster"
 	vcnId := "ocid1.vcn.oc1.iad.testvcn"
 	version := "v1.30.1"

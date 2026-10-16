@@ -12,7 +12,8 @@ public record ServiceDescriptor(
         String name,
         boolean enabled,
         String storageKey,
-        Set<Class<?>> resourceClasses
+        Set<Class<?>> resourceClasses,
+        boolean global
 ) {
 
     public boolean supportsStorage() {
@@ -29,6 +30,7 @@ public record ServiceDescriptor(
         private boolean enabled = true;
         private String storageKey;
         private Set<Class<?>> resourceClasses = Set.of();
+        private boolean global;
 
         private Builder(String name) {
             this.name = name;
@@ -49,8 +51,17 @@ public record ServiceDescriptor(
             return this;
         }
 
+        /**
+         * Marks a service whose resources exist in every region of the tenancy (Identity),
+         * so its work requests are kept in the tenancy-wide store instead of a regional one.
+         */
+        public Builder global(boolean global) {
+            this.global = global;
+            return this;
+        }
+
         public ServiceDescriptor build() {
-            return new ServiceDescriptor(name, enabled, storageKey, resourceClasses);
+            return new ServiceDescriptor(name, enabled, storageKey, resourceClasses, global);
         }
     }
 }

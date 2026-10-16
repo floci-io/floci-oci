@@ -1,9 +1,11 @@
 package io.floci.oci.services.objectstorage;
 
 import io.floci.oci.config.EmulatorConfig;
+import io.floci.oci.testing.TestCompartments;
 import io.floci.oci.testing.TestRegions;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -17,7 +19,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class ObjectStorageRestIntegrationTest {
 
     private static final String NS = "floci-test";
-    private static final String COMPARTMENT = "ocid1.compartment.oc1..ittestcompartment";
+    private static String compartment;
 
     @Inject
     EmulatorConfig config;
@@ -29,12 +31,19 @@ class ObjectStorageRestIntegrationTest {
     private void createBucket(String name) {
         given()
             .contentType("application/json")
-            .body(Map.of("name", name, "compartmentId", COMPARTMENT))
+            .body(Map.of("name", name, "compartmentId", compartment))
             .when().post("/n/" + NS + "/b")
             .then().statusCode(200)
                 .header("etag", notNullValue())
                 .body("namespace", equalTo(NS))
                 .body("versioning", equalTo("Disabled"));
+    }
+
+    @BeforeEach
+    void createTestCompartment() {
+        if (compartment == null) {
+            compartment = TestCompartments.create("ittestcompartment");
+        }
     }
 
     @Test
@@ -58,7 +67,7 @@ class ObjectStorageRestIntegrationTest {
 
         given()
             .contentType("application/json")
-            .body(Map.of("name", bucket, "compartmentId", COMPARTMENT))
+            .body(Map.of("name", bucket, "compartmentId", compartment))
             .when().post("/n/" + NS + "/b")
             .then().statusCode(409)
                 .body("code", equalTo("BucketAlreadyExists"));
@@ -75,7 +84,7 @@ class ObjectStorageRestIntegrationTest {
             .then().statusCode(200).header("etag", notNullValue());
 
         given()
-            .queryParam("compartmentId", COMPARTMENT)
+            .queryParam("compartmentId", compartment)
             .when().get("/n/" + NS + "/b")
             .then().statusCode(200)
                 .body("find { it.name == '" + bucket + "' }.namespace", equalTo(NS));
@@ -456,7 +465,7 @@ class ObjectStorageRestIntegrationTest {
     void unsignedBucketCreatorFallsBackToTheDefaultTenancy() {
         given()
                 .contentType("application/json")
-                .body(Map.of("name", "it-unsigned-" + System.nanoTime(), "compartmentId", COMPARTMENT))
+                .body(Map.of("name", "it-unsigned-" + System.nanoTime(), "compartmentId", compartment))
             .when().post("/n/" + NS + "/b")
             .then().statusCode(200)
                 .body("createdBy", equalTo(config.defaultTenancyId()));
@@ -485,13 +494,14 @@ class ObjectStorageRestIntegrationTest {
 
     @Test
     void preauthenticatedRequestOfAnotherTenancyIsReachable() {
-        String signer = "Signature version=\"1\",keyId=\"ocid1.tenancy.oc1..itpartenancy"
+        String tenancy = "ocid1.tenancy.oc1..itpartenancy";
+        String signer = "Signature version=\"1\",keyId=\"" + tenancy
                 + "/ocid1.user.oc1..ituser/aa:bb\",algorithm=\"rsa-sha256\",signature=\"x\"";
         String ns = given().header("Authorization", signer)
             .when().get("/n").then().statusCode(200).extract().as(String.class);
         String bucket = uniqueBucket("it-par-tenancy");
         given().header("Authorization", signer).contentType("application/json")
-                .body(Map.of("name", bucket, "compartmentId", COMPARTMENT))
+                .body(Map.of("name", bucket, "compartmentId", tenancy))
             .when().post("/n/" + ns + "/b")
             .then().statusCode(200);
         given().header("Authorization", signer).contentType("text/plain").body("tenancy-payload")
@@ -525,7 +535,7 @@ class ObjectStorageRestIntegrationTest {
         String target = uniqueBucket("it-copy-dst");
         createBucket(source);
         given().header("Host", phoenix).contentType("application/json")
-                .body(Map.of("name", target, "compartmentId", COMPARTMENT))
+                .body(Map.of("name", target, "compartmentId", compartment))
             .when().post("/n/" + NS + "/b")
             .then().statusCode(200);
         given().contentType("text/plain").body("cross-region")

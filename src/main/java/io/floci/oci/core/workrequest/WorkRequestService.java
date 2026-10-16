@@ -5,6 +5,8 @@ import io.floci.oci.config.EmulatorConfig;
 import io.floci.oci.core.common.OciContext;
 import io.floci.oci.core.common.OciException;
 import io.floci.oci.core.common.Ocids;
+import io.floci.oci.core.common.ServiceDescriptor;
+import io.floci.oci.core.common.ServiceRegistry;
 import io.floci.oci.core.storage.StorageBackend;
 import io.floci.oci.core.storage.StorageFactory;
 import io.floci.oci.core.storage.TenancyAwareStorageBackend;
@@ -13,6 +15,7 @@ import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -39,15 +42,19 @@ public class WorkRequestService {
 
     private static final Logger LOG = Logger.getLogger(WorkRequestService.class);
 
-    private static final String GLOBAL_SERVICE = "identity";
+    /** The one service whose work requests predate the global store; see the migration below. */
+    private static final String LEGACY_GLOBAL_SERVICE = "identity";
 
     private final StorageBackend<String, StoredWorkRequest> store;
     private final StorageBackend<String, StoredWorkRequest> globalStore;
     private final OciContext ociContext;
+    private final ServiceRegistry serviceRegistry;
 
     @Inject
-    public WorkRequestService(StorageFactory storageFactory, OciContext ociContext) {
+    public WorkRequestService(StorageFactory storageFactory, OciContext ociContext,
+                              ServiceRegistry serviceRegistry) {
         this.ociContext = ociContext;
+        this.serviceRegistry = serviceRegistry;
         this.store = storageFactory.create("workrequests", "workrequests.json",
                 new TypeReference<Map<String, StoredWorkRequest>>() {});
         this.globalStore = storageFactory.createGlobal("workrequests",
@@ -58,13 +65,15 @@ public class WorkRequestService {
 
     /** Storage-injecting constructor for tests. */
     public WorkRequestService(StorageBackend<String, StoredWorkRequest> store, EmulatorConfig config) {
-        this(store, store, config);
+        this(store, store, config, new ServiceRegistry());
     }
 
     WorkRequestService(StorageBackend<String, StoredWorkRequest> store,
-                       StorageBackend<String, StoredWorkRequest> globalStore, EmulatorConfig config) {
+                       StorageBackend<String, StoredWorkRequest> globalStore, EmulatorConfig config,
+                       ServiceRegistry serviceRegistry) {
         this.store = store;
         this.globalStore = globalStore;
+        this.serviceRegistry = serviceRegistry;
         this.ociContext = OciContext.fromConfig(config);
     }
 
@@ -103,7 +112,7 @@ public class WorkRequestService {
         wr.setStatus("IN_PROGRESS");
         wr.setPercentComplete(0.0f);
         wr.setTimeStarted(Instant.now().toString());
-        store.put(wr.getId(), wr);
+        storeFor(service).put(wr.getId(), wr);
         LOG.debugv("workRequest {0}: {1} IN_PROGRESS ({2})", wr.getId(), operationType, service);
         return wr.getId();
     }
@@ -144,7 +153,15 @@ public class WorkRequestService {
     /** Records a failed operation and returns its work-request OCID. */
     public String failed(String service, String operationType, String compartmentId,
                          List<StoredWorkRequest.Resource> resources) {
+        return failed(service, operationType, compartmentId, resources, List.of());
+    }
+
+    /** Records a failed operation with the errors that explain it; returns its OCID. */
+    public String failed(String service, String operationType, String compartmentId,
+                         List<StoredWorkRequest.Resource> resources,
+                         List<StoredWorkRequest.ErrorEntry> errors) {
         StoredWorkRequest wr = base(service, operationType, compartmentId, resources);
+        wr.setErrors(new ArrayList<>(errors));
         wr.setStatus("FAILED");
         wr.setPercentComplete(0.0f);
         String now = Instant.now().toString();
@@ -192,7 +209,7 @@ public class WorkRequestService {
         for (String partition : regional.tenancies()) {
             for (String key : regional.keysForTenancy(partition)) {
                 regional.getForTenancy(partition, key)
-                        .filter(wr -> GLOBAL_SERVICE.equals(wr.getService()))
+                        .filter(wr -> LEGACY_GLOBAL_SERVICE.equals(wr.getService()))
                         .ifPresent(wr -> byPartition.computeIfAbsent(partition, p -> new LinkedHashMap<>())
                                 .put(key, wr));
             }
@@ -210,9 +227,13 @@ public class WorkRequestService {
                 byPartition.values().stream().mapToInt(Map::size).sum());
     }
 
-    /** Identity is global, so its work requests are too; every other service's are regional. */
+    /**
+     * A service that registers itself as global keeps its work requests in the tenancy-wide
+     * store; every other service's are regional.
+     */
     private StorageBackend<String, StoredWorkRequest> storeFor(String service) {
-        return GLOBAL_SERVICE.equals(service) ? globalStore : store;
+        boolean global = serviceRegistry.byName(service).map(ServiceDescriptor::global).orElse(false);
+        return global ? globalStore : store;
     }
 
     public static StoredWorkRequest.Resource resource(String entityType, String actionType,

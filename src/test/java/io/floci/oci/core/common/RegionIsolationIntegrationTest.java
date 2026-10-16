@@ -9,6 +9,7 @@ import java.util.Map;
 
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.equalTo;
+import static org.hamcrest.Matchers.matchesPattern;
 import static org.hamcrest.Matchers.startsWith;
 
 /** Regional resources are scoped to the region in the Host header; Identity is global. */
@@ -79,6 +80,53 @@ class RegionIsolationIntegrationTest {
         given().header("Host", PHOENIX_IDENTITY)
             .when().get("/20160918/workRequests/" + workRequestId)
             .then().statusCode(200).body("status", equalTo("SUCCEEDED"));
+    }
+
+    @Test
+    void compartmentHoldingAQueueInAnotherRegionCannotBeDeleted() {
+        String compartmentId = given()
+                .contentType("application/json")
+                .body(Map.of("compartmentId", TENANCY, "name", "region-del-" + System.nanoTime(),
+                        "description", "holds a Phoenix queue"))
+            .when().post("/20160918/compartments")
+            .then().statusCode(200).extract().path("id");
+        String queueWorkRequest = given().header("Host", PHOENIX_QUEUE)
+                .contentType("application/json")
+                .body(Map.of("displayName", "region-del-q", "compartmentId", compartmentId))
+            .when().post("/20210201/queues")
+            .then().statusCode(202).extract().header("opc-work-request-id");
+        String queueId = given().header("Host", PHOENIX_QUEUE)
+            .when().get("/20210201/workRequests/" + queueWorkRequest)
+            .then().statusCode(200).extract().path("resources[0].identifier");
+
+        String failed = given()
+            .when().delete("/20160918/compartments/" + compartmentId)
+            .then().statusCode(202).extract().header("opc-work-request-id");
+        given()
+            .when().get("/20160918/workRequests/" + failed)
+            .then().statusCode(200)
+                .body("status", equalTo("FAILED"))
+                .body("errors[0].code", equalTo("Conflict"))
+                .body("errors[0].message", equalTo("The compartment must be empty before you can delete it."
+                        + " It still holds: queue " + queueId + "."));
+        given()
+            .when().get("/20160918/compartments/" + compartmentId)
+            .then().statusCode(200).body("lifecycleState", equalTo("ACTIVE"));
+
+        given().header("Host", PHOENIX_QUEUE)
+            .when().delete("/20210201/queues/" + queueId)
+            .then().statusCode(202);
+        String succeeded = given()
+            .when().delete("/20160918/compartments/" + compartmentId)
+            .then().statusCode(202).extract().header("opc-work-request-id");
+        given()
+            .when().get("/20160918/workRequests/" + succeeded)
+            .then().statusCode(200).body("status", equalTo("SUCCEEDED"));
+        given()
+            .when().get("/20160918/compartments/" + compartmentId)
+            .then().statusCode(200)
+                .body("lifecycleState", equalTo("DELETED"))
+                .body("name", matchesPattern("region-del-\\d+\\.[A-Za-z0-9]{8}"));
     }
 
     @Test

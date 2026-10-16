@@ -194,6 +194,7 @@ flowchart LR
 | Security | Vault + KMS (vaults, keys, key versions, **real** AES-GCM / RSA / ECDSA crypto), Secrets and secret bundles |
 | Serverless | Functions (applications, functions, real invocation through an Fn Project sidecar) |
 | Kubernetes | Container Engine for Kubernetes (OKE): clusters, node pools, options, kubeconfig generation, work requests, real-mode k3s sidecar |
+| Organizations | Child tenancies (each with its own home region and isolated storage), organizations, organization tenancies, links |
 | Async operations | Work requests, partitioned per service (Identity/Queue/Streaming use `SUCCEEDED`, Object Storage/OKE use `COMPLETED`) |
 
 For operation-level compatibility, see the [Services Overview](https://floci.io/floci-oci/services/).
@@ -211,6 +212,7 @@ For operation-level compatibility, see the [Services Overview](https://floci.io/
 | Secrets | In-process | Secret versions with CURRENT/PREVIOUS/LATEST stages; the `Secret` shape never echoes content: retrieval is through `/20190301/secretbundles`, including the bodyless POST `getByName` |
 | Functions | Real Docker (Fn Project) | Applications and functions with deterministic image digests; invocation proxied to a shared `fnproject/fnserver` sidecar that runs your real FDK image. `mock: true` disables Docker entirely |
 | OKE (Container Engine) | Real Docker (k3s) / In-process | Control plane CRUD (`/20180222`), options, kubeconfig YAML generator, work requests tracking; real-mode k3s sidecar driver (`rancher/k3s:v1.30.1-k3s1`) binding dynamic host ports (`6443..6543`) and persistent volumes (`/var/lib/rancher/k3s`). `mock: true` disables sidecar |
+| Organizations | In-process | `CreateChildTenancy` registers a child tenancy with its own home region; requests signed with it see only its own resources; organizations, organization tenancies and links live with the parent tenancy; wrapped `{"items":[…]}` lists |
 | Work Requests | In-process | `202` + `opc-work-request-id` responses, pollable per service (`/20160918`, `/20210201`, `/20180418`, `/20180222` and unversioned `/workRequests`) with errors/logs endpoints |
 
 Not implemented yet: identity domains, API keys/auth tokens, dynamic groups, tag namespaces, object versioning, retention rules (stubbed empty for Terraform compatibility), lifecycle policies, replication, the Amazon S3 Compatibility API, queue consumer groups, stream pools' Kafka settings and connect harnesses, KMS import/backup/replication, secret rotation, and pre-built functions (PBF).
@@ -424,10 +426,10 @@ The [`compatibility-tests`](./compatibility-tests/) directory validates floci-oc
 
 | Module | Language / Tool | SDK / Client | Tests |
 |---|---|---|---:|
-| `sdk-test-java` | Java | oci-java-sdk (incl. OKE integration) | 20 |
-| `sdk-test-python` | Python 3 | oci (incl. `UploadManager` streaming) | 20 |
+| `sdk-test-java` | Java | oci-java-sdk (incl. OKE integration and Organizations child tenancies) | 24 |
+| `sdk-test-python` | Python 3 | oci (incl. `UploadManager` streaming) | 22 |
 | `sdk-test-go` | Go | oci-go-sdk (OKE container engine) | 1 |
-| `sdk-test-cli` | Bash / BATS | OCI CLI 3.89.3 (all 8 services, incl. error codes and PAR access) | 54 |
+| `sdk-test-cli` | Bash / BATS | OCI CLI 3.89.3 (all 9 services, incl. error codes and PAR access) | 60 |
 | `compat-terraform` | Terraform | oracle/oci provider (12 resources, zero-drift plan) | 6 |
 | `compat-opentofu` | OpenTofu | oracle/oci provider (12 resources, zero-drift plan) | 6 |
 

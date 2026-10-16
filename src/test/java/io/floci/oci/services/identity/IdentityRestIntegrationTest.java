@@ -384,4 +384,24 @@ class IdentityRestIntegrationTest {
         given().when().get("/20160918/tenancies/" + TENANCY)
             .then().statusCode(200).body("homeRegionKey", equalTo("IAD"));
     }
+
+    @Test
+    void compartmentNestedSevenLevelsDeepIsInvalid() {
+        String parent = TENANCY;
+        for (int level = 1; level <= 6; level++) {
+            parent = given().contentType("application/json")
+                    .body(Map.of("compartmentId", parent, "name", "depth-" + level + "-" + System.nanoTime(),
+                            "description", "nested"))
+                .when().post("/20160918/compartments")
+                .then().statusCode(200).extract().path("id");
+        }
+        given().contentType("application/json")
+                .body(Map.of("compartmentId", parent, "name", "depth-7", "description", "too deep"))
+            .when().post("/20160918/compartments")
+            .then().statusCode(400)
+                .header("opc-request-id", notNullValue())
+                .body("code", equalTo("InvalidParameter"))
+                .body("message", equalTo("Compartments can be nested at most 6 levels below the tenancy;"
+                        + " this would place one at level 7."));
+    }
 }

@@ -32,6 +32,7 @@ It implements real OCI wire protocols so the official OCI SDKs, the OCI CLI, Ter
 | Streaming | `/20180418/…` | Streams, partitions, cursors, consumer groups |
 | Functions | `/20181201/…` | Applications, functions, real invocation via an Fn Project sidecar |
 | Container Engine for Kubernetes (OKE) | `/20180222/…` | Clusters, node pools, options, kubeconfig generation, work requests, real k3s sidecar |
+| Organizations | `/20230401/…` | Child tenancies, organizations, organization tenancies, links, work requests |
 
 ## Quick start
 

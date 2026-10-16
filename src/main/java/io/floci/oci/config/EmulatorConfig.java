@@ -197,13 +197,11 @@ public interface EmulatorConfig {
 
         OkeServiceConfig oke();
 
+        OrganizationsServiceConfig organizations();
+
         interface IdentityServiceConfig {
             @WithDefault("true")
             boolean enabled();
-
-            /** Reject unknown or non-ACTIVE compartments in other services' requests. */
-            @WithDefault("false")
-            boolean strictCompartments();
         }
 
         interface ObjectStorageServiceConfig {
@@ -212,6 +210,11 @@ public interface EmulatorConfig {
         }
 
         interface QueueServiceConfig {
+            @WithDefault("true")
+            boolean enabled();
+        }
+
+        interface OrganizationsServiceConfig {
             @WithDefault("true")
             boolean enabled();
         }

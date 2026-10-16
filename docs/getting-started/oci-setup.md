@@ -70,14 +70,21 @@ configured `floci-oci.default-tenancy-id`.
 
 Regional resources (buckets, queues, streams, vaults, keys, secrets, functions, clusters) are
 partitioned by region as well as tenancy. The region comes from the request `Host` header:
-the first dot-separated label that is a known OCI region name, so a client that reaches the
-emulator as `queue.us-phoenix-1.oci.oraclecloud.com` (through the embedded DNS or TLS setup)
-works in `us-phoenix-1`. Any other host, such as `localhost:4599`, uses
-`floci-oci.default-region`.
+the first dot-separated label that is a known OCI region name, so any host that names a
+region works in it. The simplest way to send one is the public wildcard
+`<service>.<region>.localhost.floci.io`, which resolves to `127.0.0.1`: for example
+`http://messaging.us-phoenix-1.localhost.floci.io:4599` works in `us-phoenix-1`. Any other
+host, such as `localhost:4599`, reaches the tenancy's home region. Regional OCIDs carry the
+three letter region key (`ocid1.queue.oc1.phx.…`), as real Object Storage bucket OCIDs do;
+some newer OCI services use the full region name there instead.
 
 Identity is global, as on real OCI: compartments, users, groups and policies are shared by
 every region of the tenancy. Each tenancy has its own home region: a tenancy seen for the
-first time gets `default-region`, and keeps it if `default-region` changes later.
+first time gets `default-region`, and keeps it if `default-region` changes later. As on real
+OCI, Identity writes are only accepted at the home region (`403 NotAllowed` elsewhere), and a
+tenancy can only use a region it is subscribed to (`401 NotAuthenticated` otherwise): the home
+region always is, and `CreateRegionSubscription` adds another at once. See
+[Identity](../services/identity.md) for the details.
 
 Data persisted by an older floci-oci, before region partitioning, is moved into
 `default-region` on startup.

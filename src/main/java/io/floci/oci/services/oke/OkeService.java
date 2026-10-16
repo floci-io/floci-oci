@@ -2,6 +2,7 @@ package io.floci.oci.services.oke;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import io.floci.oci.config.EmulatorConfig;
+import io.floci.oci.core.common.CompartmentUsage;
 import io.floci.oci.core.common.OciContext;
 import io.floci.oci.core.common.OciException;
 import io.floci.oci.core.common.Ocids;
@@ -36,12 +37,13 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
+import java.util.stream.Stream;
 
 /**
  * Business logic service for OCI Container Engine for Kubernetes (OKE) API emulation.
  */
 @ApplicationScoped
-public class OkeService implements Resettable {
+public class OkeService implements Resettable, CompartmentUsage {
 
     private static final Logger LOG = Logger.getLogger(OkeService.class);
     private static final SecureRandom RANDOM = new SecureRandom();
@@ -542,4 +544,12 @@ public class OkeService implements Resettable {
         return workRequests.succeeded("oke", "NODEPOOL_DELETE", pool.getCompartmentId(), List.of(res));
     }
 
+    @Override
+    public List<String> resourcesIn(String tenancyId, String compartmentId) {
+        return Stream.concat(
+                CompartmentUsage.live(clusters, tenancyId, compartmentId, StoredOkeCluster::getCompartmentId,
+                        StoredOkeCluster::getLifecycleState, c -> "cluster " + c.getId()),
+                CompartmentUsage.live(nodePools, tenancyId, compartmentId, StoredNodePool::getCompartmentId,
+                        StoredNodePool::getLifecycleState, p -> "node pool " + p.getId())).toList();
+    }
 }

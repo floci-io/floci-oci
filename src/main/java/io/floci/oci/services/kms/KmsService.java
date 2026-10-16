@@ -2,6 +2,7 @@ package io.floci.oci.services.kms;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import io.floci.oci.config.EmulatorConfig;
+import io.floci.oci.core.common.CompartmentUsage;
 import io.floci.oci.core.common.Etags;
 import io.floci.oci.core.common.OciContext;
 import io.floci.oci.core.common.OciException;
@@ -36,6 +37,7 @@ import java.util.Base64;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Stream;
 import java.util.zip.CRC32;
 import javax.crypto.Cipher;
 import javax.crypto.KeyGenerator;
@@ -48,7 +50,7 @@ import javax.crypto.spec.SecretKeySpec;
  * via JCA. See {@link #managementEndpoint} for why every vault shares one endpoint.
  */
 @ApplicationScoped
-public class KmsService {
+public class KmsService implements CompartmentUsage {
 
     private static final Logger LOG = Logger.getLogger(KmsService.class);
     private static final SecureRandom RANDOM = new SecureRandom();
@@ -574,5 +576,14 @@ public class KmsService {
     private static OciException notFound(String kind, String id) {
         return OciException.notAuthorizedOrNotFound(
                 "Authorization failed or requested resource not found: " + kind + " " + id);
+    }
+
+    @Override
+    public List<String> resourcesIn(String tenancyId, String compartmentId) {
+        return Stream.concat(
+                CompartmentUsage.live(vaults, tenancyId, compartmentId, StoredVault::getCompartmentId,
+                        StoredVault::getLifecycleState, v -> "vault " + v.getId()),
+                CompartmentUsage.live(keys, tenancyId, compartmentId, StoredKey::getCompartmentId,
+                        StoredKey::getLifecycleState, k -> "key " + k.getId())).toList();
     }
 }

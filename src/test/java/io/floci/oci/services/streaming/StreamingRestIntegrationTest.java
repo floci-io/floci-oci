@@ -1,7 +1,9 @@
 package io.floci.oci.services.streaming;
 
+import io.floci.oci.testing.TestCompartments;
 import io.quarkus.test.junit.QuarkusTest;
 import io.restassured.response.ValidatableResponse;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.Base64;
@@ -14,7 +16,7 @@ import static org.hamcrest.Matchers.*;
 @QuarkusTest
 class StreamingRestIntegrationTest {
 
-    private static final String COMPARTMENT = "ocid1.compartment.oc1..itstreamcompartment";
+    private static String compartment;
 
     private static String b64(String value) {
         return Base64.getEncoder().encodeToString(value.getBytes());
@@ -24,7 +26,7 @@ class StreamingRestIntegrationTest {
     private String createStream(String name, int partitions) {
         ValidatableResponse response = given()
                 .contentType("application/json")
-                .body(Map.of("name", name, "partitions", partitions, "compartmentId", COMPARTMENT))
+                .body(Map.of("name", name, "partitions", partitions, "compartmentId", compartment))
             .when().post("/20180418/streams")
             .then().statusCode(200)
                 .header("etag", notNullValue())
@@ -47,6 +49,13 @@ class StreamingRestIntegrationTest {
         return streamId;
     }
 
+    @BeforeEach
+    void createTestCompartment() {
+        if (compartment == null) {
+            compartment = TestCompartments.create("itstreamcompartment");
+        }
+    }
+
     @Test
     void streamCrudRoundtrip() {
         String streamId = createStream("it-stream-" + System.nanoTime(), 2);
@@ -59,7 +68,7 @@ class StreamingRestIntegrationTest {
 
         // Bare-array list; StreamSummary must NOT carry retentionInHours.
         given()
-            .queryParam("compartmentId", COMPARTMENT)
+            .queryParam("compartmentId", compartment)
             .when().get("/20180418/streams")
             .then().statusCode(200)
                 .body("size()", greaterThanOrEqualTo(1))

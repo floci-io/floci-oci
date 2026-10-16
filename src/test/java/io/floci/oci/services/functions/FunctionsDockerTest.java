@@ -1,10 +1,12 @@
 package io.floci.oci.services.functions;
 
+import io.floci.oci.testing.TestCompartments;
 import io.quarkus.test.junit.QuarkusTest;
 import io.quarkus.test.junit.QuarkusTestProfile;
 import io.quarkus.test.junit.TestProfile;
 import org.junit.jupiter.api.*;
 
+import org.junit.jupiter.api.BeforeEach;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -28,11 +30,18 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 class FunctionsDockerTest {
 
-    private static final String COMPARTMENT = "ocid1.compartment.oc1..dockerfncompartment";
+    private static String compartment;
     private static final String SUBNET = "ocid1.subnet.oc1.iad.dockersubnet";
 
     private String appId;
     private String fnId;
+
+    @BeforeEach
+    void createTestCompartment() {
+        if (compartment == null) {
+            compartment = TestCompartments.create("dockerfncompartment");
+        }
+    }
 
     @BeforeAll
     void requireDockerAndBuildFixture() throws Exception {
@@ -75,7 +84,7 @@ class FunctionsDockerTest {
     void createApplicationAndFunction() {
         appId = given()
                 .contentType("application/json")
-                .body(Map.of("compartmentId", COMPARTMENT,
+                .body(Map.of("compartmentId", compartment,
                         "displayName", "docker-app-" + System.nanoTime(),
                         "subnetIds", List.of(SUBNET)))
             .when().post("/20181201/applications")
