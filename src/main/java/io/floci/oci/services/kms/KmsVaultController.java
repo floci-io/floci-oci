@@ -42,10 +42,11 @@ public class KmsVaultController {
 
     @POST
     public Response createVault(Map<String, Object> body) {
-        compartments.requireInBody(str(body, "compartmentId"));
-        StoredVault v = service.createVault(str(body, "compartmentId"), str(body, "displayName"),
-                str(body, "vaultType"), stringMap(body, "freeformTags"), definedTags(body));
-        return Response.ok(vaultJson(v)).header("etag", v.getEtag()).build();
+        try (CompartmentValidator.Use ignored = compartments.useInBody(str(body, "compartmentId"))) {
+            StoredVault v = service.createVault(str(body, "compartmentId"), str(body, "displayName"),
+                    str(body, "vaultType"), stringMap(body, "freeformTags"), definedTags(body));
+            return Response.ok(vaultJson(v)).header("etag", v.getEtag()).build();
+        }
     }
 
     @GET
@@ -102,11 +103,12 @@ public class KmsVaultController {
     public Response changeCompartment(@PathParam("vaultId") String vaultId,
                                       @HeaderParam("if-match") String ifMatch,
                                       Map<String, Object> body) {
-        compartments.requireInBody(str(body, "compartmentId"));
-        service.changeVaultCompartment(vaultId, str(body, "compartmentId"), ifMatch);
-        StoredVault v = service.getVault(vaultId);
-        // ChangeVaultCompartment has no body — only etag + opc-request-id.
-        return Response.ok().header("etag", v.getEtag()).build();
+        try (CompartmentValidator.Use ignored = compartments.useInBody(str(body, "compartmentId"))) {
+            service.changeVaultCompartment(vaultId, str(body, "compartmentId"), ifMatch);
+            StoredVault v = service.getVault(vaultId);
+            // ChangeVaultCompartment has no body — only etag + opc-request-id.
+            return Response.ok().header("etag", v.getEtag()).build();
+        }
     }
 
     // ── Wire projections ───────────────────────────────────────────────────────

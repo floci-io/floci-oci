@@ -84,13 +84,14 @@ public class ObjectStorageController {
     @Path("/n/{namespaceName}/b")
     public Response createBucket(@PathParam("namespaceName") String namespaceName,
                                  Map<String, Object> body) {
-        compartments.requireInBody(str(body, "compartmentId"));
-        StoredBucket b = service.createBucket(namespaceName,
-                str(body, "name"), str(body, "compartmentId"), stringMap(body, "metadata"),
-                str(body, "publicAccessType"), str(body, "storageTier"),
-                stringMap(body, "freeformTags"), definedTags(body));
-        return Response.ok(b).header("etag", b.getEtag())
-                .header("Location", "/n/" + service.namespace() + "/b/" + b.getName()).build();
+        try (CompartmentValidator.Use ignored = compartments.useInBody(str(body, "compartmentId"))) {
+            StoredBucket b = service.createBucket(namespaceName,
+                    str(body, "name"), str(body, "compartmentId"), stringMap(body, "metadata"),
+                    str(body, "publicAccessType"), str(body, "storageTier"),
+                    stringMap(body, "freeformTags"), definedTags(body));
+            return Response.ok(b).header("etag", b.getEtag())
+                    .header("Location", "/n/" + service.namespace() + "/b/" + b.getName()).build();
+        }
     }
 
     @GET

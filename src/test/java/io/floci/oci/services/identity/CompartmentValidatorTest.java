@@ -8,8 +8,13 @@ import io.floci.oci.services.identity.model.StoredCompartment;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
 import static org.mockito.Mockito.lenient;
@@ -75,5 +80,33 @@ class CompartmentValidatorTest {
         lenient().when(config.services().identity().enabled()).thenReturn(false);
         assertDoesNotThrow(() -> validator.requireInBody(UNKNOWN));
         assertDoesNotThrow(() -> validator.requireInQuery(UNKNOWN));
+    }
+
+    @Test
+    void deletionWaitsForACreationInProgress() throws Exception {
+        StoredCompartment dev = identity.createCompartment(null, "dev", "d", null, null);
+
+        CompletableFuture<String> deletion;
+        try (CompartmentValidator.Use ignored = validator.useInBody(dev.getId())) {
+            deletion = CompletableFuture.supplyAsync(() -> identity.deleteCompartment(dev.getId(), null));
+            assertThrows(TimeoutException.class, () -> deletion.get(300, TimeUnit.MILLISECONDS));
+            assertEquals("ACTIVE", identity.getCompartment(dev.getId()).getLifecycleState());
+        }
+
+        deletion.get(5, TimeUnit.SECONDS);
+        assertEquals("DELETED", identity.getCompartment(dev.getId()).getLifecycleState());
+    }
+
+    @Test
+    void creationAfterADeletionIsRejectedAndLeavesNoLockHeld() throws Exception {
+        StoredCompartment gone = identity.createCompartment(null, "gone", "d", null, null);
+        identity.deleteCompartment(gone.getId(), null);
+
+        assertThrows(OciException.class, () -> validator.useInBody(gone.getId()));
+
+        CompletableFuture<String> again = CompletableFuture.supplyAsync(
+                () -> identity.deleteCompartment(gone.getId(), null));
+        again.get(5, TimeUnit.SECONDS);
+        assertFalse(again.isCompletedExceptionally());
     }
 }

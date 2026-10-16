@@ -41,7 +41,10 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.BiConsumer;
 import java.util.function.Function;
 import java.util.stream.IntStream;
@@ -80,6 +83,12 @@ public class IdentityService {
     private final OciContext ociContext;
     private final TenancyRegistry tenancies;
     private final Iterable<CompartmentUsage> compartmentUsages;
+    /**
+     * One lock per compartment. A service creating a resource in a compartment, or moving one into
+     * it, holds the read side from its ACTIVE check to its write; deletion holds the write side
+     * from its emptiness scan to the state change, so neither can slip between the other's steps.
+     */
+    private final Map<String, ReentrantReadWriteLock> compartmentLocks = new ConcurrentHashMap<>();
 
     @Inject
     public IdentityService(StorageFactory storageFactory, EmulatorConfig config,
@@ -304,7 +313,28 @@ public class IdentityService {
      * gets a random suffix on its name, which recovery keeps. Deleting it again changes nothing,
      * so a retried delete does not stack suffixes.
      */
-    public synchronized String deleteCompartment(String compartmentId, String ifMatch) {
+    public String deleteCompartment(String compartmentId, String ifMatch) {
+        // Taken before the monitor, the same order as a service that holds a compartment's read
+        // lock and then calls into Identity.
+        Lock deletion = compartmentLock(compartmentId).writeLock();
+        deletion.lock();
+        try {
+            return deleteCompartmentLocked(compartmentId, ifMatch);
+        } finally {
+            deletion.unlock();
+        }
+    }
+
+    /** The read side of a compartment's lock, held while a resource is created in or moved into it. */
+    public Lock compartmentUseLock(String compartmentId) {
+        return compartmentLock(compartmentId).readLock();
+    }
+
+    private ReentrantReadWriteLock compartmentLock(String compartmentId) {
+        return compartmentLocks.computeIfAbsent(compartmentId, id -> new ReentrantReadWriteLock());
+    }
+
+    private synchronized String deleteCompartmentLocked(String compartmentId, String ifMatch) {
         StoredCompartment c = compartments.get(compartmentId)
                 .orElseThrow(() -> notFound("compartment", compartmentId));
         Etags.checkIfMatch(ifMatch, c.getEtag());

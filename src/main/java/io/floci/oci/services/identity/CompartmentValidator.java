@@ -6,6 +6,8 @@ import io.floci.oci.services.identity.model.StoredCompartment;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
+import java.util.concurrent.locks.Lock;
+
 /**
  * Checks that a compartment referenced by another service exists and is ACTIVE. With Identity
  * disabled nothing could create a compartment, so every compartment OCID is accepted.
@@ -33,6 +35,35 @@ public class CompartmentValidator {
                     "Authorization failed or requested resource not found: compartment "
                             + compartmentId, 400);
         }
+    }
+
+    /**
+     * For a request that creates a resource in {@code compartmentId} or moves one into it. Checks
+     * the compartment like {@link #requireInBody} and keeps it from being deleted until the
+     * returned handle is closed, so the resource cannot land in a compartment deleted in between:
+     * <pre>{@code try (CompartmentValidator.Use ignored = compartments.useInBody(id)) { create... }}</pre>
+     */
+    public Use useInBody(String compartmentId) {
+        if (compartmentId == null || compartmentId.isBlank() || !config.services().identity().enabled()) {
+            requireInBody(compartmentId);
+            return () -> { };
+        }
+        Lock use = identity.compartmentUseLock(compartmentId);
+        use.lock();
+        try {
+            requireInBody(compartmentId);
+        } catch (RuntimeException e) {
+            use.unlock();
+            throw e;
+        }
+        return use::unlock;
+    }
+
+    /** Keeps a compartment from being deleted while open; see {@link #useInBody}. */
+    @FunctionalInterface
+    public interface Use extends AutoCloseable {
+        @Override
+        void close();
     }
 
     /** For a {@code compartmentId} carried in the query string. */

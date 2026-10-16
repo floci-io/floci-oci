@@ -49,12 +49,13 @@ public class FunctionsManagementController {
     @POST
     @Path("/applications")
     public Response createApplication(Map<String, Object> body) {
-        compartments.requireInBody(str(body, "compartmentId"));
-        StoredApplication app = service.createApplication(
-                str(body, "compartmentId"), str(body, "displayName"),
-                stringList(body, "subnetIds"), stringMap(body, "config"),
-                str(body, "shape"), stringMap(body, "freeformTags"), definedTags(body));
-        return Response.ok(applicationJson(app, true)).header("etag", app.getEtag()).build();
+        try (CompartmentValidator.Use ignored = compartments.useInBody(str(body, "compartmentId"))) {
+            StoredApplication app = service.createApplication(
+                    str(body, "compartmentId"), str(body, "displayName"),
+                    stringList(body, "subnetIds"), stringMap(body, "config"),
+                    str(body, "shape"), stringMap(body, "freeformTags"), definedTags(body));
+            return Response.ok(applicationJson(app, true)).header("etag", app.getEtag()).build();
+        }
     }
 
     @GET
@@ -104,9 +105,10 @@ public class FunctionsManagementController {
     public Response changeApplicationCompartment(@PathParam("applicationId") String applicationId,
                                                  @HeaderParam("if-match") String ifMatch,
                                                  Map<String, Object> body) {
-        compartments.requireInBody(str(body, "compartmentId"));
-        service.changeApplicationCompartment(applicationId, str(body, "compartmentId"), ifMatch);
-        return Response.ok().build();
+        try (CompartmentValidator.Use ignored = compartments.useInBody(str(body, "compartmentId"))) {
+            service.changeApplicationCompartment(applicationId, str(body, "compartmentId"), ifMatch);
+            return Response.ok().build();
+        }
     }
 
     // ── Functions ──────────────────────────────────────────────────────────────

@@ -46,13 +46,14 @@ public class KmsManagementController {
     @POST
     public Response createKey(Map<String, Object> body) {
         Map<String, Object> keyShape = map(body, "keyShape");
-        compartments.requireInBody(str(body, "compartmentId"));
-        StoredKey key = service.createKey(null,
-                str(body, "compartmentId"), str(body, "displayName"),
-                str(keyShape, "algorithm"), integer(keyShape, "length"), str(keyShape, "curveId"),
-                str(body, "protectionMode"),
-                stringMap(body, "freeformTags"), definedTags(body));
-        return Response.ok(keyJson(key)).header("etag", key.getEtag()).build();
+        try (CompartmentValidator.Use ignored = compartments.useInBody(str(body, "compartmentId"))) {
+            StoredKey key = service.createKey(null,
+                    str(body, "compartmentId"), str(body, "displayName"),
+                    str(keyShape, "algorithm"), integer(keyShape, "length"), str(keyShape, "curveId"),
+                    str(body, "protectionMode"),
+                    stringMap(body, "freeformTags"), definedTags(body));
+            return Response.ok(keyJson(key)).header("etag", key.getEtag()).build();
+        }
     }
 
     @GET

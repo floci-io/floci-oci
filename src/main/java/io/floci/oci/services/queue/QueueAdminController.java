@@ -50,14 +50,15 @@ public class QueueAdminController {
     @POST
     @Path("/queues")
     public Response createQueue(Map<String, Object> body) {
-        compartments.requireInBody(str(body, "compartmentId"));
-        QueueService.WorkRequestOutcome outcome = service.createQueue(
-                str(body, "displayName"), str(body, "compartmentId"),
-                integer(body, "retentionInSeconds"), integer(body, "visibilityInSeconds"),
-                integer(body, "timeoutInSeconds"), integer(body, "deadLetterQueueDeliveryCount"),
-                integer(body, "channelConsumptionLimit"),
-                stringMap(body, "freeformTags"), definedTags(body));
-        return accepted(outcome);
+        try (CompartmentValidator.Use ignored = compartments.useInBody(str(body, "compartmentId"))) {
+            QueueService.WorkRequestOutcome outcome = service.createQueue(
+                    str(body, "displayName"), str(body, "compartmentId"),
+                    integer(body, "retentionInSeconds"), integer(body, "visibilityInSeconds"),
+                    integer(body, "timeoutInSeconds"), integer(body, "deadLetterQueueDeliveryCount"),
+                    integer(body, "channelConsumptionLimit"),
+                    stringMap(body, "freeformTags"), definedTags(body));
+            return accepted(outcome);
+        }
     }
 
     @GET
@@ -109,8 +110,9 @@ public class QueueAdminController {
     public Response changeCompartment(@PathParam("queueId") String queueId,
                                       @HeaderParam("if-match") String ifMatch,
                                       Map<String, Object> body) {
-        compartments.requireInBody(str(body, "compartmentId"));
-        return accepted(service.changeCompartment(queueId, str(body, "compartmentId"), ifMatch));
+        try (CompartmentValidator.Use ignored = compartments.useInBody(str(body, "compartmentId"))) {
+            return accepted(service.changeCompartment(queueId, str(body, "compartmentId"), ifMatch));
+        }
     }
 
     @POST
