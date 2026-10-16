@@ -197,13 +197,13 @@ public interface EmulatorConfig {
 
         OkeServiceConfig oke();
 
+        OrganizationsServiceConfig organizations();
+
+        PsqlServiceConfig psql();
+
         interface IdentityServiceConfig {
             @WithDefault("true")
             boolean enabled();
-
-            /** Reject unknown or non-ACTIVE compartments in other services' requests. */
-            @WithDefault("false")
-            boolean strictCompartments();
         }
 
         interface ObjectStorageServiceConfig {
@@ -212,6 +212,39 @@ public interface EmulatorConfig {
         }
 
         interface QueueServiceConfig {
+            @WithDefault("true")
+            boolean enabled();
+        }
+
+        interface PsqlServiceConfig {
+            @WithDefault("true")
+            boolean enabled();
+
+            /**
+             * When true, no Docker containers are started: DB systems are management-plane only
+             * and become ACTIVE at once. Env: FLOCI_OCI_SERVICES_PSQL_MOCK.
+             */
+            @WithDefault("false")
+            boolean mock();
+
+            /** Postgres image; {@code {major}} is replaced with the major of the DB system's dbVersion. */
+            @WithDefault("postgres:{major}-alpine")
+            String image();
+
+            /** First host port published for a DB system's PostgreSQL endpoint. */
+            @WithDefault("15432")
+            int basePort();
+
+            /** Last host port published for a DB system's PostgreSQL endpoint. */
+            @WithDefault("15531")
+            int maxPort();
+
+            /** How long a DB system may take to accept connections before it is marked FAILED. */
+            @WithDefault("120")
+            int readyTimeoutSeconds();
+        }
+
+        interface OrganizationsServiceConfig {
             @WithDefault("true")
             boolean enabled();
         }

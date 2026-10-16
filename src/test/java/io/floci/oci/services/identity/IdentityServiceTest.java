@@ -1,6 +1,7 @@
 package io.floci.oci.services.identity;
 
 import io.floci.oci.config.EmulatorConfig;
+import io.floci.oci.core.common.CompartmentUsage;
 import io.floci.oci.core.common.OciContext;
 import io.floci.oci.core.common.OciException;
 import io.floci.oci.core.storage.InMemoryStorage;
@@ -100,17 +101,107 @@ class IdentityServiceTest {
     void deleteCompartmentRecordsSucceededWorkRequest() {
         StoredCompartment c = service.createCompartment(null, "gone", "d", null, null);
         String workRequestId = service.deleteCompartment(c.getId(), null);
-        assertEquals("DELETED", service.getCompartment(c.getId()).getLifecycleState());
+        StoredCompartment deleted = service.getCompartment(c.getId());
+        assertEquals("DELETED", deleted.getLifecycleState());
+        assertTrue(deleted.getName().matches("gone\\.[A-Za-z0-9]{8}"), deleted.getName());
         StoredWorkRequest wr = workRequests.get(workRequestId);
         assertEquals("SUCCEEDED", wr.getStatus());
         assertEquals("DELETE_COMPARTMENT", wr.getOperationType());
+        assertTrue(wr.getErrors().isEmpty());
     }
 
     @Test
-    void deleteCompartmentWithActiveChildIsConflict() {
+    void compartmentsNestAtMostSixLevels() {
+        String parent = null;
+        for (int level = 1; level <= IdentityService.MAX_DEPTH; level++) {
+            parent = service.createCompartment(parent, "level" + level, "d", null, null).getId();
+        }
+        String sixth = parent;
+        OciException e = assertThrows(OciException.class,
+                () -> service.createCompartment(sixth, "level7", "d", null, null));
+        assertEquals(400, e.getHttpStatus());
+        assertEquals("InvalidParameter", e.getCode());
+        assertEquals("Compartments can be nested at most 6 levels below the tenancy; this would place"
+                + " one at level 7.", e.getMessage());
+    }
+
+    @Test
+    void moveCountsTheDepthOfTheMovedSubtree() {
+        StoredCompartment a = service.createCompartment(null, "a", "d", null, null);
+        StoredCompartment b = service.createCompartment(a.getId(), "b", "d", null, null);
+        service.createCompartment(b.getId(), "c", "d", null, null);
+        StoredCompartment d = service.createCompartment(null, "d", "d", null, null);
+        StoredCompartment e = service.createCompartment(d.getId(), "e", "d", null, null);
+        StoredCompartment f = service.createCompartment(e.getId(), "f", "d", null, null);
+        StoredCompartment g = service.createCompartment(f.getId(), "g", "d", null, null);
+
+        assertEquals("InvalidParameter", assertThrows(OciException.class,
+                () -> service.moveCompartment(a.getId(), g.getId(), null)).getCode());
+        assertEquals("SUCCEEDED", workRequests.get(service.moveCompartment(a.getId(), e.getId(), null)).getStatus());
+    }
+
+    @Test
+    void aTenancyHoldsAtMostAThousandCompartments() {
+        String first = null;
+        for (int i = 0; i < IdentityService.MAX_COMPARTMENTS; i++) {
+            String id = service.createCompartment(null, "c" + i, "d", null, null).getId();
+            if (first == null) {
+                first = id;
+            }
+        }
+        OciException e = assertThrows(OciException.class,
+                () -> service.createCompartment(null, "one-too-many", "d", null, null));
+        assertEquals(400, e.getHttpStatus());
+        assertEquals("LimitExceeded", e.getCode());
+        assertTrue(e.getMessage().startsWith("Maximum number of compartments"), e.getMessage());
+
+        service.deleteCompartment(first, null);
+        assertDoesNotThrow(() -> service.createCompartment(null, "after-delete", "d", null, null));
+    }
+
+    @Test
+    void deleteCompartmentWithAChildFailsItsWorkRequest() {
         StoredCompartment parent = service.createCompartment(null, "parent", "p", null, null);
-        service.createCompartment(parent.getId(), "child", "c", null, null);
-        assertThrows(OciException.class, () -> service.deleteCompartment(parent.getId(), null));
+        StoredCompartment child = service.createCompartment(parent.getId(), "child", "c", null, null);
+
+        StoredWorkRequest wr = workRequests.get(service.deleteCompartment(parent.getId(), null));
+
+        assertEquals("FAILED", wr.getStatus());
+        assertEquals("DELETE_COMPARTMENT", wr.getOperationType());
+        assertEquals("Conflict", wr.getErrors().getFirst().getCode());
+        assertEquals("The compartment must be empty before you can delete it. It still holds: compartment "
+                + child.getId() + ".", wr.getErrors().getFirst().getMessage());
+        StoredCompartment kept = service.getCompartment(parent.getId());
+        assertEquals("ACTIVE", kept.getLifecycleState());
+        assertEquals("parent", kept.getName());
+    }
+
+    @Test
+    void deleteCompartmentChecksPoliciesAndOtherServices() {
+        StorageBackend<String, StoredCompartment> compartments = new InMemoryStorage<>();
+        StorageBackend<String, StoredPolicy> policies = new InMemoryStorage<>();
+        List<String> queuesLeft = new ArrayList<>();
+        CompartmentUsage queues = (tenancy, compartment) -> List.copyOf(queuesLeft);
+        IdentityService identity = new IdentityService(compartments, new InMemoryStorage<>(),
+                new InMemoryStorage<>(), new InMemoryStorage<>(), policies, new InMemoryStorage<>(),
+                config, workRequests, signedAs(TENANCY), List.of(queues));
+        StoredCompartment dev = identity.createCompartment(null, "dev", "d", null, null);
+
+        StoredPolicy policy = identity.createPolicy(dev.getId(), "p", "d",
+                List.of("Allow group admins to read all-resources in compartment dev"), null, null, null);
+        StoredWorkRequest blockedByPolicy = workRequests.get(identity.deleteCompartment(dev.getId(), null));
+        assertEquals("FAILED", blockedByPolicy.getStatus());
+        assertTrue(blockedByPolicy.getErrors().getFirst().getMessage().contains("policy " + policy.getId()));
+        identity.deletePolicy(policy.getId(), null);
+
+        queuesLeft.add("queue ocid1.queue.oc1.phx.q1");
+        StoredWorkRequest blockedByQueue = workRequests.get(identity.deleteCompartment(dev.getId(), null));
+        assertEquals("FAILED", blockedByQueue.getStatus());
+        assertTrue(blockedByQueue.getErrors().getFirst().getMessage().contains("queue ocid1.queue.oc1.phx.q1"));
+        assertEquals("ACTIVE", identity.getCompartment(dev.getId()).getLifecycleState());
+
+        queuesLeft.clear();
+        assertEquals("SUCCEEDED", workRequests.get(identity.deleteCompartment(dev.getId(), null)).getStatus());
     }
 
     @Test
@@ -366,13 +457,62 @@ class IdentityServiceTest {
     }
 
     @Test
-    void recoverCompartmentRejectsNameTakenMeanwhile() {
+    void recoverCompartmentKeepsTheSuffixedName() {
         StoredCompartment c = service.createCompartment(null, "reused", "d", null, null);
         service.deleteCompartment(c.getId(), null);
+        String deletedName = service.getCompartment(c.getId()).getName();
         service.createCompartment(null, "reused", "d", null, null);
 
-        assertEquals(409, assertThrows(OciException.class,
-                () -> service.recoverCompartment(c.getId(), null)).getHttpStatus());
+        StoredCompartment recovered = service.recoverCompartment(c.getId(), null);
+
+        assertEquals("ACTIVE", recovered.getLifecycleState());
+        assertEquals(deletedName, recovered.getName());
+    }
+
+    @Test
+    void deletingADeletedCompartmentKeepsItsName() {
+        StoredCompartment c = service.createCompartment(null, "twice", "d", null, null);
+        service.deleteCompartment(c.getId(), null);
+        String deletedName = service.getCompartment(c.getId()).getName();
+
+        StoredWorkRequest retry = workRequests.get(service.deleteCompartment(c.getId(), null));
+
+        assertEquals("SUCCEEDED", retry.getStatus());
+        assertEquals(deletedName, service.getCompartment(c.getId()).getName());
+        assertEquals("DELETED", service.getCompartment(c.getId()).getLifecycleState());
+    }
+
+    @Test
+    void recoverCompartmentRespectsTheCountLimit() {
+        String first = service.createCompartment(null, "c0", "d", null, null).getId();
+        for (int i = 1; i < IdentityService.MAX_COMPARTMENTS; i++) {
+            service.createCompartment(null, "c" + i, "d", null, null);
+        }
+        service.deleteCompartment(first, null);
+        service.createCompartment(null, "replacement", "d", null, null);
+
+        OciException e = assertThrows(OciException.class, () -> service.recoverCompartment(first, null));
+
+        assertEquals("LimitExceeded", e.getCode());
+        assertEquals("DELETED", service.getCompartment(first).getLifecycleState());
+    }
+
+    @Test
+    void recoverCompartmentRespectsTheDepthLimit() {
+        StoredCompartment a = service.createCompartment(null, "a", "d", null, null);
+        StoredCompartment child = service.createCompartment(a.getId(), "child", "d", null, null);
+        service.deleteCompartment(child.getId(), null);
+        String parent = null;
+        for (int level = 1; level < IdentityService.MAX_DEPTH; level++) {
+            parent = service.createCompartment(parent, "level" + level, "d", null, null).getId();
+        }
+        service.moveCompartment(a.getId(), parent, null);
+
+        OciException e = assertThrows(OciException.class,
+                () -> service.recoverCompartment(child.getId(), null));
+
+        assertEquals("InvalidParameter", e.getCode());
+        assertEquals("DELETED", service.getCompartment(child.getId()).getLifecycleState());
     }
 
     @Test

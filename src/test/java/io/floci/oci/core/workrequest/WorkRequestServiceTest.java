@@ -1,6 +1,8 @@
 package io.floci.oci.core.workrequest;
 
 import io.floci.oci.config.EmulatorConfig;
+import io.floci.oci.core.common.ServiceDescriptor;
+import io.floci.oci.core.common.ServiceRegistry;
 import io.floci.oci.core.storage.InMemoryStorage;
 import io.floci.oci.core.storage.StorageBackend;
 import io.floci.oci.core.storage.TenancyAwareStorageBackend;
@@ -86,6 +88,23 @@ class WorkRequestServiceTest {
     }
 
     @Test
+    void workRequestsOfAGlobalServiceGoToTheGlobalStore() {
+        StorageBackend<String, StoredWorkRequest> globalRaw = new InMemoryStorage<>();
+        EmulatorConfig config = mock(EmulatorConfig.class);
+        when(config.defaultRegion()).thenReturn("us-ashburn-1");
+        WorkRequestService service = new WorkRequestService(
+                new TenancyAwareStorageBackend<>(raw, () -> PARTITION),
+                new TenancyAwareStorageBackend<>(globalRaw, () -> TENANCY), config, globalServices("organizations"));
+
+        String id = service.succeeded("organizations", "CREATE_CHILD_TENANCY", TENANCY, List.of());
+
+        assertEquals(1, globalRaw.keys().size());
+        assertEquals(0, raw.keys().size());
+        assertEquals("organizations", service.list("organizations", TENANCY).getFirst().getService());
+        assertEquals(id, service.get(id).getId());
+    }
+
+    @Test
     void identityWorkRequestsInTheRegionalStoreMoveToTheGlobalStore() {
         StorageBackend<String, StoredWorkRequest> globalRaw = new InMemoryStorage<>();
         TenancyAwareStorageBackend<StoredWorkRequest> global =
@@ -93,7 +112,8 @@ class WorkRequestServiceTest {
         EmulatorConfig config = mock(EmulatorConfig.class);
         when(config.defaultRegion()).thenReturn("us-ashburn-1");
         WorkRequestService service = new WorkRequestService(
-                new TenancyAwareStorageBackend<>(raw, () -> PARTITION), global, config);
+                new TenancyAwareStorageBackend<>(raw, () -> PARTITION), global, config,
+                globalServices("identity"));
         StoredWorkRequest identity = new StoredWorkRequest();
         identity.setService("identity");
         StoredWorkRequest queue = new StoredWorkRequest();
@@ -106,5 +126,11 @@ class WorkRequestServiceTest {
 
         assertEquals("identity", globalRaw.get(TENANCY + "/wr-identity").orElseThrow().getService());
         assertEquals(List.of("wr-queue"), raw.keys().stream().map(k -> k.substring(k.indexOf('/') + 1)).toList());
+    }
+
+    private static ServiceRegistry globalServices(String name) {
+        ServiceRegistry registry = new ServiceRegistry();
+        registry.register(ServiceDescriptor.builder(name).global(true).build());
+        return registry;
     }
 }

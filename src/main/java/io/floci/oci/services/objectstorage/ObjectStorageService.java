@@ -2,6 +2,7 @@ package io.floci.oci.services.objectstorage;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import io.floci.oci.config.EmulatorConfig;
+import io.floci.oci.core.common.CompartmentUsage;
 import io.floci.oci.core.common.Etags;
 import io.floci.oci.core.common.OciContext;
 import io.floci.oci.core.common.OciException;
@@ -42,7 +43,7 @@ import java.util.function.BiConsumer;
 import java.util.function.Function;
 
 @ApplicationScoped
-public class ObjectStorageService {
+public class ObjectStorageService implements CompartmentUsage {
 
     private static final Logger LOG = Logger.getLogger(ObjectStorageService.class);
 
@@ -660,5 +661,11 @@ public class ObjectStorageService {
         } catch (NoSuchAlgorithmException e) {
             throw new IllegalStateException("MD5 unavailable", e);
         }
+    }
+
+    @Override
+    public List<String> resourcesIn(String tenancyId, String compartmentId) {
+        return CompartmentUsage.live(buckets, tenancyId, compartmentId, StoredBucket::getCompartmentId,
+                        null, b -> "bucket " + b.getName()).toList();
     }
 }

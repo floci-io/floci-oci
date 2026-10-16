@@ -2,6 +2,7 @@ package io.floci.oci.services.streaming;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import io.floci.oci.config.EmulatorConfig;
+import io.floci.oci.core.common.CompartmentUsage;
 import io.floci.oci.core.common.Etags;
 import io.floci.oci.core.common.OciContext;
 import io.floci.oci.core.common.OciException;
@@ -34,7 +35,7 @@ import java.util.TreeMap;
  * (partitioned append-only log with opaque cursors, Kafka-like offsets).
  */
 @ApplicationScoped
-public class StreamingService {
+public class StreamingService implements CompartmentUsage {
 
     private static final Logger LOG = Logger.getLogger(StreamingService.class);
 
@@ -462,5 +463,11 @@ public class StreamingService {
     private static OciException notFound(String kind, String id) {
         return OciException.notAuthorizedOrNotFound(
                 "Authorization failed or requested resource not found: " + kind + " " + id);
+    }
+
+    @Override
+    public List<String> resourcesIn(String tenancyId, String compartmentId) {
+        return CompartmentUsage.live(streams, tenancyId, compartmentId, StoredStream::getCompartmentId,
+                        StoredStream::getLifecycleState, s -> "stream " + s.getId()).toList();
     }
 }

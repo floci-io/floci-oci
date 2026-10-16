@@ -236,6 +236,24 @@ public class TenancyAwareStorageBackend<V> implements StorageBackend<String, V> 
         return Optional.empty();
     }
 
+    /**
+     * Every entry {@code tenancyId} owns, in every region partition of a regional store (or its
+     * single partition in a global one). A store that is not tenancy-aware (unit tests) has one
+     * partition, so all of it is returned.
+     */
+    public static <V> List<V> scanTenancy(StorageBackend<String, V> store, String tenancyId) {
+        if (!(store instanceof TenancyAwareStorageBackend<V> tenancyAware)) {
+            return store.scan(k -> true);
+        }
+        List<V> result = new ArrayList<>();
+        for (String partition : tenancyAware.tenancies()) {
+            if (tenancyOf(partition).equals(tenancyId)) {
+                result.addAll(tenancyAware.scanForTenancy(partition, k -> true));
+            }
+        }
+        return result;
+    }
+
     public Optional<V> getForTenancy(String tenancyId, String key) {
         return delegate.get(tenancyId + "/" + key);
     }

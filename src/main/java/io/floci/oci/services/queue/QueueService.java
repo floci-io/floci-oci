@@ -2,6 +2,7 @@ package io.floci.oci.services.queue;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import io.floci.oci.config.EmulatorConfig;
+import io.floci.oci.core.common.CompartmentUsage;
 import io.floci.oci.core.common.Etags;
 import io.floci.oci.core.common.OciContext;
 import io.floci.oci.core.common.OciException;
@@ -30,7 +31,7 @@ import java.util.Set;
 import java.util.UUID;
 
 @ApplicationScoped
-public class QueueService {
+public class QueueService implements CompartmentUsage {
 
     private static final Logger LOG = Logger.getLogger(QueueService.class);
 
@@ -405,4 +406,9 @@ public class QueueService {
         }
     }
 
+    @Override
+    public List<String> resourcesIn(String tenancyId, String compartmentId) {
+        return CompartmentUsage.live(queues, tenancyId, compartmentId, StoredQueue::getCompartmentId,
+                        StoredQueue::getLifecycleState, q -> "queue " + q.getId()).toList();
+    }
 }

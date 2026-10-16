@@ -48,6 +48,9 @@ setup() {
 
     run "$TF_BIN" output -raw stream_messages_endpoint
     [ -n "$output" ]
+
+    run "$TF_BIN" output -raw organizations_read
+    [ "$output" = "1" ]
 }
 
 @test "object content is readable through the plain API" {

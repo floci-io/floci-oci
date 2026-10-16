@@ -1,6 +1,8 @@
 package io.floci.oci.services.queue;
 
+import io.floci.oci.testing.TestCompartments;
 import io.quarkus.test.junit.QuarkusTest;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -12,13 +14,13 @@ import static org.hamcrest.Matchers.*;
 @QuarkusTest
 class QueueRestIntegrationTest {
 
-    private static final String COMPARTMENT = "ocid1.compartment.oc1..itqueuecompartment";
+    private static String compartment;
 
     /** Creates a queue through the wire contract: 202 + opc-work-request-id, then WR poll. */
     private String createQueue(String name) {
         String workRequestId = given()
                 .contentType("application/json")
-                .body(Map.of("displayName", name, "compartmentId", COMPARTMENT))
+                .body(Map.of("displayName", name, "compartmentId", compartment))
             .when().post("/20210201/queues")
             .then()
                 .statusCode(202)
@@ -37,6 +39,13 @@ class QueueRestIntegrationTest {
                 .extract().path("resources[0].identifier");
     }
 
+    @BeforeEach
+    void createTestCompartment() {
+        if (compartment == null) {
+            compartment = TestCompartments.create("itqueuecompartment");
+        }
+    }
+
     @Test
     void queueCrudRoundtrip() {
         String queueId = createQueue("it-queue-" + System.nanoTime());
@@ -53,7 +62,7 @@ class QueueRestIntegrationTest {
 
         // Wrapped list — {"items":[...]}, unlike Identity's bare arrays.
         given()
-            .queryParam("compartmentId", COMPARTMENT)
+            .queryParam("compartmentId", compartment)
             .when().get("/20210201/queues")
             .then().statusCode(200)
                 .body("items.size()", greaterThanOrEqualTo(1))
@@ -196,7 +205,7 @@ class QueueRestIntegrationTest {
     void queueWorkRequestListIsWrappedAndScoped() {
         String queueId = createQueue("it-wr-" + System.nanoTime());
         given()
-            .queryParam("compartmentId", COMPARTMENT)
+            .queryParam("compartmentId", compartment)
             .when().get("/20210201/workRequests")
             .then().statusCode(200)
                 .body("items.size()", greaterThanOrEqualTo(1))

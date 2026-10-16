@@ -1,6 +1,8 @@
 package io.floci.oci.services.vault;
 
+import io.floci.oci.testing.TestCompartments;
 import io.quarkus.test.junit.QuarkusTest;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.Base64;
@@ -13,7 +15,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 @QuarkusTest
 class VaultRestIntegrationTest {
 
-    private static final String COMPARTMENT = "ocid1.compartment.oc1..itvaultcompartment";
+    private static String compartment;
     private static final String VAULT = "ocid1.vault.oc1.iad.itvault";
     private static final String KEY = "ocid1.key.oc1.iad.itkey";
 
@@ -24,7 +26,7 @@ class VaultRestIntegrationTest {
     private String createSecret(String name, String value) {
         return given()
                 .contentType("application/json")
-                .body(Map.of("compartmentId", COMPARTMENT, "vaultId", VAULT, "keyId", KEY,
+                .body(Map.of("compartmentId", compartment, "vaultId", VAULT, "keyId", KEY,
                         "secretName", name, "description", "it secret",
                         "secretContent", Map.of("contentType", "BASE64", "content", b64(value))))
             .when().post("/20180608/secrets")
@@ -35,6 +37,13 @@ class VaultRestIntegrationTest {
                 // The Secret shape must NEVER echo content.
                 .body("secretContent", nullValue())
                 .extract().path("id");
+    }
+
+    @BeforeEach
+    void createTestCompartment() {
+        if (compartment == null) {
+            compartment = TestCompartments.create("itvaultcompartment");
+        }
     }
 
     @Test
