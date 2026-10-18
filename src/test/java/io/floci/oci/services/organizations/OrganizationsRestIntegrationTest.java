@@ -13,6 +13,7 @@ import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.hasItems;
 import static org.hamcrest.Matchers.notNullValue;
 import static org.hamcrest.Matchers.startsWith;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
 @QuarkusTest
 class OrganizationsRestIntegrationTest {
@@ -83,6 +84,28 @@ class OrganizationsRestIntegrationTest {
     }
 
     @Test
+    void workRequestsAreListedInTheRequestedOrder() {
+        createChild("order-a-" + System.nanoTime(), "us-ashburn-1");
+        createChild("order-b-" + System.nanoTime(), "us-ashburn-1");
+        String tenancy = config.defaultTenancyId();
+
+        List<String> ascending = given().queryParam("compartmentId", tenancy).queryParam("sortOrder", "ASC")
+            .when().get("/20230401/workRequests")
+            .then().statusCode(200).extract().path("items.id");
+        List<String> descending = given().queryParam("compartmentId", tenancy).queryParam("sortOrder", "DESC")
+            .when().get("/20230401/workRequests")
+            .then().statusCode(200).extract().path("items.id");
+
+        assertEquals(ascending.reversed(), descending);
+        given().queryParam("compartmentId", tenancy).queryParam("sortOrder", "SIDEWAYS")
+            .when().get("/20230401/workRequests")
+            .then().statusCode(400).body("code", equalTo("InvalidParameter"));
+        given().queryParam("limit", 1).queryParam("sortOrder", "DESC")
+            .when().get("/20230401/workRequests/" + ascending.getFirst() + "/errors")
+            .then().statusCode(200).body("items.size()", equalTo(0));
+    }
+
+    @Test
     void listsArePaged() {
         createChild("paged-a-" + System.nanoTime(), "us-ashburn-1");
 
@@ -127,7 +150,7 @@ class OrganizationsRestIntegrationTest {
         given()
                 .contentType("application/json")
                 .body(Map.of("compartmentId", config.defaultTenancyId(), "tenancyName", "nowhere",
-                        "homeRegion", "ap-tokyo-1", "adminEmail", "admin@example.com"))
+                        "homeRegion", "ap-sydney-1", "adminEmail", "admin@example.com"))
             .when().post("/20230401/childTenancies")
             .then()
                 .statusCode(400)

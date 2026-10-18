@@ -26,7 +26,6 @@ import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
 import java.time.Instant;
-import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -51,7 +50,7 @@ public class OrganizationsService {
     static final String CORE_FEATURE = "CORE";
     static final String DEFAULT_GOVERNANCE_STATUS = "OPTED_IN";
     private static final Set<String> GOVERNANCE_STATUSES = Set.of("OPTED_IN", "OPTED_OUT");
-    private static final Set<String> SORT_ORDERS = Set.of("ASC", "DESC");
+    static final Set<String> SORT_ORDERS = Set.of("ASC", "DESC");
     private static final Pattern POLICY_NAME = Pattern.compile("[A-Za-z_]+");
 
     private final StorageBackend<String, StoredOrganization> organizations;
@@ -105,6 +104,7 @@ public class OrganizationsService {
                 .enabled(config.services().organizations().enabled())
                 .storageKey("organizations")
                 .resourceClasses(OrganizationsController.class)
+                .global(true)
                 .build());
     }
 
@@ -160,7 +160,7 @@ public class OrganizationsService {
             link.setLifecycleState("ACTIVE");
             link.setFeature(feature);
             link.setEtag(Etags.newEtag());
-            put(links, parentId, link.getId(), link);
+            TenancyAwareStorageBackend.putIn(links, parentId, link.getId(), link);
         }
         LOG.infov("createChildTenancy {0} ({1}) in {2}", tenancyName, child.getId(), region);
         return workRequests.succeeded(WR_SERVICE, "CREATE_CHILD_TENANCY", parentId,
@@ -176,11 +176,11 @@ public class OrganizationsService {
             throw OciException.notAuthorizedOrNotFound(
                     "Authorization failed or requested resource not found: tenancy " + compartmentId);
         }
-        return scan(organizations, ownerPartition());
+        return TenancyAwareStorageBackend.scanTenancy(organizations, ownerPartition());
     }
 
     public StoredOrganization getOrganization(String organizationId) {
-        return get(organizations, ownerPartition(), organizationId)
+        return TenancyAwareStorageBackend.getIn(organizations, ownerPartition(), organizationId)
                 .orElseThrow(() -> notFound("organization", organizationId));
     }
 
@@ -188,21 +188,21 @@ public class OrganizationsService {
     public synchronized String updateOrganization(String organizationId, String defaultUcmSubscriptionId,
                                                   String ifMatch) {
         String parentId = ociContext.tenancyId();
-        StoredOrganization organization = get(organizations, parentId, organizationId)
+        StoredOrganization organization = TenancyAwareStorageBackend.getIn(organizations, parentId, organizationId)
                 .orElseThrow(() -> notFound("organization", organizationId));
         requireNonBlank(defaultUcmSubscriptionId, "defaultUcmSubscriptionId");
         Etags.checkIfMatch(ifMatch, organization.getEtag());
         organization.setDefaultUcmSubscriptionId(defaultUcmSubscriptionId);
         organization.setTimeUpdated(Instant.now().toString());
         organization.setEtag(Etags.newEtag());
-        put(organizations, parentId, organization.getId(), organization);
+        TenancyAwareStorageBackend.putIn(organizations, parentId, organization.getId(), organization);
         return workRequests.succeeded(WR_SERVICE, "ASSIGN_DEFAULT_SUBSCRIPTION", parentId,
                 List.of(WorkRequestService.resource("organization", "UPDATED", organizationId, null)));
     }
 
     public List<StoredOrganizationTenancy> listOrganizationTenancies(String organizationId) {
         StoredOrganization organization = getOrganization(organizationId);
-        return scan(organizationTenancies, ownerPartition()).stream()
+        return TenancyAwareStorageBackend.scanTenancy(organizationTenancies, ownerPartition()).stream()
                 .filter(t -> organization.getId().equals(t.getOrganizationId()))
                 .sorted(Comparator.comparing(StoredOrganizationTenancy::getTimeJoined))
                 .toList();
@@ -226,7 +226,7 @@ public class OrganizationsService {
         if ("DESC".equals(sortOrder)) {
             order = order.reversed();
         }
-        return scan(links, ownerPartition()).stream()
+        return TenancyAwareStorageBackend.scanTenancy(links, ownerPartition()).stream()
                 .filter(l -> parentTenancyId == null || parentTenancyId.equals(l.getParentTenancyId()))
                 .filter(l -> childTenancyId == null || childTenancyId.equals(l.getChildTenancyId()))
                 .filter(l -> feature == null || feature.equals(l.getFeature()))
@@ -236,7 +236,7 @@ public class OrganizationsService {
     }
 
     public StoredLink getLink(String linkId) {
-        return get(links, ownerPartition(), linkId).orElseThrow(() -> notFound("link", linkId));
+        return TenancyAwareStorageBackend.getIn(links, ownerPartition(), linkId).orElseThrow(() -> notFound("link", linkId));
     }
 
     public String tenancyName(String tenancyId) {
@@ -273,7 +273,7 @@ public class OrganizationsService {
     }
 
     private StoredOrganization organizationOf(StoredTenancy parent, String subscriptionId) {
-        List<StoredOrganization> existing = scan(organizations, parent.getId());
+        List<StoredOrganization> existing = TenancyAwareStorageBackend.scanTenancy(organizations, parent.getId());
         if (!existing.isEmpty()) {
             return existing.getFirst();
         }
@@ -288,7 +288,7 @@ public class OrganizationsService {
         organization.setDisplayName(parent.getName());
         organization.setParentName(parent.getName());
         organization.setEtag(Etags.newEtag());
-        put(organizations, parent.getId(), organization.getId(), organization);
+        TenancyAwareStorageBackend.putIn(organizations, parent.getId(), organization.getId(), organization);
         return organization;
     }
 
@@ -309,38 +309,16 @@ public class OrganizationsService {
 
     private Optional<StoredOrganizationTenancy> findMembership(String partition, String organizationId,
                                                                String tenancyId) {
-        return get(organizationTenancies, partition, membershipKey(organizationId, tenancyId));
+        return TenancyAwareStorageBackend.getIn(organizationTenancies, partition, membershipKey(organizationId, tenancyId));
     }
 
     private void saveMembership(String partition, StoredOrganizationTenancy membership) {
-        put(organizationTenancies, partition,
+        TenancyAwareStorageBackend.putIn(organizationTenancies, partition,
                 membershipKey(membership.getOrganizationId(), membership.getTenancyId()), membership);
     }
 
     private static String membershipKey(String organizationId, String tenancyId) {
         return organizationId + ":" + tenancyId;
-    }
-
-    private static <V> Optional<V> get(StorageBackend<String, V> store, String partition, String key) {
-        if (store instanceof TenancyAwareStorageBackend<V> tenancyAware) {
-            return tenancyAware.getForTenancy(partition, key);
-        }
-        return store.get(key);
-    }
-
-    private static <V> void put(StorageBackend<String, V> store, String partition, String key, V value) {
-        if (store instanceof TenancyAwareStorageBackend<V> tenancyAware) {
-            tenancyAware.putForTenancy(partition, key, value);
-        } else {
-            store.put(key, value);
-        }
-    }
-
-    private static <V> List<V> scan(StorageBackend<String, V> store, String partition) {
-        if (store instanceof TenancyAwareStorageBackend<V> tenancyAware) {
-            return new ArrayList<>(tenancyAware.scanForTenancy(partition, k -> true));
-        }
-        return store.scan(k -> true);
     }
 
     private static void requireNonBlank(String value, String name) {

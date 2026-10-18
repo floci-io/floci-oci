@@ -174,6 +174,7 @@ public class IdentityService {
                 .enabled(config.services().identity().enabled())
                 .storageKey("identity")
                 .resourceClasses(IdentityController.class)
+                .global(true)
                 .build());
         adoptLegacyRootRecords();
     }
@@ -785,11 +786,6 @@ public class IdentityService {
                 .sorted(Comparator.comparing(StoredRegionSubscription::getRegionName))
                 .forEach(result::add);
         return result;
-    }
-
-    /** Whether the calling tenancy is subscribed to {@code regionName}, its home region included. */
-    public boolean isSubscribed(String regionName) {
-        return regionSubscriptions().stream().anyMatch(sub -> sub.getRegionName().equals(regionName));
     }
 
     /**

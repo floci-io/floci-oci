@@ -21,6 +21,7 @@ import jakarta.ws.rs.QueryParam;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -141,12 +142,19 @@ public class OrganizationsController {
     @Path("/workRequests")
     public Response listWorkRequests(@QueryParam("compartmentId") String compartmentId,
                                      @QueryParam("limit") Integer limit,
-                                     @QueryParam("page") String page) {
+                                     @QueryParam("page") String page,
+                                     @QueryParam("sortOrder") String sortOrder) {
         if (compartmentId == null || compartmentId.isBlank()) {
             throw OciException.missingParameter("Missing required parameter: compartmentId");
         }
+        requireSortOrder(sortOrder);
+        Comparator<StoredWorkRequest> order = Comparator.comparing(StoredWorkRequest::getTimeAccepted)
+                .thenComparing(StoredWorkRequest::getId);
+        if ("DESC".equals(sortOrder)) {
+            order = order.reversed();
+        }
         return collection(workRequests.list(OrganizationsService.WR_SERVICE, compartmentId).stream()
-                .map(StoredWorkRequest::toWire).toList(), limit, page);
+                .sorted(order).map(StoredWorkRequest::toWire).toList(), limit, page);
     }
 
     @GET
@@ -157,19 +165,33 @@ public class OrganizationsController {
 
     @GET
     @Path("/workRequests/{workRequestId}/errors")
-    public Response listWorkRequestErrors(@PathParam("workRequestId") String workRequestId) {
+    public Response listWorkRequestErrors(@PathParam("workRequestId") String workRequestId,
+                                          @QueryParam("limit") Integer limit,
+                                          @QueryParam("page") String page,
+                                          @QueryParam("sortOrder") String sortOrder) {
+        requireSortOrder(sortOrder);
         workRequests.get(OrganizationsService.WR_SERVICE, workRequestId);
-        return Response.ok(Map.of("items", List.of())).build();
+        return collection(List.of(), limit, page);
     }
 
     @GET
     @Path("/workRequests/{workRequestId}/logs")
-    public Response listWorkRequestLogs(@PathParam("workRequestId") String workRequestId) {
+    public Response listWorkRequestLogs(@PathParam("workRequestId") String workRequestId,
+                                        @QueryParam("limit") Integer limit,
+                                        @QueryParam("page") String page,
+                                        @QueryParam("sortOrder") String sortOrder) {
+        requireSortOrder(sortOrder);
         workRequests.get(OrganizationsService.WR_SERVICE, workRequestId);
-        return Response.ok(Map.of("items", List.of())).build();
+        return collection(List.of(), limit, page);
     }
 
     // ── Helpers ────────────────────────────────────────────────────────────────
+
+    private static void requireSortOrder(String sortOrder) {
+        if (sortOrder != null && !OrganizationsService.SORT_ORDERS.contains(sortOrder)) {
+            throw OciException.invalidParameter("Invalid sortOrder: " + sortOrder);
+        }
+    }
 
     private static Response accepted(String workRequestId) {
         return Response.accepted().header("opc-work-request-id", workRequestId).build();
