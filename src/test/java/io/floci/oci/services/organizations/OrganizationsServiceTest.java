@@ -140,6 +140,20 @@ class OrganizationsServiceTest {
     }
 
     @Test
+    void aChildCannotCreateAChildTenancy() {
+        String child = createChild("child", "us-ashburn-1", null);
+        String organizationId = service.listOrganizations(PARENT).getFirst().getId();
+        caller.set(child);
+
+        OciException e = assertThrows(OciException.class, () -> service.createChildTenancy(
+                child, "grandchild", "us-ashburn-1", "a@b.c", null, null, null, null));
+
+        assertEquals(404, e.getHttpStatus());
+        assertEquals("NotAuthorizedOrNotFound", e.getCode());
+        assertEquals(2, service.listOrganizationTenancies(organizationId).size());
+    }
+
+    @Test
     void updateOrganizationChecksTheEtagAndSetsTheSubscription() {
         createChild("child", "us-ashburn-1", null);
         StoredOrganization organization = service.listOrganizations(PARENT).getFirst();

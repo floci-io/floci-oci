@@ -105,6 +105,25 @@ class WorkRequestServiceTest {
     }
 
     @Test
+    void finishClosesAGlobalServicesWorkRequest() {
+        StorageBackend<String, StoredWorkRequest> globalRaw = new InMemoryStorage<>();
+        EmulatorConfig config = mock(EmulatorConfig.class);
+        when(config.defaultRegion()).thenReturn("us-ashburn-1");
+        WorkRequestService service = new WorkRequestService(
+                new TenancyAwareStorageBackend<>(raw, () -> PARTITION),
+                new TenancyAwareStorageBackend<>(globalRaw, () -> TENANCY), config, globalServices("organizations"));
+        String id = service.inProgress("organizations", "CREATE_CHILD_TENANCY", TENANCY, List.of());
+
+        service.finish(TENANCY, REGION, id, "SUCCEEDED");
+
+        StoredWorkRequest wr = globalRaw.get(TENANCY + "/" + id).orElseThrow();
+        assertEquals("SUCCEEDED", wr.getStatus());
+        assertNotNull(wr.getTimeFinished());
+        assertEquals(1, globalRaw.keys().size());
+        assertEquals(0, raw.keys().size());
+    }
+
+    @Test
     void identityWorkRequestsInTheRegionalStoreMoveToTheGlobalStore() {
         StorageBackend<String, StoredWorkRequest> globalRaw = new InMemoryStorage<>();
         TenancyAwareStorageBackend<StoredWorkRequest> global =

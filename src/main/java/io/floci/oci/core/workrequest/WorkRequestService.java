@@ -121,13 +121,18 @@ public class WorkRequestService {
      * Moves an in-progress work request to {@code terminalStatus}. Takes the owning tenancy and
      * region explicitly because async workers run outside any request scope; work-request OCIDs
      * are global, so the region comes from the resource the work request is about. A work
-     * request that is missing or already finished is left untouched.
+     * request that is missing or already finished is left untouched. A global service's work
+     * request is found in the tenancy's partition of the global store, whatever the region.
      */
     public void finish(String tenancyId, String region, String workRequestId, String terminalStatus) {
+        StorageBackend<String, StoredWorkRequest> target = store;
         String partition = TenancyAwareStorageBackend.regionalPartition(tenancyId, region);
-        Optional<StoredWorkRequest> found = store instanceof TenancyAwareStorageBackend<StoredWorkRequest> tenancyAware
-                ? tenancyAware.getForTenancy(partition, workRequestId)
-                : store.get(workRequestId);
+        Optional<StoredWorkRequest> found = TenancyAwareStorageBackend.getIn(store, partition, workRequestId);
+        if (found.isEmpty() && globalStore != store) {
+            target = globalStore;
+            partition = tenancyId;
+            found = TenancyAwareStorageBackend.getIn(globalStore, partition, workRequestId);
+        }
         if (found.isEmpty()) {
             LOG.warnv("workRequest {0} not found in tenancy {1}, region {2}; cannot mark it {3}",
                     workRequestId, tenancyId, region, terminalStatus);
@@ -142,11 +147,7 @@ public class WorkRequestService {
             wr.setPercentComplete(100.0f);
         }
         wr.setTimeFinished(Instant.now().toString());
-        if (store instanceof TenancyAwareStorageBackend<StoredWorkRequest> tenancyAware) {
-            tenancyAware.putForTenancy(partition, workRequestId, wr);
-        } else {
-            store.put(workRequestId, wr);
-        }
+        TenancyAwareStorageBackend.putIn(target, partition, workRequestId, wr);
         LOG.debugv("workRequest {0}: {1} ({2})", workRequestId, terminalStatus, wr.getService());
     }
 

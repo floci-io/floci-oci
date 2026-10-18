@@ -124,7 +124,7 @@ public class OrganizationsService {
         requireNonBlank(homeRegion, "homeRegion");
         requireNonBlank(adminEmail, "adminEmail");
         String parentId = ociContext.tenancyId();
-        if (!compartmentId.equals(parentId)) {
+        if (!compartmentId.equals(parentId) || !ownerPartition().equals(parentId)) {
             throw OciException.notAuthorizedOrNotFound(
                     "Authorization failed or requested resource not found: tenancy " + compartmentId);
         }

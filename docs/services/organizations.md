@@ -27,7 +27,8 @@ no region (`localhost:4599`) lands in the signing tenancy's home region. Like an
 child can use other regions only after subscribing to them.
 
 Organizations, organization tenancies and links are stored with the parent tenancy, so a child
-lists the same organization as its parent. Only the parent can update it.
+lists the same organization as its parent. Only the parent can update it or create more
+children: `CreateChildTenancy` signed by a child is `404 NotAuthorizedOrNotFound`.
 
 ## Wire notes
 
