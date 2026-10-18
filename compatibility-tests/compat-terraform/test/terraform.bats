@@ -18,7 +18,7 @@ setup() {
 @test "apply creates identity and object storage resources" {
     run "$TF_BIN" apply -auto-approve -input=false -no-color
     [ "$status" -eq 0 ]
-    [[ "$output" == *"Apply complete! Resources: 13 added"* ]]
+    [[ "$output" == *"Apply complete! Resources: 14 added"* ]]
 }
 
 @test "outputs reflect emulator state" {
@@ -51,6 +51,15 @@ setup() {
 
     run "$TF_BIN" output -raw organizations_read
     [ "$output" = "1" ]
+
+    run "$TF_BIN" output -raw db_system_state
+    [ "$output" = "ACTIVE" ]
+
+    run "$TF_BIN" output -raw db_system_port
+    [ "$output" -gt 0 ]
+
+    run "$TF_BIN" output -raw db_system_ca_certificate
+    [[ "$output" == "-----BEGIN CERTIFICATE-----"* ]]
 }
 
 @test "object content is readable through the plain API" {
@@ -61,13 +70,15 @@ setup() {
 
 @test "plan after apply shows no drift" {
     run "$TF_BIN" plan -detailed-exitcode -input=false -no-color
+    # Shown only when the test fails: the plan is the only place the drifting attribute is named.
+    echo "$output"
     [ "$status" -eq 0 ]
 }
 
 @test "destroy removes every resource" {
     run "$TF_BIN" destroy -auto-approve -input=false -no-color
     [ "$status" -eq 0 ]
-    [[ "$output" == *"Destroy complete! Resources: 13 destroyed"* ]]
+    [[ "$output" == *"Destroy complete! Resources: 14 destroyed"* ]]
 
     run curl -s -o /dev/null -w '%{http_code}' \
         "${FLOCI_OCI_ENDPOINT:-http://localhost:4599}/n/floci-local/b/tf-compat-bucket"

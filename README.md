@@ -429,12 +429,12 @@ The [`compatibility-tests`](./compatibility-tests/) directory validates floci-oc
 
 | Module | Language / Tool | SDK / Client | Tests |
 |---|---|---|---:|
-| `sdk-test-java` | Java | oci-java-sdk (incl. OKE integration and Organizations child tenancies) | 24 |
-| `sdk-test-python` | Python 3 | oci (incl. `UploadManager` streaming) | 22 |
+| `sdk-test-java` | Java | oci-java-sdk (incl. OKE integration, Organizations child tenancies and a JDBC connection to a PostgreSQL DB system) | 26 |
+| `sdk-test-python` | Python 3 | oci (incl. `UploadManager` streaming) | 25 |
 | `sdk-test-go` | Go | oci-go-sdk (OKE container engine) | 1 |
-| `sdk-test-cli` | Bash / BATS | OCI CLI 3.89.3 (all 9 services, incl. error codes and PAR access) | 60 |
-| `compat-terraform` | Terraform | oracle/oci provider (12 resources, zero-drift plan) | 6 |
-| `compat-opentofu` | OpenTofu | oracle/oci provider (12 resources, zero-drift plan) | 6 |
+| `sdk-test-cli` | Bash / BATS | OCI CLI 3.89.3 (all 10 services, incl. error codes and PAR access) | 68 |
+| `compat-terraform` | Terraform | oracle/oci provider (14 resources, zero-drift plan) | 6 |
+| `compat-opentofu` | OpenTofu | oracle/oci provider (14 resources, zero-drift plan) | 6 |
 
 > [!NOTE]
 > `sdk-test-go` currently focuses on OKE (Container Engine for Kubernetes) compatibility verification; coverage for additional OCI services will be added in future releases.
