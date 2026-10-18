@@ -38,11 +38,12 @@ teardown_file() {
         --storage-details '{"systemType":"OCI_OPTIMIZED_STORAGE","isRegionallyDurable":true}' \
         --credentials '{"username":"admin_user","passwordDetails":{"passwordType":"PLAIN_TEXT","password":"BEstrO0ng_#11"}}'
     [ "$status" -eq 0 ]
+    # Saved before any check, so teardown_file deletes the database even when one fails.
+    json_get '.data.id' > "$BATS_FILE_TMPDIR/db_id"
     [[ "$(json_get '.data.id')" == ocid1.postgresqldbsystem.* ]]
     [ "$(json_get '.data.shape')" = "VM.Standard.E4.Flex" ]
     [ "$(json_get '.data."admin-username"')" = "admin_user" ]
     [ -n "$(json_get '."opc-work-request-id"')" ]
-    json_get '.data.id' > "$BATS_FILE_TMPDIR/db_id"
 }
 
 @test "psql: the db system becomes ACTIVE" {

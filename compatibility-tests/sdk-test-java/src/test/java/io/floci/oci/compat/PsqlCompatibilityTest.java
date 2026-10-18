@@ -90,14 +90,16 @@ class PsqlCompatibilityTest {
                                 .build())
                         .build())
                 .build());
-        assertThat(created.getOpcWorkRequestId()).isNotBlank();
-        assertThat(created.getEtag()).isNotBlank();
         String id = created.getDbSystem().getId();
-        assertThat(created.getDbSystem().getShape()).isEqualTo("VM.Standard.E4.Flex");
-        assertThat(created.getDbSystem().getInstanceOcpuCount()).isEqualTo(2);
-        assertThat(created.getDbSystem().getAdminUsername()).isEqualTo(USER);
 
+        // Every check sits inside the try, so a failure still deletes the database it created.
         try {
+            assertThat(created.getOpcWorkRequestId()).isNotBlank();
+            assertThat(created.getEtag()).isNotBlank();
+            assertThat(created.getDbSystem().getShape()).isEqualTo("VM.Standard.E4.Flex");
+            assertThat(created.getDbSystem().getInstanceOcpuCount()).isEqualTo(2);
+            assertThat(created.getDbSystem().getAdminUsername()).isEqualTo(USER);
+
             WorkRequest workRequest = awaitWorkRequest(created.getOpcWorkRequestId());
             assertThat(workRequest.getStatus()).isEqualTo(OperationStatus.Succeeded);
             assertThat(workRequest.getResources().get(0).getIdentifier()).isEqualTo(id);

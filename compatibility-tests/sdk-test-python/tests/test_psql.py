@@ -49,13 +49,15 @@ def test_db_system_lifecycle(postgresql):
         )
     )
     db_system_id = created.data.id
-    assert created.headers["opc-work-request-id"]
-    assert created.data.shape == "VM.Standard.E4.Flex"
-    assert created.data.instance_ocpu_count == 2
-    assert created.data.instance_memory_size_in_gbs == 32
-    assert created.data.admin_username == "admin_user"
 
+    # Every check sits inside the try, so a failure still deletes the database it created.
     try:
+        assert created.headers["opc-work-request-id"]
+        assert created.data.shape == "VM.Standard.E4.Flex"
+        assert created.data.instance_ocpu_count == 2
+        assert created.data.instance_memory_size_in_gbs == 32
+        assert created.data.admin_username == "admin_user"
+
         work_request = wait_for_work_request(postgresql, created.headers["opc-work-request-id"])
         assert work_request.status == "SUCCEEDED"
         assert work_request.operation_type == "CREATE_POSTGRESQL_DB_SYSTEM"
