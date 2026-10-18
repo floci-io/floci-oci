@@ -787,6 +787,11 @@ public class IdentityService {
         return result;
     }
 
+    /** Whether the calling tenancy is subscribed to {@code regionName}, its home region included. */
+    public boolean isSubscribed(String regionName) {
+        return regionSubscriptions().stream().anyMatch(sub -> sub.getRegionName().equals(regionName));
+    }
+
     /**
      * Subscriptions complete immediately: the emulator has no region provisioning to wait on.
      * Synchronized so the duplicate check and the write cannot interleave with a concurrent call.

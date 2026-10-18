@@ -197,6 +197,8 @@ public interface EmulatorConfig {
 
         OkeServiceConfig oke();
 
+        OrganizationsServiceConfig organizations();
+
         interface IdentityServiceConfig {
             @WithDefault("true")
             boolean enabled();
@@ -208,6 +210,11 @@ public interface EmulatorConfig {
         }
 
         interface QueueServiceConfig {
+            @WithDefault("true")
+            boolean enabled();
+        }
+
+        interface OrganizationsServiceConfig {
             @WithDefault("true")
             boolean enabled();
         }

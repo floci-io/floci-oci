@@ -102,6 +102,8 @@ floci-oci:
       enabled: true
     streaming:
       enabled: true
+    organizations:
+      enabled: true
     functions:
       enabled: true
       mock: false            # true = no Docker; invocations return a synthetic body

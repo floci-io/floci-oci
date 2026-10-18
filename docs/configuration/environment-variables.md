@@ -25,6 +25,7 @@ All configuration lives under the `floci-oci.*` prefix; every property maps to a
 | `FLOCI_OCI_SERVICES_KMS_ENABLED` | `true` | Enable/disable KMS (vaults, keys, crypto) |
 | `FLOCI_OCI_SERVICES_VAULT_ENABLED` | `true` | Enable/disable Vault secrets + bundles |
 | `FLOCI_OCI_SERVICES_STREAMING_ENABLED` | `true` | Enable/disable Streaming |
+| `FLOCI_OCI_SERVICES_ORGANIZATIONS_ENABLED` | `true` | Enable/disable Organizations (child tenancies, organizations, links) |
 | `FLOCI_OCI_SERVICES_FUNCTIONS_ENABLED` | `true` | Enable/disable Functions |
 | `FLOCI_OCI_SERVICES_FUNCTIONS_MOCK` | `false` | Skip the Fn sidecar; invocations return a synthetic body |
 | `FLOCI_OCI_SERVICES_FUNCTIONS_SERVER_IMAGE` | `fnproject/fnserver:latest` | Fn Project server image |
