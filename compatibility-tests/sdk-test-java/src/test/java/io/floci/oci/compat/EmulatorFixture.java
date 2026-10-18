@@ -28,7 +28,7 @@ public final class EmulatorFixture {
             "ocid1.user.oc1..compattestuser000000000000000000000000000000000000000000000";
     public static final String FINGERPRINT = "aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99";
 
-    private static final SimpleAuthenticationDetailsProvider AUTH = buildAuth();
+    private static final SimpleAuthenticationDetailsProvider AUTH = buildAuth(TENANCY);
 
     private EmulatorFixture() {
     }
@@ -37,6 +37,36 @@ public final class EmulatorFixture {
         IdentityClient client = IdentityClient.builder()
                 .region(Region.US_ASHBURN_1)
                 .build(AUTH);
+        client.setEndpoint(ENDPOINT);
+        return client;
+    }
+
+    /** An Identity client signing as {@code tenancyId}, e.g. a child tenancy. */
+    public static IdentityClient identityAs(String tenancyId) {
+        IdentityClient client = IdentityClient.builder()
+                .region(Region.US_ASHBURN_1)
+                .build(buildAuth(tenancyId));
+        client.setEndpoint(ENDPOINT);
+        return client;
+    }
+
+    public static com.oracle.bmc.tenantmanagercontrolplane.OrganizationClient organization() {
+        var client = com.oracle.bmc.tenantmanagercontrolplane.OrganizationClient.builder()
+                .region(Region.US_ASHBURN_1).build(AUTH);
+        client.setEndpoint(ENDPOINT);
+        return client;
+    }
+
+    public static com.oracle.bmc.tenantmanagercontrolplane.LinkClient link() {
+        var client = com.oracle.bmc.tenantmanagercontrolplane.LinkClient.builder()
+                .region(Region.US_ASHBURN_1).build(AUTH);
+        client.setEndpoint(ENDPOINT);
+        return client;
+    }
+
+    public static com.oracle.bmc.tenantmanagercontrolplane.WorkRequestClient organizationsWorkRequests() {
+        var client = com.oracle.bmc.tenantmanagercontrolplane.WorkRequestClient.builder()
+                .region(Region.US_ASHBURN_1).build(AUTH);
         client.setEndpoint(ENDPOINT);
         return client;
     }
@@ -119,14 +149,14 @@ public final class EmulatorFixture {
         return client;
     }
 
-    private static SimpleAuthenticationDetailsProvider buildAuth() {
+    private static SimpleAuthenticationDetailsProvider buildAuth(String tenancyId) {
         try {
             KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA");
             generator.initialize(2048);
             KeyPair pair = generator.generateKeyPair();
             String pem = toPem(pair);
             return SimpleAuthenticationDetailsProvider.builder()
-                    .tenantId(TENANCY)
+                    .tenantId(tenancyId)
                     .userId(USER)
                     .fingerprint(FINGERPRINT)
                     .privateKeySupplier(() -> new ByteArrayInputStream(pem.getBytes()))
