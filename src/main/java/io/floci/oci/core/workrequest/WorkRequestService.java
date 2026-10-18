@@ -125,6 +125,12 @@ public class WorkRequestService {
      * request is found in the tenancy's partition of the global store, whatever the region.
      */
     public void finish(String tenancyId, String region, String workRequestId, String terminalStatus) {
+        finish(tenancyId, region, workRequestId, terminalStatus, List.of());
+    }
+
+    /** Like {@link #finish(String, String, String, String)}, recording the errors that explain a failure. */
+    public void finish(String tenancyId, String region, String workRequestId, String terminalStatus,
+                       List<StoredWorkRequest.ErrorEntry> errors) {
         StorageBackend<String, StoredWorkRequest> target = store;
         String partition = TenancyAwareStorageBackend.regionalPartition(tenancyId, region);
         Optional<StoredWorkRequest> found = TenancyAwareStorageBackend.getIn(store, partition, workRequestId);
@@ -143,6 +149,9 @@ public class WorkRequestService {
             return;
         }
         wr.setStatus(terminalStatus);
+        if (!errors.isEmpty()) {
+            wr.setErrors(new ArrayList<>(errors));
+        }
         if ("SUCCEEDED".equals(terminalStatus)) {
             wr.setPercentComplete(100.0f);
         }

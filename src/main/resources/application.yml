@@ -119,4 +119,11 @@ floci-oci:
       api-server-max-port: 6543
       kubeconfig-auth: exec  # exec = real OKE `oci ce cluster generate-token`; token = static bearer token
       ready-timeout-seconds: 300
+    psql:
+      enabled: true
+      mock: false            # true = no Docker; DB systems are management-plane only
+      image: "postgres:{major}-alpine"  # {major} comes from the DB system's dbVersion
+      base-port: 15432       # host ports published for PostgreSQL endpoints, one per DB system
+      max-port: 15531
+      ready-timeout-seconds: 120
 

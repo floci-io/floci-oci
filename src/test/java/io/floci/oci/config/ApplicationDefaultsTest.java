@@ -37,6 +37,12 @@ class ApplicationDefaultsTest {
                 config.services().oke().kubeconfigAuth());
         assertEquals(annotationDefault(EmulatorConfig.ServicesConfig.OkeServiceConfig.class, "readyTimeoutSeconds"),
                 String.valueOf(config.services().oke().readyTimeoutSeconds()));
+        assertEquals(annotationDefault(EmulatorConfig.ServicesConfig.PsqlServiceConfig.class, "image"),
+                config.services().psql().image());
+        assertEquals(annotationDefault(EmulatorConfig.ServicesConfig.PsqlServiceConfig.class, "basePort"),
+                String.valueOf(config.services().psql().basePort()));
+        assertEquals(annotationDefault(EmulatorConfig.ServicesConfig.PsqlServiceConfig.class, "readyTimeoutSeconds"),
+                String.valueOf(config.services().psql().readyTimeoutSeconds()));
         assertEquals(annotationDefault(EmulatorConfig.DockerConfig.class, "endpointMode"),
                 config.docker().endpointMode().name().toLowerCase(Locale.ROOT));
     }

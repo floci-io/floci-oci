@@ -72,5 +72,6 @@ nav:
     - Streaming: services/streaming.md
     - Functions: services/functions.md
     - Container Engine (OKE): services/containerengine.md
+    - Database with PostgreSQL: services/psql.md
     - Organizations: services/organizations.md
   - Contributing: contributing.md
