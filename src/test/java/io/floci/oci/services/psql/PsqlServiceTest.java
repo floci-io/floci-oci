@@ -16,6 +16,7 @@ import io.floci.oci.services.vault.model.StoredVaultSecret;
 import io.floci.oci.testing.MutableClock;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -30,6 +31,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
@@ -553,7 +555,115 @@ class PsqlServiceTest {
 
         real.clear();
 
-        verify(containers).remove(any());
+        // Purged, not removed: the volume goes even when prune-volumes-on-delete is off.
+        verify(containers).purge(any());
+        verify(containers, never()).remove(any());
         assertThrows(OciException.class, () -> real.getDbSystem(system.getId()));
+    }
+
+    // ── Late outcomes and interrupted operations ───────────────────────────────
+
+    /** Shares the store with {@link #real} but never runs its Docker work, as if it were cut off. */
+    private PsqlService interrupted() {
+        return new PsqlService(systems, config, null, workRequests, containers, OciContext.fromConfig(config),
+                certificates, vaultSecrets, clock, task -> { });
+    }
+
+    @Test
+    void aStartThatFinishesAfterADeleteDoesNotBringTheSystemBack() {
+        doAnswer(call -> {
+            real.deleteDbSystem(call.<StoredDbSystem>getArgument(0).getId(), null);
+            return null;
+        }).when(containers).start(any(), any());
+
+        PsqlService.Created created = real.createDbSystem(createDetails());
+        when(containers.isRunning(any())).thenReturn(false);
+        real.pollReadiness();
+
+        assertEquals("DELETED", real.getDbSystem(created.system().getId()).getLifecycleState());
+        assertEquals("CANCELED", workRequest(created.workRequestId()).getStatus());
+    }
+
+    @Test
+    void aStartThatFinishesAfterAResetRemovesWhatItStarted() {
+        doAnswer(call -> {
+            real.clear();
+            return null;
+        }).when(containers).start(any(), any());
+
+        PsqlService.Created created = real.createDbSystem(createDetails());
+        real.pollReadiness();
+
+        assertThrows(OciException.class, () -> real.getDbSystem(created.system().getId()));
+        assertTrue(systems.keys().isEmpty());
+        // Once by the reset itself, once for the container the late start brought up.
+        verify(containers, times(2)).purge(any());
+    }
+
+    @Test
+    void aRestartFailsAnInterruptedPasswordResetAndBringsTheSystemBack() {
+        StoredDbSystem system = activeRealSystem();
+        String reset = interrupted().resetMasterUserPassword(system.getId(),
+                Map.of("passwordDetails", Map.of("passwordType", "PLAIN_TEXT", "password", "N3w_passw0rd#")), null);
+
+        real.restartPersistedSystems();
+        real.pollReadiness();
+
+        assertEquals("FAILED", workRequest(reset).getStatus());
+        assertEquals(PsqlService.INTERRUPTED, workRequest(reset).getErrors().getFirst().getMessage());
+        assertEquals("ACTIVE", real.getDbSystem(system.getId()).getLifecycleState());
+        verify(containers, never()).resetPassword(any(), any());
+    }
+
+    @Test
+    void aRestartFailsAnInterruptedCreate() {
+        PsqlService.Created created = interrupted().createDbSystem(createDetails());
+
+        real.restartPersistedSystems();
+
+        assertEquals("FAILED", real.getDbSystem(created.system().getId()).getLifecycleState());
+        assertEquals("FAILED", workRequest(created.workRequestId()).getStatus());
+        verify(containers, never()).start(any(), any());
+    }
+
+    @Test
+    void aRestartFinishesAnInterruptedDelete() {
+        StoredDbSystem system = activeRealSystem();
+        String delete = interrupted().deleteDbSystem(system.getId(), null);
+        assertEquals("DELETING", real.getDbSystem(system.getId()).getLifecycleState());
+
+        real.restartPersistedSystems();
+
+        assertEquals("DELETED", real.getDbSystem(system.getId()).getLifecycleState());
+        assertEquals("SUCCEEDED", workRequest(delete).getStatus());
+        verify(containers).remove(any());
+    }
+
+    @Test
+    void aRejectedUpdateChangesNothing() {
+        StoredDbSystem system = mock.createDbSystem(createDetails()).system();
+        String etag = system.getEtag();
+
+        assertThrows(OciException.class, () -> mock.updateDbSystem(system.getId(),
+                Map.of("displayName", "renamed", "shape", "NotAShape"), null));
+        OciException badIops = assertThrows(OciException.class, () -> mock.updateDbSystem(system.getId(),
+                Map.of("displayName", "renamed", "storageDetails", Map.of("iops", "fast")), null));
+
+        assertEquals("InvalidParameter", badIops.getCode());
+        StoredDbSystem unchanged = mock.getDbSystem(system.getId());
+        assertEquals("orders-db", unchanged.getDisplayName());
+        assertEquals(etag, unchanged.getEtag());
+    }
+
+    @Test
+    void theCertificateNamesARemoteDockerHost() {
+        when(containers.daemonHost()).thenReturn("docker.example");
+
+        real.createDbSystem(createDetails());
+
+        ArgumentCaptor<List<String>> names = ArgumentCaptor.captor();
+        verify(certificates).generateSelfSignedCertificate(any(), names.capture(), any());
+        assertTrue(names.getValue().contains("docker.example"), names.getValue().toString());
+        assertTrue(names.getValue().contains("localhost"), names.getValue().toString());
     }
 }

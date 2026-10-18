@@ -52,8 +52,11 @@ port 4599 with the other services.
   `ACTIVE` at once and every operation completes immediately, with nothing listening on the
   endpoint. Useful where Docker is not available.
 - **Teardown.** Containers are stopped on shutdown and removed, with their volumes, by
-  `POST /_floci-oci/state/reset`. After a restart of floci-oci with persistent storage, the
-  DB systems that were `ACTIVE` are started again.
+  `POST /_floci-oci/state/reset`, whatever `prune-volumes-on-delete` says. After a restart of
+  floci-oci with persistent storage, the DB systems that were `ACTIVE` are started again. An
+  operation the restart interrupted is settled first: a delete finishes, a create ends
+  `FAILED` (its master password was never stored), and a stop, restart or password reset fails
+  its work request, leaving the system `ACTIVE` as it was.
 
 ## Wire notes
 

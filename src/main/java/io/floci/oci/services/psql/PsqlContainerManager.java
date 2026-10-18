@@ -203,6 +203,17 @@ public class PsqlContainerManager {
         }
     }
 
+    /** Stops the container and always removes its data volume: for a state reset. */
+    public void purge(StoredDbSystem system) {
+        stop(system);
+        lifecycleManager.removeVolume(system.getVolumeName());
+    }
+
+    /** The host a client reaches a published port at, which the certificate has to name. */
+    public String daemonHost() {
+        return lifecycleManager.daemonHost();
+    }
+
     /** The port the system had before, when it is still free, so its endpoint survives a restart. */
     private int claimPort(int previous) {
         if (previous > 0 && portAllocator.isPortFree(previous)) {

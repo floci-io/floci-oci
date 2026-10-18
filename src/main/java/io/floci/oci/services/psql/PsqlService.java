@@ -79,6 +79,7 @@ public class PsqlService implements Resettable, CompartmentUsage {
             "INACTIVE", "DELETING", "DELETED", "FAILED", "NEEDS_ATTENTION");
     private static final long DEFAULT_IOPS = 75000L;
     private static final String DEFAULT_MAINTENANCE_WINDOW = "SUN 00:00";
+    static final String INTERRUPTED = "The operation was interrupted by a restart of floci-oci";
 
     /** A system whose container is starting: who owns it, when it began, and where it ends up. */
     record Pending(String tenancyId, String region, Instant since, String targetState, String failureState) {
@@ -166,23 +167,31 @@ public class PsqlService implements Resettable, CompartmentUsage {
         }
     }
 
-    /** Removes every container and volume, then forgets every DB system. */
+    /**
+     * Removes every container and volume, whatever {@code prune-volumes-on-delete} says, since
+     * nothing could reach the volumes once their systems are forgotten; then forgets every DB
+     * system. Holds the lock lifecycle steps record their outcome under, so a step still running
+     * finds its system gone and removes what it started.
+     */
     @Override
-    public void clear() {
+    public synchronized void clear() {
         pending.clear();
         if (realMode()) {
             for (StoredDbSystem system : allSystems()) {
                 if (system.getContainerName() != null) {
-                    try {
-                        containers.remove(system);
-                    } catch (RuntimeException e) {
-                        LOG.warnv("Could not remove the sidecar of DB system {0}: {1}",
-                                system.getId(), e.getMessage());
-                    }
+                    purgeQuietly(system);
                 }
             }
         }
         systems.clear();
+    }
+
+    private void purgeQuietly(StoredDbSystem system) {
+        try {
+            containers.purge(system);
+        } catch (RuntimeException e) {
+            LOG.warnv("Could not remove the sidecar of DB system {0}: {1}", system.getId(), e.getMessage());
+        }
     }
 
     @Override
@@ -319,33 +328,50 @@ public class PsqlService implements Resettable, CompartmentUsage {
      */
     public String updateDbSystem(String dbSystemId, Map<String, Object> details, String ifMatch) {
         StoredDbSystem system = mutable(dbSystemId, ifMatch, "ACTIVE", "INACTIVE");
+        // Everything that can be rejected is checked before anything changes: the store hands
+        // out the stored object itself, so a half-applied update would stick.
+        PsqlCatalog.Shape shape = string(details, "shape") != null
+                ? PsqlCatalog.parseShape(string(details, "shape")) : null;
+        Integer ocpuCount = integer(details, "instanceOcpuCount") != null
+                ? positive(details, "instanceOcpuCount", 1) : null;
+        Integer memorySizeInGBs = integer(details, "instanceMemorySizeInGBs") != null
+                ? positive(details, "instanceMemorySizeInGBs", 1) : null;
+        Map<String, Object> storage = map(details, "storageDetails");
+        Object iops = storage != null ? storage.get("iops") : null;
+        if (iops != null && !(iops instanceof Number)) {
+            throw OciException.invalidParameter("storageDetails.iops must be a number: " + iops);
+        }
+        Map<String, Object> configParams = map(details, "dbConfigurationParams");
+        String configId = configParams != null ? requireString(configParams, "configId") : null;
+        if (configId != null) {
+            requireConfiguration(configId, PsqlCatalog.major(system.getDbVersion()));
+        }
+
         if (string(details, "displayName") != null) {
             system.setDisplayName(string(details, "displayName"));
         }
         if (details.containsKey("description")) {
             system.setDescription(string(details, "description"));
         }
-        if (string(details, "shape") != null) {
-            PsqlCatalog.Shape shape = PsqlCatalog.parseShape(string(details, "shape"));
+        if (shape != null) {
             system.setShape(shape.name());
             if (shape.ocpuCount() != null) {
                 system.setInstanceOcpuCount(shape.ocpuCount());
                 system.setInstanceMemorySizeInGBs(shape.memorySizeInGBs());
             }
         }
-        if (integer(details, "instanceOcpuCount") != null) {
-            system.setInstanceOcpuCount(positive(details, "instanceOcpuCount", 1));
+        if (ocpuCount != null) {
+            system.setInstanceOcpuCount(ocpuCount);
         }
-        if (integer(details, "instanceMemorySizeInGBs") != null) {
-            system.setInstanceMemorySizeInGBs(positive(details, "instanceMemorySizeInGBs", 1));
+        if (memorySizeInGBs != null) {
+            system.setInstanceMemorySizeInGBs(memorySizeInGBs);
         }
         if (map(details, "managementPolicy") != null) {
             system.setManagementPolicy(managementPolicy(map(details, "managementPolicy"), system.getManagementPolicy()));
         }
-        Map<String, Object> storage = map(details, "storageDetails");
-        if (storage != null && storage.get("iops") != null) {
+        if (iops instanceof Number number) {
             Map<String, Object> updated = new LinkedHashMap<>(system.getStorageDetails());
-            updated.put("iops", ((Number) storage.get("iops")).longValue());
+            updated.put("iops", number.longValue());
             system.setStorageDetails(updated);
         }
         Map<String, Object> network = map(details, "networkDetails");
@@ -359,10 +385,7 @@ public class PsqlService implements Resettable, CompartmentUsage {
             }
             system.setNetworkDetails(updated);
         }
-        Map<String, Object> configParams = map(details, "dbConfigurationParams");
-        if (configParams != null) {
-            String configId = requireString(configParams, "configId");
-            requireConfiguration(configId, PsqlCatalog.major(system.getDbVersion()));
+        if (configId != null) {
             system.setConfigId(configId);
         }
         if (details.containsKey("freeformTags")) {
@@ -392,25 +415,36 @@ public class PsqlService implements Resettable, CompartmentUsage {
         if ("DELETED".equals(system.getLifecycleState()) || "DELETING".equals(system.getLifecycleState())) {
             throw incorrectState(system, "deleted");
         }
+        String workRequestId;
         // An operation still under way is abandoned: its work request ends CANCELED, and its
-        // queued step is skipped because the system has moved on to another work request.
-        pending.remove(dbSystemId);
-        finishWorkRequest(system, "CANCELED", null);
-        if (!realMode()) {
-            markDeleted(system);
-            systems.put(system.getId(), system);
-            return workRequests.succeeded(WR_SERVICE, "DELETE_POSTGRESQL_DB_SYSTEM",
-                    system.getCompartmentId(), resources(system, "DELETED"));
+        // step is skipped, or its outcome dropped, because the system has moved on to another
+        // work request. The lock keeps a step from recording its outcome in between.
+        synchronized (this) {
+            pending.remove(dbSystemId);
+            finishWorkRequest(system, "CANCELED", null);
+            if (!realMode()) {
+                markDeleted(system);
+                systems.put(system.getId(), system);
+                return workRequests.succeeded(WR_SERVICE, "DELETE_POSTGRESQL_DB_SYSTEM",
+                        system.getCompartmentId(), resources(system, "DELETED"));
+            }
+            workRequestId = begin(system, "DELETING", "DELETE_POSTGRESQL_DB_SYSTEM", "DELETED");
         }
-        String workRequestId = begin(system, "DELETING", "DELETE_POSTGRESQL_DB_SYSTEM", "DELETED");
+        runDelete(system);
+        return workRequestId;
+    }
+
+    /** Queues the removal of the container; the system then stays readable as DELETED. */
+    private void runDelete(StoredDbSystem system) {
         runAsync(system, current -> {
             containers.remove(current);
-            markDeleted(current);
-            saveIn(current);
-            finishWorkRequest(current, "SUCCEEDED", null);
-            LOG.infov("deleteDbSystem {0}", current.getId());
+            return () -> {
+                markDeleted(current);
+                saveIn(current);
+                finishWorkRequest(current, "SUCCEEDED", null);
+                LOG.infov("deleteDbSystem {0}", current.getId());
+            };
         });
-        return workRequestId;
     }
 
     // ── Runtime actions ────────────────────────────────────────────────────────
@@ -423,11 +457,13 @@ public class PsqlService implements Resettable, CompartmentUsage {
         String workRequestId = begin(system, "UPDATING", "UPDATE_POSTGRESQL_DB_SYSTEM", "UPDATED");
         runAsync(system, current -> {
             containers.stop(current);
-            current.setLifecycleState("INACTIVE");
-            setInstanceStates(current, "INACTIVE");
-            touch(current);
-            saveIn(current);
-            finishWorkRequest(current, "SUCCEEDED", null);
+            return () -> {
+                current.setLifecycleState("INACTIVE");
+                setInstanceStates(current, "INACTIVE");
+                touch(current);
+                saveIn(current);
+                finishWorkRequest(current, "SUCCEEDED", null);
+            };
         });
         return workRequestId;
     }
@@ -472,11 +508,14 @@ public class PsqlService implements Resettable, CompartmentUsage {
             } catch (RuntimeException e) {
                 error = e.getMessage();
             }
+            String failure = error;
             // The database keeps running either way; only the work request tells them apart.
-            current.setLifecycleState("ACTIVE");
-            touch(current);
-            saveIn(current);
-            finishWorkRequest(current, error == null ? "SUCCEEDED" : "FAILED", error);
+            return () -> {
+                current.setLifecycleState("ACTIVE");
+                touch(current);
+                saveIn(current);
+                finishWorkRequest(current, failure == null ? "SUCCEEDED" : "FAILED", failure);
+            };
         });
         return workRequestId;
     }
@@ -562,15 +601,18 @@ public class PsqlService implements Resettable, CompartmentUsage {
                 system.getCompartmentId(), resources(system, "UPDATED"));
     }
 
+    /** The Docker work of an operation, returning what to record once it is done. */
     private interface LifecycleStep {
-        void run(StoredDbSystem current);
+        Runnable run(StoredDbSystem current);
     }
 
     /**
      * Runs {@code step} on the lifecycle worker against the system as stored at that moment,
      * found in its own partition since the worker has no request scope. The step is skipped
      * when the system has gone, or has moved on to another operation (a delete that overtook a
-     * start, for example), which shows as a different work request.
+     * start, for example), which shows as a different work request. The Docker work can take a
+     * while, so ownership is checked again before its outcome is recorded, under the lock that
+     * delete and reset take: an outcome that arrives too late is dropped.
      */
     private void runAsync(StoredDbSystem system, LifecycleStep step) {
         String tenancyId = system.getTenancyId();
@@ -578,18 +620,36 @@ public class PsqlService implements Resettable, CompartmentUsage {
         String id = system.getId();
         String workRequestId = system.getWorkRequestId();
         lifecycle.execute(() -> {
-            Optional<StoredDbSystem> current = findIn(tenancyId, region, id);
-            if (current.isEmpty() || !Objects.equals(workRequestId, current.get().getWorkRequestId())) {
+            Optional<StoredDbSystem> current = owned(tenancyId, region, id, workRequestId);
+            if (current.isEmpty()) {
                 LOG.debugv("DB system {0} has moved on; skipping its queued lifecycle step", id);
                 return;
             }
+            Runnable outcome;
             try {
-                step.run(current.get());
+                outcome = step.run(current.get());
             } catch (RuntimeException e) {
                 LOG.warnv(e, "Lifecycle step failed for DB system {0}", id);
-                fail(current.get(), "NEEDS_ATTENTION", e.getMessage());
+                outcome = () -> fail(current.get(), "NEEDS_ATTENTION", e.getMessage());
+            }
+            synchronized (this) {
+                if (owned(tenancyId, region, id, workRequestId).isPresent()) {
+                    outcome.run();
+                } else if (findIn(tenancyId, region, id).isEmpty()) {
+                    // A reset forgot the system while its step ran: remove what the step started.
+                    LOG.debugv("DB system {0} was reset during its lifecycle step", id);
+                    purgeQuietly(current.get());
+                } else {
+                    LOG.debugv("DB system {0} moved on during its lifecycle step", id);
+                }
             }
         });
+    }
+
+    /** The system, while {@code workRequestId} is still the operation it is running. */
+    private Optional<StoredDbSystem> owned(String tenancyId, String region, String id, String workRequestId) {
+        return findIn(tenancyId, region, id)
+                .filter(system -> Objects.equals(workRequestId, system.getWorkRequestId()));
     }
 
     /**
@@ -605,12 +665,14 @@ public class PsqlService implements Resettable, CompartmentUsage {
                 containers.stop(current);
                 containers.start(current, password);
             } catch (RuntimeException e) {
-                fail(current, failureState, "The PostgreSQL container could not be started: " + e.getMessage());
-                return;
+                return () -> fail(current, failureState,
+                        "The PostgreSQL container could not be started: " + e.getMessage());
             }
-            saveIn(current);
-            pending.put(current.getId(), new Pending(current.getTenancyId(), current.getRegion(),
-                    clock.instant(), targetState, failureState));
+            return () -> {
+                saveIn(current);
+                pending.put(current.getId(), new Pending(current.getTenancyId(), current.getRegion(),
+                        clock.instant(), targetState, failureState));
+            };
         });
     }
 
@@ -706,10 +768,28 @@ public class PsqlService implements Resettable, CompartmentUsage {
         system.setWorkRequestId(null);
     }
 
-    /** After a restart of the emulator, brings back the container of every system that was up. */
-    private void restartPersistedSystems() {
+    /**
+     * After a restart of the emulator, settles the operations the restart interrupted and brings
+     * back the container of every system that was up. A delete is finished. A create fails, since
+     * the master password it carried is gone. Any other operation (stop, restart, password reset)
+     * cannot be resumed either: its work request fails and the system comes back ACTIVE as it was.
+     */
+    void restartPersistedSystems() {
         for (StoredDbSystem system : allSystems()) {
-            if (Set.of("ACTIVE", "CREATING", "UPDATING").contains(system.getLifecycleState())) {
+            if (system.getWorkRequestId() != null) {
+                switch (system.getLifecycleState()) {
+                    case "DELETING" -> {
+                        runDelete(system);
+                        continue;
+                    }
+                    case "CREATING" -> {
+                        fail(system, "FAILED", INTERRUPTED);
+                        continue;
+                    }
+                    default -> finishWorkRequest(system, "FAILED", INTERRUPTED);
+                }
+            }
+            if (Set.of("ACTIVE", "UPDATING").contains(system.getLifecycleState())) {
                 system.setLifecycleState("UPDATING");
                 saveIn(system);
                 launchStart(system, null, "ACTIVE", "NEEDS_ATTENTION");
@@ -828,6 +908,11 @@ public class PsqlService implements Resettable, CompartmentUsage {
         List<String> names = new ArrayList<>(List.of(system.getContainerName(), "localhost", "127.0.0.1",
                 "localhost.floci.io"));
         config.hostname().filter(hostname -> !hostname.isBlank()).ifPresent(names::add);
+        // A remote Docker daemon (DOCKER_HOST=tcp://...) is where published ports are reached.
+        String daemonHost = containers != null ? containers.daemonHost() : null;
+        if (daemonHost != null && !names.contains(daemonHost)) {
+            names.add(daemonHost);
+        }
         return names;
     }
 

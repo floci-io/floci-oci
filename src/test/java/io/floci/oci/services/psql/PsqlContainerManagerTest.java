@@ -166,6 +166,14 @@ class PsqlContainerManagerTest {
     }
 
     @Test
+    void purgeDropsTheVolumeWhateverThePolicy() {
+        manager.purge(system("16"));
+
+        verify(lifecycleManager).removeIfExists(any());
+        verify(lifecycleManager).removeVolume("floci-oci-psql-vol-abcdefghijklmnop");
+    }
+
+    @Test
     void readinessIsProbedOverTcpLoopback() {
         when(lifecycleManager.exec(any(), anyList(), anyList(), any())).thenReturn(new ExecResult(0, "", ""));
 

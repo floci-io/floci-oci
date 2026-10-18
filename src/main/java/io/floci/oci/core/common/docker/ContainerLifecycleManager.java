@@ -530,7 +530,7 @@ public class ContainerLifecycleManager {
      * The host published sidecar ports are reached at: the host of a {@code tcp://} Docker
      * daemon, or {@code localhost} for a local socket.
      */
-    String daemonHost() {
+    public String daemonHost() {
         return daemonHostname(DockerClientProducer.resolveEffectiveDockerHost(
                 config.docker().dockerHost(), System.getenv("DOCKER_HOST")));
     }
