@@ -507,7 +507,7 @@ All settings are overridable through environment variables with the `FLOCI_OCI_`
 | `FLOCI_OCI_HOSTNAME` | Unset | Hostname used in returned URLs when floci-oci runs inside Docker Compose |
 | `FLOCI_OCI_STORAGE_MODE` | `memory` | Storage mode: `memory`, `persistent`, `hybrid`, or `wal` |
 | `FLOCI_OCI_STORAGE_PERSISTENT_PATH` | `./data` | Directory used for persisted state |
-| `FLOCI_OCI_AUTH_REQUIRE_SIGNATURE` | `false` | Reject unsigned requests with 401 `NotAuthenticated` |
+| `FLOCI_OCI_AUTH_REQUIRE_SIGNATURE` | `false` | Reject unsigned requests with 401 `NotAuthenticated`. `/health`, `/_floci-oci/*` and pre-authenticated requests (`/p/*`) are always exempt |
 | `FLOCI_OCI_TLS_ENABLED` | `false` | Serve HTTPS + HTTP on the same port |
 
 Full reference: [configuration docs](https://floci.io/floci-oci/configuration/environment-variables/)

@@ -52,9 +52,7 @@ public class SignatureAuthFilter implements ContainerRequestFilter {
     @Override
     public void filter(ContainerRequestContext ctx) {
         EmulatorConfig config = configProvider.get();
-        String path = ctx.getUriInfo().getPath();
-        boolean exempt = path.equals("health") || path.startsWith("_floci-oci")
-                || path.startsWith("p/");
+        boolean exempt = isExempt(ctx.getUriInfo().getPath());
 
         String authorization = ctx.getHeaderString(HttpHeaders.AUTHORIZATION);
         Optional<AuthContext> auth = OciSignatureParser.parse(authorization);
@@ -84,5 +82,18 @@ public class SignatureAuthFilter implements ContainerRequestFilter {
         if (hostRegion.isPresent()) {
             requestContext.setBaseUrl(ctx.getUriInfo().getBaseUri().getScheme() + "://" + host);
         }
+    }
+
+    /**
+     * Whether {@code path} needs no signature: the health probe, the emulator's own
+     * {@code /_floci-oci} endpoints (which k3s and Docker health checks call unsigned), and Object
+     * Storage pre-authenticated requests, whose token is the credential. The request path
+     * arrives with its leading slash.
+     */
+    static boolean isExempt(String path) {
+        String relative = path.startsWith("/") ? path.substring(1) : path;
+        return relative.equals("health")
+                || relative.equals("_floci-oci") || relative.startsWith("_floci-oci/")
+                || relative.startsWith("p/");
     }
 }
