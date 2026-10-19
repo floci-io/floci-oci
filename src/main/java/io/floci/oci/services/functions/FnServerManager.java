@@ -72,6 +72,23 @@ public class FnServerManager {
         int port = portAllocator.allocate(
                 config.services().functions().serverBasePort(),
                 config.services().functions().serverMaxPort());
+        ContainerLifecycleManager.ContainerInfo info;
+        try {
+            info = startContainer(name, port);
+        } catch (RuntimeException e) {
+            // stop() only releases a port recorded after a successful start.
+            portAllocator.release(port);
+            throw e;
+        }
+        containerId = info.containerId();
+        hostPort = port;
+        baseUrl = containerDetector.isRunningInContainer()
+                ? "http://" + name + ":" + FN_PORT
+                : "http://localhost:" + port;
+        LOG.infof("fnserver started (%s) at %s", containerId, baseUrl);
+    }
+
+    private ContainerLifecycleManager.ContainerInfo startContainer(String name, int port) {
         // fnserver hands each function container a unix socket under its iofs directory.
         // Function containers are siblings on the SAME daemon, so the directory is shared
         // through a NAMED VOLUME whose name doubles as the daemon-side bind source
@@ -94,20 +111,7 @@ public class FnServerManager {
                 // compartment or region.
                 .withLabels(ContainerStorageHelper.resourceIdentityLabels("functions", null, null, null))
                 .build();
-        ContainerLifecycleManager.ContainerInfo info;
-        try {
-            info = lifecycleManager.createAndStart(spec);
-        } catch (RuntimeException e) {
-            // stop() only releases a port recorded after a successful start.
-            portAllocator.release(port);
-            throw e;
-        }
-        containerId = info.containerId();
-        hostPort = port;
-        baseUrl = containerDetector.isRunningInContainer()
-                ? "http://" + name + ":" + FN_PORT
-                : "http://localhost:" + port;
-        LOG.infof("fnserver started (%s) at %s", containerId, baseUrl);
+        return lifecycleManager.createAndStart(spec);
     }
 
     /** One cheap readiness probe — the service's poller decides how often to ask. */
