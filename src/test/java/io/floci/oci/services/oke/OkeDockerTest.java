@@ -1,6 +1,10 @@
 package io.floci.oci.services.oke;
 
+import com.github.dockerjava.api.DockerClient;
+import com.github.dockerjava.api.command.InspectContainerResponse;
+import com.github.dockerjava.api.exception.NotFoundException;
 import io.floci.oci.config.EmulatorConfig;
+import io.floci.oci.core.common.docker.ContainerStorageHelper;
 import io.floci.oci.testing.TestCompartments;
 import io.quarkus.test.junit.QuarkusTest;
 import io.quarkus.test.junit.QuarkusTestProfile;
@@ -29,6 +33,7 @@ import java.security.cert.CertificateFactory;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Base64;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
@@ -38,6 +43,7 @@ import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.notNullValue;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
@@ -66,6 +72,9 @@ class OkeDockerTest {
 
     @Inject
     OkeService service;
+
+    @Inject
+    DockerClient docker;
 
     private String clusterId;
     private String workRequestId;
@@ -189,10 +198,38 @@ class OkeDockerTest {
 
     @Test
     @Order(6)
-    void test6_deleteRealCluster() {
+    void test6_deleteRemovesTheSidecarAndEveryVolumeItMounted() throws InterruptedException {
+        String container = ContainerStorageHelper.dockerName(config, "oke-" + clusterId);
+        // The named k3s data volume and the anonymous ones the k3s image declares.
+        List<String> volumes = docker.inspectContainerCmd(container).exec().getMounts().stream()
+                .filter(mount -> mount.getName() != null)
+                .map(InspectContainerResponse.Mount::getName)
+                .toList();
+        assertTrue(volumes.size() > 1, "expected the named volume plus k3s's anonymous ones: " + volumes);
+
         given()
             .when().delete("/20180222/clusters/{id}", clusterId)
             .then().statusCode(202);
+
+        Instant deadline = Instant.now().plus(Duration.ofSeconds(60));
+        while (exists(() -> docker.inspectContainerCmd(container).exec()) && Instant.now().isBefore(deadline)) {
+            Thread.sleep(500);
+        }
+        assertFalse(exists(() -> docker.inspectContainerCmd(container).exec()), "sidecar " + container + " is still there");
+        // Memory storage mode, so the named volume goes as well as the anonymous ones.
+        for (String volume : volumes) {
+            assertFalse(exists(() -> docker.inspectVolumeCmd(volume).exec()), "volume " + volume + " leaked");
+        }
+    }
+
+    private static boolean exists(Runnable inspect) {
+        try {
+            inspect.run();
+            return true;
+        } catch (NotFoundException expected) {
+            // Docker answers 404 once the container or volume is gone, which is what we wait for.
+            return false;
+        }
     }
 
     private int kubeApi(String bearer, String path) {

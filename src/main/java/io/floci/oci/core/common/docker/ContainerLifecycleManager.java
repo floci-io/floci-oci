@@ -433,13 +433,15 @@ public class ContainerLifecycleManager {
 
     /**
      * Removes a container by name if it exists. Useful for cleaning up stale containers
-     * from previous runs before creating a new one.
+     * from previous runs before creating a new one. The anonymous volumes the image declares
+     * (k3s has several) go with it, since no other container can ever mount them; named
+     * volumes are never touched, which is where sidecars keep the data they need to keep.
      *
      * @param name the container name to remove
      */
     public void removeIfExists(String name) {
         try {
-            dockerClient.removeContainerCmd(name).withForce(true).exec();
+            dockerClient.removeContainerCmd(name).withForce(true).withRemoveVolumes(true).exec();
             LOG.infov("Removed stale container {0}", name);
         } catch (NotFoundException e) {
             // Not found - normal case

@@ -44,6 +44,18 @@ class ContainerLifecycleManagerVolumeTest {
     }
 
     @Test
+    void removeIfExists_alsoRemovesTheContainersAnonymousVolumes() {
+        RemoveContainerCmd cmd = mock(RemoveContainerCmd.class, RETURNS_SELF);
+        when(dockerClient.removeContainerCmd("floci-oci-oke-x")).thenReturn(cmd);
+
+        manager.removeIfExists("floci-oci-oke-x");
+
+        verify(cmd).withForce(true);
+        verify(cmd).withRemoveVolumes(true);
+        verify(cmd).exec();
+    }
+
+    @Test
     void volumeExists_returnsTrue_whenVolumeExists() {
         InspectVolumeCmd cmd = mock(InspectVolumeCmd.class);
         when(dockerClient.inspectVolumeCmd("my-volume")).thenReturn(cmd);

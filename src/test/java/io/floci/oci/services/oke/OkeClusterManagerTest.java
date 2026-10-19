@@ -14,6 +14,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -35,6 +36,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -250,6 +252,61 @@ class OkeClusterManagerTest {
         verify(lifecycleManager, times(2)).removeIfExists(expectedContainer);
         verify(lifecycleManager, never()).removeVolume(expectedVolume);
         verify(portAllocator).release(6443);
+    }
+
+    @Test
+    void resetRemovesEveryVolumeEvenWhenStorageIsPersistentAndPruneIsFalse() {
+        // Lenient: the point is that reset never consults the policy.
+        lenient().when(config.storage().mode()).thenReturn("file");
+        lenient().when(config.storage().pruneVolumesOnDelete()).thenReturn(false);
+        when(portAllocator.allocate(6443, 6543)).thenReturn(6443);
+        when(lifecycleManager.createAndStart(any())).thenReturn(new ContainerLifecycleManager.ContainerInfo("c-1", Map.of()));
+        StoredOkeCluster cluster = new StoredOkeCluster();
+        cluster.setId("ocid1.cluster.oc1.iad.cluster007");
+        cluster.setApiToken("token-cluster007");
+        cluster.setName("reset-cluster");
+        manager.startCluster(cluster);
+
+        manager.clear();
+
+        verify(lifecycleManager).removeVolume(ContainerStorageHelper.dockerName(config, "oke-vol-" + cluster.getId()));
+        verify(portAllocator).release(6443);
+    }
+
+    @Test
+    void shutdownKeepsVolumesWhenStorageIsPersistentAndPruneIsFalse() {
+        when(config.storage().mode()).thenReturn("file");
+        when(config.storage().pruneVolumesOnDelete()).thenReturn(false);
+        when(portAllocator.allocate(6443, 6543)).thenReturn(6443);
+        when(lifecycleManager.createAndStart(any())).thenReturn(new ContainerLifecycleManager.ContainerInfo("c-1", Map.of()));
+        StoredOkeCluster cluster = new StoredOkeCluster();
+        cluster.setId("ocid1.cluster.oc1.iad.cluster008");
+        cluster.setApiToken("token-cluster008");
+        cluster.setName("persistent-across-restart");
+        manager.startCluster(cluster);
+
+        manager.shutdown();
+
+        // The k3s data, and with it the cluster's CA, must survive a restart of floci-oci.
+        verify(lifecycleManager, never()).removeVolume(anyString());
+        verify(lifecycleManager, times(2)).removeIfExists(ContainerStorageHelper.dockerName(config, "oke-" + cluster.getId()));
+        verify(portAllocator).release(6443);
+    }
+
+    @Test
+    void startClusterCreatesTheLabelledVolumeBeforeTheContainer() {
+        when(portAllocator.allocate(6443, 6543)).thenReturn(6443);
+        when(lifecycleManager.createAndStart(any())).thenReturn(new ContainerLifecycleManager.ContainerInfo("c-1", Map.of()));
+        StoredOkeCluster cluster = new StoredOkeCluster();
+        cluster.setId("ocid1.cluster.oc1.iad.cluster009");
+        cluster.setApiToken("token-cluster009");
+        cluster.setName("labelled-volume");
+
+        manager.startCluster(cluster);
+
+        InOrder order = inOrder(lifecycleManager);
+        order.verify(lifecycleManager).ensureVolume(ContainerStorageHelper.dockerName(config, "oke-vol-" + cluster.getId()));
+        order.verify(lifecycleManager).createAndStart(any());
     }
 
     @Test

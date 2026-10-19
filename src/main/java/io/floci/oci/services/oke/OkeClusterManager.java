@@ -138,6 +138,8 @@ public class OkeClusterManager implements Resettable {
         try {
             if (!lifecycleManager.isContainerRunning(containerName) || !createdForThisCluster(containerName, cluster)) {
                 lifecycleManager.removeIfExists(containerName);
+                // Created up front so it carries the floci labels; a mount alone creates it bare.
+                lifecycleManager.ensureVolume(volumeName);
 
                 ContainerSpec spec = containerBuilder.newContainer(config.services().oke().defaultImage())
                         .withName(containerName)
@@ -475,13 +477,22 @@ public class OkeClusterManager implements Resettable {
         LOG.infof("Stopped k3s sidecar container '%s' and released host port %d", containerName, hostPort);
     }
 
+    /** Stops every sidecar; volumes follow the delete policy, so persistent clusters come back. */
     @PreDestroy
     void shutdown() {
-        clear();
+        removeAll(false);
     }
 
+    /**
+     * A state reset forgets every cluster, so every volume goes too, whatever
+     * {@code prune-volumes-on-delete} says: nothing could reach them afterwards.
+     */
     @Override
     public void clear() {
+        removeAll(true);
+    }
+
+    private void removeAll(boolean dropVolumes) {
         for (Map.Entry<String, ActiveClusterRef> entry : activeClusters.entrySet()) {
             ActiveClusterRef ref = entry.getValue();
             try {
@@ -490,7 +501,11 @@ public class OkeClusterManager implements Resettable {
                 LOG.warnf(e, "Failed to remove k3s sidecar container '%s'", ref.containerName());
             }
             try {
-                removeVolumeIfConfigured(ref.volumeName());
+                if (dropVolumes) {
+                    lifecycleManager.removeVolume(ref.volumeName());
+                } else {
+                    removeVolumeIfConfigured(ref.volumeName());
+                }
             } catch (Exception e) {
                 LOG.warnf(e, "Failed to remove k3s volume '%s'", ref.volumeName());
             }

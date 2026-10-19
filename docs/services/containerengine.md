@@ -34,7 +34,7 @@ When real mode is enabled (`FLOCI_OCI_SERVICES_OKE_MOCK=false`), OKE provisions 
 - **Static token alternative**: Each cluster also gets a random API token, stored with the cluster and never returned by `CreateCluster`, `GetCluster` or `ListClusters`. Set `FLOCI_OCI_SERVICES_OKE_KUBECONFIG_AUTH=token` to receive it in the kubeconfig instead of the `exec` user, for clients without the oci CLI. It is cluster-admin on that cluster.
 - **Storage Persistence**: Cluster state is stored in a Docker named volume (`/var/lib/rancher/k3s`) obeying the global storage persistence and `prune-volumes-on-delete` policies.
 - **Mock Mode**: Setting `FLOCI_OCI_SERVICES_OKE_MOCK=true` (default in test profiles) bypasses Docker execution and returns synthetic control plane state instantly.
-- **Teardown**: Sidecar containers and volumes are cleaned up on `DELETE`, application shutdown, or `POST /_floci-oci/state/reset`.
+- **Teardown**: `DELETE` and application shutdown remove the sidecar container and keep or drop the named volume by the policy above, so a persistent cluster comes back after a restart. `POST /_floci-oci/state/reset` forgets every cluster and so always removes its volume too, whatever `prune-volumes-on-delete` says. The anonymous volumes the k3s image declares always go with the container.
 
 ## Wire & Behavior Notes
 
