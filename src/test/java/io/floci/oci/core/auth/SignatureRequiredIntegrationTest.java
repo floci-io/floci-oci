@@ -9,7 +9,6 @@ import java.util.Map;
 
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.equalTo;
-import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.notNullValue;
 
 /**
@@ -52,7 +51,8 @@ class SignatureRequiredIntegrationTest {
         given()
             .when().get("/p/unknown-token/n/floci-local/b/bucket/o/object")
             .then()
-                .statusCode(not(equalTo(401)))
+                .statusCode(404)
+                .body("code", equalTo("NotAuthorizedOrNotFound"))
                 .header("opc-request-id", notNullValue());
     }
 
