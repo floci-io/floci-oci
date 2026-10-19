@@ -40,9 +40,6 @@ class ContainerLifecycleManagerLabelsTest {
     private ContainerDetector containerDetector;
 
     @Mock
-    private PortAllocator portAllocator;
-
-    @Mock
     private EmulatorConfig config;
 
     @Mock
@@ -54,7 +51,7 @@ class ContainerLifecycleManagerLabelsTest {
     void setUp() {
         lenient().when(config.docker()).thenReturn(dockerConfig);
         lenient().when(dockerConfig.resourceNamespace()).thenReturn(Optional.empty());
-        manager = new ContainerLifecycleManager(dockerClient, imageCacheService, containerDetector, portAllocator, config);
+        manager = new ContainerLifecycleManager(dockerClient, imageCacheService, containerDetector, config);
     }
 
     @Test

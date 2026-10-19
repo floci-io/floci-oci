@@ -1,17 +1,23 @@
 package io.floci.oci.core.common.docker;
 
+import com.github.dockerjava.api.DockerClient;
+import com.github.dockerjava.api.model.Container;
+import com.github.dockerjava.api.model.ContainerPort;
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
 import java.io.IOException;
 import java.net.ServerSocket;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentSkipListSet;
 
 /**
- * Utility for allocating free TCP ports for Docker container port bindings.
- * Consolidates the free port discovery logic previously duplicated across
- * container managers (RDS, ElastiCache, MSK, ECR).
+ * Allocates host ports for sidecar port bindings (the OKE k3s API server, the Fn server,
+ * PostgreSQL). A port counts as taken when this process reserved it, when another Docker
+ * container already publishes it, or when it cannot be bound here.
  */
 @ApplicationScoped
 public class PortAllocator {
@@ -21,6 +27,18 @@ public class PortAllocator {
     // Ports reserved by this process but not yet bound by Docker.
     // Prevents TOCTOU races when multiple containers are launched concurrently.
     private final Set<Integer> reserved = new ConcurrentSkipListSet<>();
+
+    // Null for an allocator built without Docker (unit tests), which then only probes locally.
+    private final DockerClient dockerClient;
+
+    public PortAllocator() {
+        this(null);
+    }
+
+    @Inject
+    public PortAllocator(DockerClient dockerClient) {
+        this.dockerClient = dockerClient;
+    }
 
     /**
      * Atomically finds and reserves a free TCP port within the specified range.
@@ -33,8 +51,10 @@ public class PortAllocator {
      * @throws RuntimeException if no free port is available in the range
      */
     public synchronized int allocate(int basePort, int maxPort) {
+        // One Docker call per allocation, not per candidate: this runs under the allocator's lock.
+        Set<Integer> published = publishedHostPorts();
         for (int port = basePort; port <= maxPort; port++) {
-            if (!reserved.contains(port) && isPortFree(port)) {
+            if (!reserved.contains(port) && !published.contains(port) && isPortFree(port)) {
                 reserved.add(port);
                 LOG.debugv("Allocated port {0} from range {1}-{2}", String.valueOf(port), String.valueOf(basePort), String.valueOf(maxPort));
                 return port;
@@ -63,25 +83,9 @@ public class PortAllocator {
     }
 
     /**
-     * Finds any free TCP port using ephemeral port allocation.
-     * This is the fastest method when any port will do.
-     *
-     * @return a free port
-     * @throws RuntimeException if no free port can be allocated
-     */
-    public int allocateAny() {
-        try (ServerSocket socket = new ServerSocket(0)) {
-            socket.setReuseAddress(true);
-            int port = socket.getLocalPort();
-            LOG.debugv("Allocated ephemeral port {0}", String.valueOf(port));
-            return port;
-        } catch (IOException e) {
-            throw new RuntimeException("Could not find a free port", e);
-        }
-    }
-
-    /**
-     * Checks if a specific port is currently free.
+     * Checks if a specific port is currently free, by binding it in this process's own network
+     * namespace. From inside a container that cannot see a port another container publishes on
+     * the host, which is why {@link #allocate} also asks Docker.
      *
      * @param port the port to check
      * @return true if the port is available, false otherwise
@@ -92,6 +96,36 @@ public class PortAllocator {
             return true;
         } catch (IOException e) {
             return false;
+        }
+    }
+
+    /**
+     * Every host port a Docker container publishes, running or not: a created container that has
+     * not started yet already holds its binding. Empty without a Docker client, and when Docker
+     * cannot be asked, so a failed lookup never blocks an allocation.
+     */
+    Set<Integer> publishedHostPorts() {
+        if (dockerClient == null) {
+            return Set.of();
+        }
+        try {
+            List<Container> containers = dockerClient.listContainersCmd().withShowAll(true).exec();
+            Set<Integer> published = new HashSet<>();
+            for (Container container : containers) {
+                ContainerPort[] ports = container.getPorts();
+                if (ports == null) {
+                    continue;
+                }
+                for (ContainerPort port : ports) {
+                    if (port.getPublicPort() != null) {
+                        published.add(port.getPublicPort());
+                    }
+                }
+            }
+            return published;
+        } catch (RuntimeException e) {
+            LOG.debugv("Could not list the ports Docker containers publish: {0}", e.getMessage());
+            return Set.of();
         }
     }
 }

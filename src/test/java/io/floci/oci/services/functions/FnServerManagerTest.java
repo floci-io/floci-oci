@@ -18,6 +18,8 @@ import java.util.Map;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
 import static org.mockito.Mockito.lenient;
@@ -70,5 +72,17 @@ class FnServerManagerTest {
         assertEquals(
                 Map.of("io.floci", "oci", "io.floci.service", "functions"),
                 spec.getValue().labels());
+    }
+
+    @Test
+    void aFailedStartReleasesItsPort() {
+        when(portAllocator.allocate(8080, 8099)).thenReturn(8081);
+        when(lifecycleManager.createAndStart(any()))
+                .thenThrow(new RuntimeException("Bind for 0.0.0.0:8081 failed: port is already allocated"));
+
+        assertThrows(RuntimeException.class, () -> manager.ensureStarted());
+
+        verify(portAllocator).release(8081);
+        assertFalse(manager.isStarted());
     }
 }

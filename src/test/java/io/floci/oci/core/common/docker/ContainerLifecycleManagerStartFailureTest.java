@@ -35,9 +35,6 @@ class ContainerLifecycleManagerStartFailureTest {
     private ContainerDetector containerDetector;
 
     @Mock
-    private PortAllocator portAllocator;
-
-    @Mock
     private EmulatorConfig config;
 
     private ContainerLifecycleManager manager;
@@ -46,7 +43,7 @@ class ContainerLifecycleManagerStartFailureTest {
     @BeforeEach
     void setUp() {
         manager = spy(new ContainerLifecycleManager(
-                dockerClient, imageCacheService, containerDetector, portAllocator, config));
+                dockerClient, imageCacheService, containerDetector, config));
     }
 
     @Test

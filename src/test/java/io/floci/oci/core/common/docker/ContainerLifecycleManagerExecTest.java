@@ -43,7 +43,7 @@ class ContainerLifecycleManagerExecTest {
         startCmd = mock(ExecStartCmd.class);
         when(dockerClient.execStartCmd(EXEC_ID)).thenReturn(startCmd);
         manager = new ContainerLifecycleManager(dockerClient, mock(ImageCacheService.class),
-                mock(ContainerDetector.class), mock(PortAllocator.class), mock(EmulatorConfig.class));
+                mock(ContainerDetector.class), mock(EmulatorConfig.class));
     }
 
     @Test

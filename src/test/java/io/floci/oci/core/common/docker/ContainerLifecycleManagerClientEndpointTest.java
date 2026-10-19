@@ -26,7 +26,7 @@ class ContainerLifecycleManagerClientEndpointTest {
         when(config.docker().endpointMode()).thenReturn(EmulatorConfig.DockerEndpointMode.AUTO);
         containerDetector = mock(ContainerDetector.class);
         manager = new ContainerLifecycleManager(mock(DockerClient.class), mock(ImageCacheService.class),
-                containerDetector, mock(PortAllocator.class), config);
+                containerDetector, config);
     }
 
     @Test

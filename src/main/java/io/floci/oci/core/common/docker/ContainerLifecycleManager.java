@@ -49,7 +49,6 @@ public class ContainerLifecycleManager {
     private final DockerClient dockerClient;
     private final ImageCacheService imageCacheService;
     private final ContainerDetector containerDetector;
-    private final PortAllocator portAllocator;
     private final EmulatorConfig config;
 
     /** Volumes whose shared-ownership root has already been initialised this process (run-once guard). */
@@ -59,12 +58,10 @@ public class ContainerLifecycleManager {
     public ContainerLifecycleManager(DockerClient dockerClient,
                                      ImageCacheService imageCacheService,
                                      ContainerDetector containerDetector,
-                                     PortAllocator portAllocator,
                                      EmulatorConfig config) {
         this.dockerClient = dockerClient;
         this.imageCacheService = imageCacheService;
         this.containerDetector = containerDetector;
-        this.portAllocator = portAllocator;
         this.config = config;
     }
 
@@ -684,13 +681,13 @@ public class ContainerLifecycleManager {
                 int containerPort = entry.getKey();
                 int hostPort = entry.getValue();
 
-                // 0 means dynamic allocation
-                if (hostPort == 0) {
-                    hostPort = portAllocator.allocateAny();
-                }
-
-                ports.bind(ExposedPort.tcp(containerPort), Ports.Binding.bindPort(hostPort));
-                LOG.debugv("Port binding: {0} -> {1}", String.valueOf(containerPort), String.valueOf(hostPort));
+                // 0 means any port. Docker picks one when it binds, atomically and on its own host;
+                // a probe from here would say nothing about the host and reserve nothing.
+                // resolveEndpoint reads the bound port back after the start.
+                Ports.Binding binding = hostPort == 0 ? Ports.Binding.empty() : Ports.Binding.bindPort(hostPort);
+                ports.bind(ExposedPort.tcp(containerPort), binding);
+                LOG.debugv("Port binding: {0} -> {1}", String.valueOf(containerPort),
+                        hostPort == 0 ? "any" : String.valueOf(hostPort));
             }
             hostConfig.withPortBindings(ports);
         }

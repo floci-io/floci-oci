@@ -94,7 +94,14 @@ public class FnServerManager {
                 // compartment or region.
                 .withLabels(ContainerStorageHelper.resourceIdentityLabels("functions", null, null, null))
                 .build();
-        ContainerLifecycleManager.ContainerInfo info = lifecycleManager.createAndStart(spec);
+        ContainerLifecycleManager.ContainerInfo info;
+        try {
+            info = lifecycleManager.createAndStart(spec);
+        } catch (RuntimeException e) {
+            // stop() only releases a port recorded after a successful start.
+            portAllocator.release(port);
+            throw e;
+        }
         containerId = info.containerId();
         hostPort = port;
         baseUrl = containerDetector.isRunningInContainer()
