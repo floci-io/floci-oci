@@ -280,6 +280,17 @@ class KmsRestIntegrationTest {
                 .body("code", equalTo("InvalidParameter"));
     }
 
+    @Test
+    void importKeyVersionReturnsNotImplemented() {
+        String keyId = createAesKey(createVault("it-import-version-" + System.nanoTime()), "it-version");
+        given()
+            .contentType("application/json")
+            .body(Map.of("wrappedImportKey", Map.of("keyMaterial", "AA==", "wrappingAlgorithm", "RSA_OAEP_SHA256")))
+            .when().post("/20180608/keys/" + keyId + "/keyVersions/import")
+            .then().statusCode(501)
+                .body("code", equalTo("NotImplemented"));
+    }
+
     private static byte[] rsaOaepSha256(String publicKeyPem, byte[] plaintext) throws Exception {
         String base64 = publicKeyPem
                 .replace("-----BEGIN PUBLIC KEY-----", "")

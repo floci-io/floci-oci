@@ -146,6 +146,15 @@ public class KmsManagementController {
                 .header("etag", service.getKey(null, keyId).getEtag()).build();
     }
 
+    @POST
+    @Path("/{keyId}/keyVersions/import")
+    public Response importKeyVersion(@PathParam("keyId") String keyId) {
+        StoredKey key = service.getKey(null, keyId);
+        StoredKeyVersion version = service.importKeyVersion(keyId);
+        return Response.ok(keyVersionJson(key, version))
+                .header("etag", service.getKey(null, keyId).getEtag()).build();
+    }
+
     @GET
     @Path("/{keyId}/keyVersions/{keyVersionId}")
     public Response getKeyVersion(@PathParam("keyId") String keyId,

@@ -66,15 +66,16 @@ crypto operation.
 - `RSA_OAEP_AES_SHA256`: a temporary AES key encrypted with RSA-OAEP, followed by the
   material wrapped with that AES key (AES key wrap with padding, RFC 5649).
 
-The unwrapped material must be exactly `keyShape.length` bytes. Only AES material can be
-imported so far; RSA and ECDSA material, and `ImportKeyVersion`, return `501 NotImplemented`.
+AES `keyShape.length` must be 16, 24 or 32, and the unwrapped material must be exactly that
+many bytes. Only AES material can be imported so far; RSA and ECDSA material, and
+`ImportKeyVersion`, return `501 NotImplemented`.
 
-**One wrapping key for every vault (deviation).** Real OCI keeps a wrapping key per vault
-and picks the vault from the request hostname. `GetWrappingKey` carries no vault id and
-every vault shares the emulator host, so the emulator holds a single wrapping key. Every
-vault reports it as its `wrappingkeyId`, and `GetWrappingKey` reports the most recently
-created `ACTIVE` vault as its `vaultId`. The key pair is generated on first use and kept
-in the `kms` storage, so it survives restarts in persistent modes.
+**One wrapping key pair for every vault (deviation).** Real OCI keeps a wrapping key per
+vault and picks the vault from the request hostname. `GetWrappingKey` carries no vault id
+and every vault shares the emulator host, so every vault keeps its own `wrappingkeyId` but
+they all share one RSA key pair. `GetWrappingKey` reports the most recently created
+`ACTIVE` vault, with that vault's `wrappingkeyId` as its `id`. The key pair is generated on
+first use and kept in the `kms` storage, so it survives restarts in persistent modes.
 
 ## Quickstart
 

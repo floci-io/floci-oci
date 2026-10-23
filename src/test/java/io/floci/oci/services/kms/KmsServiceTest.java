@@ -208,13 +208,14 @@ class KmsServiceTest {
     }
 
     @Test
-    void everyVaultReportsTheSharedWrappingKey() {
+    void vaultsKeepTheirOwnWrappingKeyIdsButShareTheKeyPair() {
         StoredVault v1 = vault();
         StoredVault v2 = service.createVault(COMPARTMENT, "other-vault", "DEFAULT", null, null);
+        assertTrue(v1.getWrappingkeyId().startsWith("ocid1.key.oc1.iad."));
+        assertNotEquals(v1.getWrappingkeyId(), v2.getWrappingkeyId());
         StoredWrappingKey wrappingKey = service.wrappingKey();
-        assertEquals(wrappingKey.getId(), v1.getWrappingkeyId());
-        assertEquals(wrappingKey.getId(), v2.getWrappingkeyId());
         assertTrue(wrappingKey.getPublicKeyPem().startsWith("-----BEGIN PUBLIC KEY-----\n"));
+        assertEquals(wrappingKey.getPublicKeyPem(), service.wrappingKey().getPublicKeyPem());
         assertEquals(v2.getId(), service.wrappingKeyVault().getId());
     }
 
@@ -273,6 +274,24 @@ class KmsServiceTest {
         OciException e = assertThrows(OciException.class, () -> service.importKey(COMPARTMENT, "short",
                 "AES", 32, null, null, wrapped, "RSA_OAEP_SHA256", null, null));
         assertEquals(400, e.getHttpStatus());
+    }
+
+    @Test
+    void importRejectsAesLengthsAesCannotUseEvenWhenTheMaterialMatches() throws Exception {
+        vault();
+        String wrapped = Base64.getEncoder().encodeToString(rsaOaepSha256(new byte[17]));
+        OciException e = assertThrows(OciException.class, () -> service.importKey(COMPARTMENT, "odd",
+                "AES", 17, null, null, wrapped, "RSA_OAEP_SHA256", null, null));
+        assertEquals(400, e.getHttpStatus());
+    }
+
+    @Test
+    void importKeyVersionIsNotImplementedYetButStillChecksTheKey() {
+        StoredKey key = aesKey(vault());
+        assertEquals(501, assertThrows(OciException.class,
+                () -> service.importKeyVersion(key.getId())).getHttpStatus());
+        assertEquals(404, assertThrows(OciException.class,
+                () -> service.importKeyVersion("ocid1.key.oc1.iad.missing")).getHttpStatus());
     }
 
     @Test

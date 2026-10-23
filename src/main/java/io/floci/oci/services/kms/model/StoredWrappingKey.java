@@ -6,8 +6,6 @@ import io.quarkus.runtime.annotations.RegisterForReflection;
 @RegisterForReflection
 public class StoredWrappingKey {
 
-    private String id;
-    private String timeCreated;
     /** PEM-encoded RSA public key, as GetWrappingKey returns it. */
     private String publicKeyPem;
     /** Base64 PKCS8 RSA private key, used to unwrap imported material. */
@@ -23,22 +21,6 @@ public class StoredWrappingKey {
 
     public void setEtag(String etag) {
         this.etag = etag;
-    }
-
-    public String getId() {
-        return id;
-    }
-
-    public void setId(String id) {
-        this.id = id;
-    }
-
-    public String getTimeCreated() {
-        return timeCreated;
-    }
-
-    public void setTimeCreated(String timeCreated) {
-        this.timeCreated = timeCreated;
     }
 
     public String getPublicKeyPem() {

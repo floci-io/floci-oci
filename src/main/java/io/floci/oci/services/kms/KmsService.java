@@ -121,7 +121,7 @@ public class KmsService implements CompartmentUsage {
         v.setVaultType(vaultType);
         v.setLifecycleState("ACTIVE");
         v.setTimeCreated(Instant.now().toString());
-        v.setWrappingkeyId(wrappingKeyRecord().getId());
+        v.setWrappingkeyId(Ocids.generate("key", ociContext.realm(), ociContext.regionCode()));
         v.setFreeformTags(freeformTags);
         v.setDefinedTags(definedTags);
         v.setEtag(Etags.newEtag());
@@ -350,34 +350,23 @@ public class KmsService implements CompartmentUsage {
     /**
      * Real OCI holds one wrapping key per vault and picks the vault from the request
      * hostname. GetWrappingKey carries no vault id, and every vault shares the emulator
-     * host (see {@link #managementEndpoint}), so the emulator holds a single wrapping key
-     * that every vault reports as its {@code wrappingkeyId}. The RSA pair is generated on
+     * host (see {@link #managementEndpoint}), so every vault keeps its own
+     * {@code wrappingkeyId} but they all share this one RSA key pair. It is generated on
      * first use, so creating a vault does not pay for a 4096-bit key it may never need.
      */
     public synchronized StoredWrappingKey wrappingKey() {
-        StoredWrappingKey wrappingKey = wrappingKeyRecord();
-        if (wrappingKey.getPrivateKey() != null) {
-            return wrappingKey;
-        }
-        try {
-            KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA");
-            generator.initialize(WRAPPING_KEY_BITS);
-            KeyPair pair = generator.generateKeyPair();
-            wrappingKey.setPublicKeyPem(toPem(pair.getPublic()));
-            wrappingKey.setPrivateKey(Base64.getEncoder().encodeToString(pair.getPrivate().getEncoded()));
-        } catch (Exception e) {
-            throw OciException.internalServerError("Wrapping key generation failed: " + e.getMessage());
-        }
-        wrappingKeys.put(WRAPPING_KEY_SLOT, wrappingKey);
-        return wrappingKey;
-    }
-
-    private synchronized StoredWrappingKey wrappingKeyRecord() {
         return wrappingKeys.get(WRAPPING_KEY_SLOT).orElseGet(() -> {
             StoredWrappingKey wrappingKey = new StoredWrappingKey();
-            wrappingKey.setId(Ocids.generate("key", ociContext.realm(), ociContext.regionCode()));
-            wrappingKey.setTimeCreated(Instant.now().toString());
             wrappingKey.setEtag(Etags.newEtag());
+            try {
+                KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA");
+                generator.initialize(WRAPPING_KEY_BITS);
+                KeyPair pair = generator.generateKeyPair();
+                wrappingKey.setPublicKeyPem(toPem(pair.getPublic()));
+                wrappingKey.setPrivateKey(Base64.getEncoder().encodeToString(pair.getPrivate().getEncoded()));
+            } catch (Exception e) {
+                throw OciException.internalServerError("Wrapping key generation failed: " + e.getMessage());
+            }
             wrappingKeys.put(WRAPPING_KEY_SLOT, wrappingKey);
             return wrappingKey;
         });
@@ -413,6 +402,10 @@ public class KmsService implements CompartmentUsage {
             throw OciException.notImplemented(
                     "Importing " + algorithm + " key material is not supported by the emulator yet");
         }
+        if (length != 16 && length != 24 && length != 32) {
+            throw OciException.invalidParameter(
+                    "keyShape.length for AES must be 16, 24 or 32 bytes, not " + length);
+        }
         byte[] material = unwrap(wrappedKeyMaterial, wrappingAlgorithm);
         if (material.length != length) {
             throw OciException.invalidParameter("Key material is " + material.length
@@ -440,6 +433,11 @@ public class KmsService implements CompartmentUsage {
         keys.put(key.getId(), key);
         LOG.infov("importKey {0} ({1}, {2}-{3})", displayName, key.getId(), algorithm, length);
         return key;
+    }
+
+    public StoredKeyVersion importKeyVersion(String keyId) {
+        getKey(null, keyId);
+        throw OciException.notImplemented("ImportKeyVersion is not supported by the emulator yet");
     }
 
     /**

@@ -14,8 +14,9 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * KMS {@code GetWrappingKey}, served on the vault's {@code managementEndpoint}. The emulator
- * holds one wrapping key for every vault; see {@code KmsService#wrappingKey}.
+ * KMS {@code GetWrappingKey}, served on the vault's {@code managementEndpoint}. It reports the
+ * vault's own {@code wrappingkeyId} with the key pair every vault shares; see
+ * {@code KmsService#wrappingKey}.
  */
 @Path("/20180608/wrappingKeys")
 @ApplicationScoped
@@ -35,10 +36,10 @@ public class KmsWrappingKeyController {
         StoredWrappingKey wrappingKey = service.wrappingKey();
         Map<String, Object> json = new LinkedHashMap<>();
         json.put("compartmentId", vault.getCompartmentId());
-        json.put("id", wrappingKey.getId());
+        json.put("id", vault.getWrappingkeyId());
         json.put("lifecycleState", "ENABLED");
         json.put("publicKey", wrappingKey.getPublicKeyPem());
-        json.put("timeCreated", wrappingKey.getTimeCreated());
+        json.put("timeCreated", vault.getTimeCreated());
         json.put("vaultId", vault.getId());
         return Response.ok(json).header("etag", wrappingKey.getEtag()).build();
     }
