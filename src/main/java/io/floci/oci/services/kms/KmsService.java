@@ -30,9 +30,11 @@ import java.security.PrivateKey;
 import java.security.PublicKey;
 import java.security.SecureRandom;
 import java.security.Signature;
+import java.security.interfaces.RSAPrivateCrtKey;
 import java.security.spec.ECGenParameterSpec;
 import java.security.spec.MGF1ParameterSpec;
 import java.security.spec.PKCS8EncodedKeySpec;
+import java.security.spec.RSAPublicKeySpec;
 import java.security.spec.X509EncodedKeySpec;
 import java.time.Instant;
 import java.util.Arrays;
@@ -398,22 +400,7 @@ public class KmsService implements CompartmentUsage {
         if (protectionMode != null && !"HSM".equals(protectionMode) && !"SOFTWARE".equals(protectionMode)) {
             throw OciException.invalidParameter("Unsupported protectionMode for ImportKey: " + protectionMode);
         }
-        if ("ECDSA".equals(algorithm)) {
-            throw OciException.invalidParameter("ECDSA keys can't be imported");
-        }
-        if (!"AES".equals(algorithm)) {
-            throw OciException.notImplemented(
-                    "Importing " + algorithm + " key material is not supported by the emulator yet");
-        }
-        if (length != 16 && length != 24 && length != 32) {
-            throw OciException.invalidParameter(
-                    "keyShape.length for AES must be 16, 24 or 32 bytes, not " + length);
-        }
-        byte[] material = unwrap(wrappedKeyMaterial, wrappingAlgorithm);
-        if (material.length != length) {
-            throw OciException.invalidParameter("Key material is " + material.length
-                    + " bytes but keyShape.length is " + length);
-        }
+        StoredKeyVersion version = importedVersion(algorithm, length, wrappedKeyMaterial, wrappingAlgorithm);
 
         StoredKey key = new StoredKey();
         key.setId(Ocids.generate("key", ociContext.realm(), ociContext.regionCode()));
@@ -429,8 +416,6 @@ public class KmsService implements CompartmentUsage {
         key.setFreeformTags(freeformTags);
         key.setDefinedTags(definedTags);
         key.setEtag(Etags.newEtag());
-        StoredKeyVersion version = newVersion("EXTERNAL");
-        version.setKeyMaterial(Base64.getEncoder().encodeToString(material));
         key.getVersions().add(version);
         key.setCurrentKeyVersionId(version.getId());
         keys.put(key.getId(), key);
@@ -438,11 +423,82 @@ public class KmsService implements CompartmentUsage {
         return key;
     }
 
-    public StoredKeyVersion importKeyVersion(String keyId) {
-        if ("ECDSA".equals(getKey(null, keyId).getAlgorithm())) {
-            throw OciException.invalidParameter("ECDSA keys can't be imported");
+    /** Imports material as a new version of the key and rotates the key onto it. */
+    public StoredKeyVersion importKeyVersion(String keyId, String wrappedKeyMaterial, String wrappingAlgorithm) {
+        StoredKey key = getKey(null, keyId);
+        require(wrappedKeyMaterial, "wrappedImportKey.keyMaterial");
+        require(wrappingAlgorithm, "wrappedImportKey.wrappingAlgorithm");
+        StoredKeyVersion version = importedVersion(key.getAlgorithm(), key.getLength(),
+                wrappedKeyMaterial, wrappingAlgorithm);
+        key.getVersions().add(version);
+        key.setCurrentKeyVersionId(version.getId());
+        key.setEtag(Etags.newEtag());
+        keys.put(keyId, key);
+        LOG.infov("importKeyVersion {0} ({1})", keyId, version.getId());
+        return version;
+    }
+
+    /** OCI imports AES and RSA keys only: "ECDSA based asymmetric keys can't be imported". */
+    private StoredKeyVersion importedVersion(String algorithm, int length, String wrappedKeyMaterial,
+                                             String wrappingAlgorithm) {
+        return switch (algorithm) {
+            case "AES" -> importedAesVersion(length, wrappedKeyMaterial, wrappingAlgorithm);
+            case "RSA" -> importedRsaVersion(length, wrappedKeyMaterial, wrappingAlgorithm);
+            case "ECDSA" -> throw OciException.invalidParameter("ECDSA keys can't be imported");
+            default -> throw OciException.invalidParameter("Unsupported key algorithm: " + algorithm);
+        };
+    }
+
+    private StoredKeyVersion importedAesVersion(int length, String wrappedKeyMaterial, String wrappingAlgorithm) {
+        if (length != 16 && length != 24 && length != 32) {
+            throw OciException.invalidParameter(
+                    "keyShape.length for AES must be 16, 24 or 32 bytes, not " + length);
         }
-        throw OciException.notImplemented("ImportKeyVersion is not supported by the emulator yet");
+        byte[] material = unwrap(wrappedKeyMaterial, wrappingAlgorithm);
+        if (material.length != length) {
+            throw OciException.invalidParameter("Key material is " + material.length
+                    + " bytes but keyShape.length is " + length);
+        }
+        StoredKeyVersion version = newVersion("EXTERNAL");
+        version.setKeyMaterial(Base64.getEncoder().encodeToString(material));
+        return version;
+    }
+
+    /**
+     * The material is the DER PKCS8 private key, which only fits RSA_OAEP_AES_SHA256. OCI
+     * derives the public key itself, so the emulator does too.
+     */
+    private StoredKeyVersion importedRsaVersion(int length, String wrappedKeyMaterial, String wrappingAlgorithm) {
+        if (length != 256 && length != 384 && length != 512) {
+            throw OciException.invalidParameter(
+                    "keyShape.length for RSA must be 256, 384 or 512 bytes, not " + length);
+        }
+        if (!"RSA_OAEP_AES_SHA256".equals(wrappingAlgorithm)) {
+            throw OciException.invalidParameter(
+                    "RSA key material must be wrapped with RSA_OAEP_AES_SHA256, not " + wrappingAlgorithm);
+        }
+        byte[] pkcs8 = unwrap(wrappedKeyMaterial, wrappingAlgorithm);
+        try {
+            KeyFactory factory = KeyFactory.getInstance("RSA");
+            if (!(factory.generatePrivate(new PKCS8EncodedKeySpec(pkcs8)) instanceof RSAPrivateCrtKey privateKey)) {
+                throw OciException.invalidParameter("RSA key material must be a PKCS8 private key with CRT parameters");
+            }
+            int modulusBytes = (privateKey.getModulus().bitLength() + 7) / 8;
+            if (modulusBytes != length) {
+                throw OciException.invalidParameter("RSA key is " + modulusBytes
+                        + " bytes but keyShape.length is " + length);
+            }
+            PublicKey publicKey = factory.generatePublic(
+                    new RSAPublicKeySpec(privateKey.getModulus(), privateKey.getPublicExponent()));
+            StoredKeyVersion version = newVersion("EXTERNAL");
+            storeKeyPair(version, new KeyPair(publicKey, privateKey));
+            return version;
+        } catch (OciException e) {
+            throw e;
+        } catch (Exception e) {
+            throw OciException.invalidParameter(
+                    "RSA key material must be a DER-encoded PKCS8 private key: " + e.getMessage());
+        }
     }
 
     /**
