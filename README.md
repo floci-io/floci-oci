@@ -217,7 +217,7 @@ For operation-level compatibility, see the [Services Overview](https://floci.io/
 | Organizations | In-process | `CreateChildTenancy` registers a child tenancy with its own home region; requests signed with it see only its own resources; organizations, organization tenancies and links live with the parent tenancy; wrapped `{"items":[…]}` lists |
 | Work Requests | In-process | `202` + `opc-work-request-id` responses, pollable per service (`/20160918`, `/20210201`, `/20180418`, `/20180222` and unversioned `/workRequests`) with errors/logs endpoints |
 
-Not implemented yet: identity domains, API keys/auth tokens, dynamic groups, tag namespaces, object versioning, retention rules (stubbed empty for Terraform compatibility), lifecycle policies, replication, the Amazon S3 Compatibility API, queue consumer groups, stream pools' Kafka settings and connect harnesses, KMS RSA/ECDSA import, key backup and replication, secret rotation, and pre-built functions (PBF).
+Not implemented yet: identity domains, API keys/auth tokens, dynamic groups, tag namespaces, object versioning, retention rules (stubbed empty for Terraform compatibility), lifecycle policies, replication, the Amazon S3 Compatibility API, queue consumer groups, stream pools' Kafka settings and connect harnesses, KMS RSA import, key backup and replication, secret rotation, and pre-built functions (PBF).
 
 </details>
 

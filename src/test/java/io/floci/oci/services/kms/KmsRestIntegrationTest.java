@@ -291,6 +291,19 @@ class KmsRestIntegrationTest {
                 .body("code", equalTo("NotImplemented"));
     }
 
+    @Test
+    void importRejectsEcdsaKeys() throws Exception {
+        createVault("it-import-ecdsa-" + System.nanoTime());
+        given()
+            .contentType("application/json")
+            .body(Map.of("compartmentId", compartment, "displayName", "it-ec",
+                    "keyShape", Map.of("algorithm", "ECDSA", "length", 32, "curveId", "NIST_P256"),
+                    "wrappedImportKey", Map.of("keyMaterial", "AA==", "wrappingAlgorithm", "RSA_OAEP_AES_SHA256")))
+            .when().post("/20180608/keys/import")
+            .then().statusCode(400)
+                .body("code", equalTo("InvalidParameter"));
+    }
+
     private static byte[] rsaOaepSha256(String publicKeyPem, byte[] plaintext) throws Exception {
         String base64 = publicKeyPem
                 .replace("-----BEGIN PUBLIC KEY-----", "")

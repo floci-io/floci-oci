@@ -286,6 +286,18 @@ class KmsServiceTest {
     }
 
     @Test
+    void ecdsaKeysCannotBeImportedAsInOci() throws Exception {
+        StoredVault v = vault();
+        String wrapped = Base64.getEncoder().encodeToString(rsaOaepSha256(new byte[32]));
+        assertEquals(400, assertThrows(OciException.class, () -> service.importKey(COMPARTMENT, "ec",
+                "ECDSA", 32, "NIST_P256", null, wrapped, "RSA_OAEP_AES_SHA256", null, null)).getHttpStatus());
+        StoredKey ec = service.createKey(v.getId(), COMPARTMENT, "ec-key", "ECDSA", 32, "NIST_P256",
+                null, null, null);
+        assertEquals(400, assertThrows(OciException.class,
+                () -> service.importKeyVersion(ec.getId())).getHttpStatus());
+    }
+
+    @Test
     void importKeyVersionIsNotImplementedYetButStillChecksTheKey() {
         StoredKey key = aesKey(vault());
         assertEquals(501, assertThrows(OciException.class,

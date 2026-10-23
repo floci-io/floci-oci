@@ -398,6 +398,9 @@ public class KmsService implements CompartmentUsage {
         if (protectionMode != null && !"HSM".equals(protectionMode) && !"SOFTWARE".equals(protectionMode)) {
             throw OciException.invalidParameter("Unsupported protectionMode for ImportKey: " + protectionMode);
         }
+        if ("ECDSA".equals(algorithm)) {
+            throw OciException.invalidParameter("ECDSA keys can't be imported");
+        }
         if (!"AES".equals(algorithm)) {
             throw OciException.notImplemented(
                     "Importing " + algorithm + " key material is not supported by the emulator yet");
@@ -436,7 +439,9 @@ public class KmsService implements CompartmentUsage {
     }
 
     public StoredKeyVersion importKeyVersion(String keyId) {
-        getKey(null, keyId);
+        if ("ECDSA".equals(getKey(null, keyId).getAlgorithm())) {
+            throw OciException.invalidParameter("ECDSA keys can't be imported");
+        }
         throw OciException.notImplemented("ImportKeyVersion is not supported by the emulator yet");
     }
 

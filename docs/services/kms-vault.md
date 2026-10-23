@@ -67,8 +67,9 @@ crypto operation.
   material wrapped with that AES key (AES key wrap with padding, RFC 5649).
 
 AES `keyShape.length` must be 16, 24 or 32, and the unwrapped material must be exactly that
-many bytes. Only AES material can be imported so far; RSA and ECDSA material, and
-`ImportKeyVersion`, return `501 NotImplemented`.
+many bytes. Only AES material can be imported so far; RSA material and `ImportKeyVersion`
+return `501 NotImplemented`. As in OCI, ECDSA keys can't be imported: `ImportKey` and
+`ImportKeyVersion` reject them with `400 InvalidParameter`.
 
 **One wrapping key pair for every vault (deviation).** Real OCI keeps a wrapping key per
 vault and picks the vault from the request hostname. `GetWrappingKey` carries no vault id
@@ -89,5 +90,5 @@ oci kms management vault create $E --compartment-id "$TENANCY" \
 
 ## Notes & limitations
 
-Importing RSA/ECDSA material, `ImportKeyVersion`, key backup/restore, vault replication, external key managers, secret rotation
+Importing RSA material, `ImportKeyVersion`, key backup/restore, vault replication, external key managers, secret rotation
 configs and secret rules are not implemented.
