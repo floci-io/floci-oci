@@ -15,7 +15,8 @@ Three OCI services that work together:
 | Area | Operations |
 |---|---|
 | Vaults | Create, Get, List, Update, ScheduleDeletion, CancelDeletion, ChangeCompartment |
-| Keys | Create, Get, List, Update, Enable, Disable, ScheduleDeletion, CancelDeletion |
+| Keys | Create, Get, List, Update, Enable, Disable, ScheduleDeletion, CancelDeletion, Import (AES) |
+| Wrapping key | GetWrappingKey |
 | Key versions | Create (rotate), Get, List |
 | Crypto | Encrypt, Decrypt, GenerateDataEncryptionKey, Sign, Verify |
 | Secrets | CreateSecret, GetSecret, ListSecrets, UpdateSecret, Schedule/CancelDeletion, versions |
@@ -54,6 +55,27 @@ Consequence: `CreateKey` carries no `vaultId`, so a new key is attached to the c
 compartment vault — the most recently created `ACTIVE` one. With the usual one-vault
 setup this is exact; with several vaults in one compartment, keys land in the newest.
 
+## Key import
+
+`GetWrappingKey` returns a real RSA-4096 public key in PEM form. `ImportKey` unwraps the
+supplied `wrappedImportKey.keyMaterial` with its private half and stores the material as
+the key's first version, with `origin` `EXTERNAL`. Imported keys then work with every
+crypto operation.
+
+- `RSA_OAEP_SHA256`: the material encrypted directly with RSA-OAEP (SHA-256 digest and MGF1).
+- `RSA_OAEP_AES_SHA256`: a temporary AES key encrypted with RSA-OAEP, followed by the
+  material wrapped with that AES key (AES key wrap with padding, RFC 5649).
+
+The unwrapped material must be exactly `keyShape.length` bytes. Only AES material can be
+imported so far; RSA and ECDSA material, and `ImportKeyVersion`, return `501 NotImplemented`.
+
+**One wrapping key for every vault (deviation).** Real OCI keeps a wrapping key per vault
+and picks the vault from the request hostname. `GetWrappingKey` carries no vault id and
+every vault shares the emulator host, so the emulator holds a single wrapping key. Every
+vault reports it as its `wrappingkeyId`, and `GetWrappingKey` reports the most recently
+created `ACTIVE` vault as its `vaultId`. The key pair is generated on first use and kept
+in the `kms` storage, so it survives restarts in persistent modes.
+
 ## Quickstart
 
 ```bash
@@ -66,5 +88,5 @@ oci kms management vault create $E --compartment-id "$TENANCY" \
 
 ## Notes & limitations
 
-Key import/backup/restore, vault replication, external key managers, secret rotation
+Importing RSA/ECDSA material, `ImportKeyVersion`, key backup/restore, vault replication, external key managers, secret rotation
 configs and secret rules are not implemented.

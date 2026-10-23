@@ -5,11 +5,21 @@ import io.floci.oci.core.common.OciException;
 import io.floci.oci.core.storage.InMemoryStorage;
 import io.floci.oci.services.kms.model.StoredKey;
 import io.floci.oci.services.kms.model.StoredVault;
+import io.floci.oci.services.kms.model.StoredWrappingKey;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
+import java.security.KeyFactory;
+import java.security.PublicKey;
+import java.security.spec.MGF1ParameterSpec;
+import java.security.spec.X509EncodedKeySpec;
+import java.util.Arrays;
 import java.util.Base64;
+import javax.crypto.Cipher;
+import javax.crypto.spec.OAEPParameterSpec;
+import javax.crypto.spec.PSource;
+import javax.crypto.spec.SecretKeySpec;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.lenient;
@@ -27,7 +37,8 @@ class KmsServiceTest {
         lenient().when(config.defaultRealm()).thenReturn("oc1");
         lenient().when(config.defaultRegion()).thenReturn("us-ashburn-1");
         lenient().when(config.effectiveBaseUrl()).thenReturn("http://localhost:4599");
-        service = new KmsService(new InMemoryStorage<>(), new InMemoryStorage<>(), config);
+        service = new KmsService(new InMemoryStorage<>(), new InMemoryStorage<>(), new InMemoryStorage<>(),
+                config);
     }
 
     private StoredVault vault() {
@@ -194,5 +205,114 @@ class KmsServiceTest {
         assertThrows(OciException.class, () -> service.listVaults(null));
         vault();
         assertEquals(1, service.listVaults(COMPARTMENT).size());
+    }
+
+    @Test
+    void everyVaultReportsTheSharedWrappingKey() {
+        StoredVault v1 = vault();
+        StoredVault v2 = service.createVault(COMPARTMENT, "other-vault", "DEFAULT", null, null);
+        StoredWrappingKey wrappingKey = service.wrappingKey();
+        assertEquals(wrappingKey.getId(), v1.getWrappingkeyId());
+        assertEquals(wrappingKey.getId(), v2.getWrappingkeyId());
+        assertTrue(wrappingKey.getPublicKeyPem().startsWith("-----BEGIN PUBLIC KEY-----\n"));
+        assertEquals(v2.getId(), service.wrappingKeyVault().getId());
+    }
+
+    @Test
+    void wrappingKeyVaultWithoutAnyVaultIs404() {
+        OciException e = assertThrows(OciException.class, () -> service.wrappingKeyVault());
+        assertEquals(404, e.getHttpStatus());
+    }
+
+    @Test
+    void importedAesKeyWrappedWithRsaOaepSha256EncryptsAndDecrypts() throws Exception {
+        StoredVault v = vault();
+        byte[] material = new byte[32];
+        Arrays.fill(material, (byte) 7);
+
+        StoredKey key = service.importKey(COMPARTMENT, "imported-aes", "AES", 32, null, null,
+                Base64.getEncoder().encodeToString(rsaOaepSha256(material)), "RSA_OAEP_SHA256",
+                null, null);
+
+        assertEquals(v.getId(), key.getVaultId());
+        assertEquals("ENABLED", key.getLifecycleState());
+        assertEquals("HSM", key.getProtectionMode());
+        assertEquals("EXTERNAL", key.getVersions().get(0).getOrigin());
+        assertArrayEquals(material, Base64.getDecoder().decode(key.getVersions().get(0).getKeyMaterial()));
+
+        String plaintext = Base64.getEncoder().encodeToString("imported".getBytes(StandardCharsets.UTF_8));
+        KmsService.EncryptResult encrypted = service.encrypt(v.getId(), key.getId(), plaintext, null);
+        assertEquals(plaintext, service.decrypt(v.getId(), key.getId(), encrypted.ciphertext()).plaintext());
+    }
+
+    @Test
+    void importedAesKeyWrappedWithRsaOaepAesSha256UnwrapsTheMaterial() throws Exception {
+        vault();
+        byte[] material = new byte[16];
+        Arrays.fill(material, (byte) 9);
+        byte[] aesKey = new byte[32];
+        Arrays.fill(aesKey, (byte) 3);
+        Cipher kwp = Cipher.getInstance("AES/KWP/NoPadding");
+        kwp.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(aesKey, "AES"));
+        byte[] wrappedAesKey = rsaOaepSha256(aesKey);
+        byte[] wrappedMaterial = kwp.doFinal(material);
+        byte[] payload = Arrays.copyOf(wrappedAesKey, wrappedAesKey.length + wrappedMaterial.length);
+        System.arraycopy(wrappedMaterial, 0, payload, wrappedAesKey.length, wrappedMaterial.length);
+
+        StoredKey key = service.importKey(COMPARTMENT, "imported-aes-kwp", "AES", 16, null, "SOFTWARE",
+                Base64.getEncoder().encodeToString(payload), "RSA_OAEP_AES_SHA256", null, null);
+
+        assertEquals("SOFTWARE", key.getProtectionMode());
+        assertArrayEquals(material, Base64.getDecoder().decode(key.getVersions().get(0).getKeyMaterial()));
+    }
+
+    @Test
+    void importRejectsMaterialWhoseLengthDoesNotMatchTheKeyShape() throws Exception {
+        vault();
+        String wrapped = Base64.getEncoder().encodeToString(rsaOaepSha256(new byte[16]));
+        OciException e = assertThrows(OciException.class, () -> service.importKey(COMPARTMENT, "short",
+                "AES", 32, null, null, wrapped, "RSA_OAEP_SHA256", null, null));
+        assertEquals(400, e.getHttpStatus());
+    }
+
+    @Test
+    void importRejectsMaterialNotWrappedWithTheWrappingKey() {
+        vault();
+        String garbage = Base64.getEncoder().encodeToString(new byte[512]);
+        OciException e = assertThrows(OciException.class, () -> service.importKey(COMPARTMENT, "garbage",
+                "AES", 32, null, null, garbage, "RSA_OAEP_SHA256", null, null));
+        assertEquals(400, e.getHttpStatus());
+    }
+
+    @Test
+    void importRejectsUnknownWrappingAlgorithmAndExternalProtectionMode() throws Exception {
+        vault();
+        String wrapped = Base64.getEncoder().encodeToString(rsaOaepSha256(new byte[32]));
+        assertEquals(400, assertThrows(OciException.class, () -> service.importKey(COMPARTMENT, "k",
+                "AES", 32, null, null, wrapped, "RSA_PKCS1", null, null)).getHttpStatus());
+        assertEquals(400, assertThrows(OciException.class, () -> service.importKey(COMPARTMENT, "k",
+                "AES", 32, null, "EXTERNAL", wrapped, "RSA_OAEP_SHA256", null, null)).getHttpStatus());
+    }
+
+    @Test
+    void importOfAsymmetricMaterialIsNotImplementedYet() throws Exception {
+        vault();
+        String wrapped = Base64.getEncoder().encodeToString(rsaOaepSha256(new byte[32]));
+        OciException e = assertThrows(OciException.class, () -> service.importKey(COMPARTMENT, "rsa",
+                "RSA", 256, null, null, wrapped, "RSA_OAEP_SHA256", null, null));
+        assertEquals(501, e.getHttpStatus());
+    }
+
+    private byte[] rsaOaepSha256(byte[] plaintext) throws Exception {
+        String base64 = service.wrappingKey().getPublicKeyPem()
+                .replace("-----BEGIN PUBLIC KEY-----", "")
+                .replace("-----END PUBLIC KEY-----", "")
+                .replaceAll("\\s", "");
+        PublicKey publicKey = KeyFactory.getInstance("RSA")
+                .generatePublic(new X509EncodedKeySpec(Base64.getDecoder().decode(base64)));
+        Cipher cipher = Cipher.getInstance("RSA/ECB/OAEPPadding");
+        cipher.init(Cipher.ENCRYPT_MODE, publicKey, new OAEPParameterSpec("SHA-256", "MGF1",
+                MGF1ParameterSpec.SHA256, PSource.PSpecified.DEFAULT));
+        return cipher.doFinal(plaintext);
     }
 }

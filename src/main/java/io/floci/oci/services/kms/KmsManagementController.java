@@ -56,6 +56,22 @@ public class KmsManagementController {
         }
     }
 
+    @POST
+    @Path("/import")
+    public Response importKey(Map<String, Object> body) {
+        Map<String, Object> keyShape = map(body, "keyShape");
+        Map<String, Object> wrappedImportKey = map(body, "wrappedImportKey");
+        try (CompartmentValidator.Use ignored = compartments.useInBody(str(body, "compartmentId"))) {
+            StoredKey key = service.importKey(
+                    str(body, "compartmentId"), str(body, "displayName"),
+                    str(keyShape, "algorithm"), integer(keyShape, "length"), str(keyShape, "curveId"),
+                    str(body, "protectionMode"),
+                    str(wrappedImportKey, "keyMaterial"), str(wrappedImportKey, "wrappingAlgorithm"),
+                    stringMap(body, "freeformTags"), definedTags(body));
+            return Response.ok(keyJson(key)).header("etag", key.getEtag()).build();
+        }
+    }
+
     @GET
     @Path("/{keyId}")
     public Response getKey(@PathParam("keyId") String keyId) {
