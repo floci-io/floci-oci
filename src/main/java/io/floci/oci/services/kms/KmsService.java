@@ -14,6 +14,7 @@ import io.floci.oci.core.storage.StorageFactory;
 import io.floci.oci.services.kms.model.StoredKey;
 import io.floci.oci.services.kms.model.StoredKey.StoredKeyVersion;
 import io.floci.oci.services.kms.model.StoredVault;
+import io.floci.oci.services.kms.model.StoredWrappingKey;
 import io.quarkus.runtime.StartupEvent;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.Observes;
@@ -30,9 +31,11 @@ import java.security.PublicKey;
 import java.security.SecureRandom;
 import java.security.Signature;
 import java.security.spec.ECGenParameterSpec;
+import java.security.spec.MGF1ParameterSpec;
 import java.security.spec.PKCS8EncodedKeySpec;
 import java.security.spec.X509EncodedKeySpec;
 import java.time.Instant;
+import java.util.Arrays;
 import java.util.Base64;
 import java.util.Comparator;
 import java.util.List;
@@ -43,6 +46,8 @@ import javax.crypto.Cipher;
 import javax.crypto.KeyGenerator;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.GCMParameterSpec;
+import javax.crypto.spec.OAEPParameterSpec;
+import javax.crypto.spec.PSource;
 import javax.crypto.spec.SecretKeySpec;
 
 /**
@@ -56,9 +61,14 @@ public class KmsService implements CompartmentUsage {
     private static final SecureRandom RANDOM = new SecureRandom();
     private static final int GCM_IV_BYTES = 12;
     private static final int GCM_TAG_BITS = 128;
+    private static final int WRAPPING_KEY_BITS = 4096;
+    private static final String WRAPPING_KEY_SLOT = "default";
+    private static final OAEPParameterSpec OAEP_SHA256 = new OAEPParameterSpec(
+            "SHA-256", "MGF1", MGF1ParameterSpec.SHA256, PSource.PSpecified.DEFAULT);
 
     private final StorageBackend<String, StoredVault> vaults;
     private final StorageBackend<String, StoredKey> keys;
+    private final StorageBackend<String, StoredWrappingKey> wrappingKeys;
     private final EmulatorConfig config;
     private final OciContext ociContext;
     private final ServiceRegistry serviceRegistry;
@@ -73,13 +83,16 @@ public class KmsService implements CompartmentUsage {
                 new TypeReference<Map<String, StoredVault>>() {});
         this.keys = storageFactory.create("kms", "kms-keys.json",
                 new TypeReference<Map<String, StoredKey>>() {});
+        this.wrappingKeys = storageFactory.create("kms", "kms-wrapping-keys.json",
+                new TypeReference<Map<String, StoredWrappingKey>>() {});
     }
 
     KmsService(StorageBackend<String, StoredVault> vaults, StorageBackend<String, StoredKey> keys,
-               EmulatorConfig config) {
+               StorageBackend<String, StoredWrappingKey> wrappingKeys, EmulatorConfig config) {
         this.ociContext = OciContext.fromConfig(config);
         this.vaults = vaults;
         this.keys = keys;
+        this.wrappingKeys = wrappingKeys;
         this.config = config;
         this.serviceRegistry = null;
     }
@@ -89,7 +102,7 @@ public class KmsService implements CompartmentUsage {
                 .enabled(config.services().kms().enabled())
                 .storageKey("kms")
                 .resourceClasses(KmsVaultController.class, KmsManagementController.class,
-                        KmsCryptoController.class)
+                        KmsWrappingKeyController.class, KmsCryptoController.class)
                 .build());
     }
 
@@ -332,6 +345,152 @@ public class KmsService implements CompartmentUsage {
         return List.copyOf(getKey(vaultId, keyId).getVersions());
     }
 
+    // ── Key import ─────────────────────────────────────────────────────────────
+
+    /**
+     * Real OCI holds one wrapping key per vault and picks the vault from the request
+     * hostname. GetWrappingKey carries no vault id, and every vault shares the emulator
+     * host (see {@link #managementEndpoint}), so every vault keeps its own
+     * {@code wrappingkeyId} but they all share this one RSA key pair. It is generated on
+     * first use, so creating a vault does not pay for a 4096-bit key it may never need.
+     */
+    public synchronized StoredWrappingKey wrappingKey() {
+        return wrappingKeys.get(WRAPPING_KEY_SLOT).orElseGet(() -> {
+            StoredWrappingKey wrappingKey = new StoredWrappingKey();
+            wrappingKey.setEtag(Etags.newEtag());
+            try {
+                KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA");
+                generator.initialize(WRAPPING_KEY_BITS);
+                KeyPair pair = generator.generateKeyPair();
+                wrappingKey.setPublicKeyPem(toPem(pair.getPublic()));
+                wrappingKey.setPrivateKey(Base64.getEncoder().encodeToString(pair.getPrivate().getEncoded()));
+            } catch (Exception e) {
+                throw OciException.internalServerError("Wrapping key generation failed: " + e.getMessage());
+            }
+            wrappingKeys.put(WRAPPING_KEY_SLOT, wrappingKey);
+            return wrappingKey;
+        });
+    }
+
+    /** The vault GetWrappingKey reports: the most recently created ACTIVE vault. */
+    public StoredVault wrappingKeyVault() {
+        return vaults.scan(k -> true).stream()
+                .filter(v -> "ACTIVE".equals(v.getLifecycleState()))
+                .max(Comparator.comparing(StoredVault::getTimeCreated))
+                .orElseThrow(() -> OciException.notAuthorizedOrNotFound(
+                        "No active vault: create a vault before requesting its wrapping key."));
+    }
+
+    public StoredKey importKey(String compartmentId, String displayName, String algorithm,
+                               Integer length, String curveId, String protectionMode,
+                               String wrappedKeyMaterial, String wrappingAlgorithm,
+                               Map<String, String> freeformTags,
+                               Map<String, Map<String, Object>> definedTags) {
+        require(compartmentId, "compartmentId");
+        String vaultId = resolveVaultForCompartment(compartmentId);
+        require(displayName, "displayName");
+        require(algorithm, "keyShape.algorithm");
+        if (length == null) {
+            throw OciException.missingParameter("Missing required parameter: keyShape.length");
+        }
+        require(wrappedKeyMaterial, "wrappedImportKey.keyMaterial");
+        require(wrappingAlgorithm, "wrappedImportKey.wrappingAlgorithm");
+        if (protectionMode != null && !"HSM".equals(protectionMode) && !"SOFTWARE".equals(protectionMode)) {
+            throw OciException.invalidParameter("Unsupported protectionMode for ImportKey: " + protectionMode);
+        }
+        if ("ECDSA".equals(algorithm)) {
+            throw OciException.invalidParameter("ECDSA keys can't be imported");
+        }
+        if (!"AES".equals(algorithm)) {
+            throw OciException.notImplemented(
+                    "Importing " + algorithm + " key material is not supported by the emulator yet");
+        }
+        if (length != 16 && length != 24 && length != 32) {
+            throw OciException.invalidParameter(
+                    "keyShape.length for AES must be 16, 24 or 32 bytes, not " + length);
+        }
+        byte[] material = unwrap(wrappedKeyMaterial, wrappingAlgorithm);
+        if (material.length != length) {
+            throw OciException.invalidParameter("Key material is " + material.length
+                    + " bytes but keyShape.length is " + length);
+        }
+
+        StoredKey key = new StoredKey();
+        key.setId(Ocids.generate("key", ociContext.realm(), ociContext.regionCode()));
+        key.setVaultId(vaultId);
+        key.setCompartmentId(compartmentId);
+        key.setDisplayName(displayName);
+        key.setAlgorithm(algorithm);
+        key.setLength(length);
+        key.setCurveId(curveId);
+        key.setProtectionMode(protectionMode != null ? protectionMode : "HSM");
+        key.setLifecycleState("ENABLED");
+        key.setTimeCreated(Instant.now().toString());
+        key.setFreeformTags(freeformTags);
+        key.setDefinedTags(definedTags);
+        key.setEtag(Etags.newEtag());
+        StoredKeyVersion version = newVersion("EXTERNAL");
+        version.setKeyMaterial(Base64.getEncoder().encodeToString(material));
+        key.getVersions().add(version);
+        key.setCurrentKeyVersionId(version.getId());
+        keys.put(key.getId(), key);
+        LOG.infov("importKey {0} ({1}, {2}-{3})", displayName, key.getId(), algorithm, length);
+        return key;
+    }
+
+    public StoredKeyVersion importKeyVersion(String keyId) {
+        if ("ECDSA".equals(getKey(null, keyId).getAlgorithm())) {
+            throw OciException.invalidParameter("ECDSA keys can't be imported");
+        }
+        throw OciException.notImplemented("ImportKeyVersion is not supported by the emulator yet");
+    }
+
+    /**
+     * RSA_OAEP_SHA256 is the material encrypted directly under the wrapping key.
+     * RSA_OAEP_AES_SHA256 is a temporary AES key encrypted under the wrapping key,
+     * followed by the material wrapped with that AES key (RFC 5649 key wrap with padding).
+     * Both use RSA-OAEP with SHA-256 for the digest and MGF1.
+     */
+    private byte[] unwrap(String wrappedKeyMaterial, String wrappingAlgorithm) {
+        byte[] wrapped = decodeBase64(wrappedKeyMaterial, "wrappedImportKey.keyMaterial");
+        try {
+            Cipher rsa = Cipher.getInstance("RSA/ECB/OAEPPadding");
+            rsa.init(Cipher.DECRYPT_MODE, wrappingPrivateKey(), OAEP_SHA256);
+            return switch (wrappingAlgorithm) {
+                case "RSA_OAEP_SHA256" -> rsa.doFinal(wrapped);
+                case "RSA_OAEP_AES_SHA256" -> {
+                    int rsaBlock = WRAPPING_KEY_BITS / 8;
+                    if (wrapped.length <= rsaBlock) {
+                        throw OciException.invalidParameter(
+                                "keyMaterial is too short for RSA_OAEP_AES_SHA256");
+                    }
+                    byte[] aesKey = rsa.doFinal(Arrays.copyOfRange(wrapped, 0, rsaBlock));
+                    Cipher kwp = Cipher.getInstance("AES/KWP/NoPadding");
+                    kwp.init(Cipher.DECRYPT_MODE, new SecretKeySpec(aesKey, "AES"));
+                    yield kwp.doFinal(Arrays.copyOfRange(wrapped, rsaBlock, wrapped.length));
+                }
+                default -> throw OciException.invalidParameter(
+                        "Unsupported wrappingAlgorithm: " + wrappingAlgorithm);
+            };
+        } catch (OciException e) {
+            throw e;
+        } catch (Exception e) {
+            throw OciException.invalidParameter(
+                    "Unable to unwrap keyMaterial with " + wrappingAlgorithm + ": " + e.getMessage());
+        }
+    }
+
+    private PrivateKey wrappingPrivateKey() throws Exception {
+        return KeyFactory.getInstance("RSA").generatePrivate(new PKCS8EncodedKeySpec(
+                Base64.getDecoder().decode(wrappingKey().getPrivateKey())));
+    }
+
+    private static String toPem(PublicKey publicKey) {
+        String body = Base64.getMimeEncoder(64, "\n".getBytes(StandardCharsets.US_ASCII))
+                .encodeToString(publicKey.getEncoded());
+        return "-----BEGIN PUBLIC KEY-----\n" + body + "\n-----END PUBLIC KEY-----\n";
+    }
+
     // ── Crypto data plane ──────────────────────────────────────────────────────
 
     public record EncryptResult(String ciphertext, String keyId, String keyVersionId) {
@@ -445,12 +604,17 @@ public class KmsService implements CompartmentUsage {
 
     // ── Helpers ────────────────────────────────────────────────────────────────
 
-    private StoredKeyVersion addVersion(StoredKey key) {
+    private StoredKeyVersion newVersion(String origin) {
         StoredKeyVersion version = new StoredKeyVersion();
         version.setId(Ocids.generate("keyversion", ociContext.realm(), ociContext.regionCode()));
         version.setTimeCreated(Instant.now().toString());
         version.setLifecycleState("ENABLED");
-        version.setOrigin("INTERNAL");
+        version.setOrigin(origin);
+        return version;
+    }
+
+    private StoredKeyVersion addVersion(StoredKey key) {
+        StoredKeyVersion version = newVersion("INTERNAL");
         try {
             switch (key.getAlgorithm()) {
                 case "AES" -> {
