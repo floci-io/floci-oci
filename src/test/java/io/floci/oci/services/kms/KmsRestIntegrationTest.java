@@ -5,8 +5,16 @@ import io.quarkus.test.junit.QuarkusTest;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.security.KeyFactory;
+import java.security.PublicKey;
+import java.security.spec.MGF1ParameterSpec;
+import java.security.spec.X509EncodedKeySpec;
+import java.util.Arrays;
 import java.util.Base64;
 import java.util.Map;
+import javax.crypto.Cipher;
+import javax.crypto.spec.OAEPParameterSpec;
+import javax.crypto.spec.PSource;
 
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.*;
@@ -195,5 +203,117 @@ class KmsRestIntegrationTest {
             .when().post(cryptoBase + "/verify")
             .then().statusCode(200)
                 .body("isSignatureValid", equalTo(true));
+    }
+
+    @Test
+    void importedAesKeyEncryptsThroughCryptoEndpoint() throws Exception {
+        String vaultId = createVault("it-import-" + System.nanoTime());
+
+        String wrappingKeyId = given()
+            .when().get("/20180608/wrappingKeys")
+            .then().statusCode(200)
+                .header("etag", notNullValue())
+                .body("vaultId", equalTo(vaultId))
+                .body("compartmentId", equalTo(compartment))
+                .body("lifecycleState", equalTo("ENABLED"))
+                .body("publicKey", startsWith("-----BEGIN PUBLIC KEY-----"))
+                .body("timeCreated", notNullValue())
+                .extract().path("id");
+        String publicKeyPem = given().when().get("/20180608/wrappingKeys").then().extract().path("publicKey");
+
+        given()
+            .when().get("/20180608/vaults/" + vaultId)
+            .then().statusCode(200)
+                .body("wrappingkeyId", equalTo(wrappingKeyId));
+
+        byte[] material = new byte[32];
+        Arrays.fill(material, (byte) 5);
+        String keyId = given()
+                .contentType("application/json")
+                .body(Map.of("compartmentId", compartment, "displayName", "it-imported",
+                        "keyShape", Map.of("algorithm", "AES", "length", 32),
+                        "wrappedImportKey", Map.of(
+                                "keyMaterial", Base64.getEncoder().encodeToString(rsaOaepSha256(publicKeyPem, material)),
+                                "wrappingAlgorithm", "RSA_OAEP_SHA256")))
+            .when().post("/20180608/keys/import")
+            .then().statusCode(200)
+                .header("etag", notNullValue())
+                .body("vaultId", equalTo(vaultId))
+                .body("lifecycleState", equalTo("ENABLED"))
+                .body("keyShape.algorithm", equalTo("AES"))
+                .body("keyShape.length", equalTo(32))
+                .body("protectionMode", equalTo("HSM"))
+                .extract().path("id");
+
+        given()
+            .when().get("/20180608/keys/" + keyId + "/keyVersions")
+            .then().statusCode(200)
+                .body("[0].origin", equalTo("EXTERNAL"));
+
+        String plaintext = Base64.getEncoder().encodeToString("imported wire crypto".getBytes());
+        String ciphertext = given()
+                .contentType("application/json")
+                .body(Map.of("keyId", keyId, "plaintext", plaintext))
+            .when().post("/20180608/encrypt")
+            .then().statusCode(200).extract().path("ciphertext");
+
+        given()
+            .contentType("application/json")
+            .body(Map.of("keyId", keyId, "ciphertext", ciphertext))
+            .when().post("/20180608/decrypt")
+            .then().statusCode(200)
+                .body("plaintext", equalTo(plaintext));
+    }
+
+    @Test
+    void importRejectsMaterialNotWrappedWithTheWrappingKey() {
+        createVault("it-import-bad-" + System.nanoTime());
+        given()
+            .contentType("application/json")
+            .body(Map.of("compartmentId", compartment, "displayName", "it-bad",
+                    "keyShape", Map.of("algorithm", "AES", "length", 32),
+                    "wrappedImportKey", Map.of(
+                            "keyMaterial", Base64.getEncoder().encodeToString(new byte[512]),
+                            "wrappingAlgorithm", "RSA_OAEP_SHA256")))
+            .when().post("/20180608/keys/import")
+            .then().statusCode(400)
+                .body("code", equalTo("InvalidParameter"));
+    }
+
+    @Test
+    void importKeyVersionReturnsNotImplemented() {
+        String keyId = createAesKey(createVault("it-import-version-" + System.nanoTime()), "it-version");
+        given()
+            .contentType("application/json")
+            .body(Map.of("wrappedImportKey", Map.of("keyMaterial", "AA==", "wrappingAlgorithm", "RSA_OAEP_SHA256")))
+            .when().post("/20180608/keys/" + keyId + "/keyVersions/import")
+            .then().statusCode(501)
+                .body("code", equalTo("NotImplemented"));
+    }
+
+    @Test
+    void importRejectsEcdsaKeys() throws Exception {
+        createVault("it-import-ecdsa-" + System.nanoTime());
+        given()
+            .contentType("application/json")
+            .body(Map.of("compartmentId", compartment, "displayName", "it-ec",
+                    "keyShape", Map.of("algorithm", "ECDSA", "length", 32, "curveId", "NIST_P256"),
+                    "wrappedImportKey", Map.of("keyMaterial", "AA==", "wrappingAlgorithm", "RSA_OAEP_AES_SHA256")))
+            .when().post("/20180608/keys/import")
+            .then().statusCode(400)
+                .body("code", equalTo("InvalidParameter"));
+    }
+
+    private static byte[] rsaOaepSha256(String publicKeyPem, byte[] plaintext) throws Exception {
+        String base64 = publicKeyPem
+                .replace("-----BEGIN PUBLIC KEY-----", "")
+                .replace("-----END PUBLIC KEY-----", "")
+                .replaceAll("\\s", "");
+        PublicKey publicKey = KeyFactory.getInstance("RSA")
+                .generatePublic(new X509EncodedKeySpec(Base64.getDecoder().decode(base64)));
+        Cipher cipher = Cipher.getInstance("RSA/ECB/OAEPPadding");
+        cipher.init(Cipher.ENCRYPT_MODE, publicKey, new OAEPParameterSpec("SHA-256", "MGF1",
+                MGF1ParameterSpec.SHA256, PSource.PSpecified.DEFAULT));
+        return cipher.doFinal(plaintext);
     }
 }
