@@ -148,11 +148,12 @@ public class KmsManagementController {
 
     @POST
     @Path("/{keyId}/keyVersions/import")
-    public Response importKeyVersion(@PathParam("keyId") String keyId) {
+    public Response importKeyVersion(@PathParam("keyId") String keyId, Map<String, Object> body) {
+        Map<String, Object> wrappedImportKey = map(body, "wrappedImportKey");
+        StoredKeyVersion version = service.importKeyVersion(keyId,
+                str(wrappedImportKey, "keyMaterial"), str(wrappedImportKey, "wrappingAlgorithm"));
         StoredKey key = service.getKey(null, keyId);
-        StoredKeyVersion version = service.importKeyVersion(keyId);
-        return Response.ok(keyVersionJson(key, version))
-                .header("etag", service.getKey(null, keyId).getEtag()).build();
+        return Response.ok(keyVersionJson(key, version)).header("etag", key.getEtag()).build();
     }
 
     @GET

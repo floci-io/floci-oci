@@ -10,8 +10,12 @@ import com.oracle.bmc.keymanagement.model.DecryptedData;
 import com.oracle.bmc.keymanagement.model.EncryptDataDetails;
 import com.oracle.bmc.keymanagement.model.EncryptedData;
 import com.oracle.bmc.keymanagement.model.ImportKeyDetails;
+import com.oracle.bmc.keymanagement.model.ImportKeyVersionDetails;
 import com.oracle.bmc.keymanagement.model.Key;
 import com.oracle.bmc.keymanagement.model.KeyShape;
+import com.oracle.bmc.keymanagement.model.KeyVersion;
+import com.oracle.bmc.keymanagement.model.SignDataDetails;
+import com.oracle.bmc.keymanagement.model.SignedData;
 import com.oracle.bmc.keymanagement.model.Vault;
 import com.oracle.bmc.keymanagement.model.WrappedImportKey;
 import com.oracle.bmc.keymanagement.model.WrappingKey;
@@ -23,6 +27,8 @@ import com.oracle.bmc.keymanagement.requests.GetKeyRequest;
 import com.oracle.bmc.keymanagement.requests.GetVaultRequest;
 import com.oracle.bmc.keymanagement.requests.GetWrappingKeyRequest;
 import com.oracle.bmc.keymanagement.requests.ImportKeyRequest;
+import com.oracle.bmc.keymanagement.requests.ImportKeyVersionRequest;
+import com.oracle.bmc.keymanagement.requests.SignRequest;
 import com.oracle.bmc.secrets.requests.GetSecretBundleRequest;
 import com.oracle.bmc.vault.model.Base64SecretContentDetails;
 import com.oracle.bmc.vault.model.CreateSecretDetails;
@@ -33,7 +39,10 @@ import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
 import java.security.KeyFactory;
+import java.security.KeyPair;
+import java.security.KeyPairGenerator;
 import java.security.PublicKey;
+import java.security.Signature;
 import java.security.spec.MGF1ParameterSpec;
 import java.security.spec.X509EncodedKeySpec;
 import java.util.Arrays;
@@ -229,6 +238,84 @@ class VaultKmsCompatibilityTest {
                             .keyId(keyId).ciphertext(encrypted.getCiphertext()).build())
                     .build()).getDecryptedData();
             assertThat(decrypted.getPlaintext()).isEqualTo(plaintext);
+        }
+    }
+
+    @Test
+    void importedRsaKeySignsWithTheImportedPrivateKey() throws Exception {
+        Vault vault = createVault("sdk-import-rsa-vault-" + System.nanoTime());
+        KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA");
+        generator.initialize(2048);
+        KeyPair local = generator.generateKeyPair();
+
+        String keyId;
+        try (KmsManagementClient management = EmulatorFixture.kmsManagement(vault.getManagementEndpoint())) {
+            WrappingKey wrappingKey = management.getWrappingKey(GetWrappingKeyRequest.builder().build())
+                    .getWrappingKey();
+            Key key = management.importKey(ImportKeyRequest.builder()
+                    .importKeyDetails(ImportKeyDetails.builder()
+                            .compartmentId(TENANCY)
+                            .displayName("sdk-imported-rsa")
+                            .keyShape(KeyShape.builder()
+                                    .algorithm(KeyShape.Algorithm.Rsa).length(256).build())
+                            .wrappedImportKey(WrappedImportKey.builder()
+                                    .keyMaterial(Base64.getEncoder().encodeToString(rsaOaepAesSha256(
+                                            wrappingKey.getPublicKey(), local.getPrivate().getEncoded())))
+                                    .wrappingAlgorithm(WrappedImportKey.WrappingAlgorithm.RsaOaepAesSha256)
+                                    .build())
+                            .build())
+                    .build()).getKey();
+            assertThat(key.getKeyShape().getAlgorithm().getValue()).isEqualTo("RSA");
+            keyId = key.getId();
+        }
+
+        byte[] message = "sdk signed by an imported key".getBytes(StandardCharsets.UTF_8);
+        try (KmsCryptoClient crypto = EmulatorFixture.kmsCrypto(vault.getCryptoEndpoint())) {
+            SignedData signed = crypto.sign(SignRequest.builder()
+                    .signDataDetails(SignDataDetails.builder()
+                            .keyId(keyId)
+                            .message(Base64.getEncoder().encodeToString(message))
+                            .signingAlgorithm(SignDataDetails.SigningAlgorithm.Sha256RsaPkcs1V15)
+                            .build())
+                    .build()).getSignedData();
+            Signature verifier = Signature.getInstance("SHA256withRSA");
+            verifier.initVerify(local.getPublic());
+            verifier.update(message);
+            assertThat(verifier.verify(Base64.getDecoder().decode(signed.getSignature()))).isTrue();
+        }
+    }
+
+    @Test
+    void importedKeyVersionBecomesTheCurrentVersion() throws Exception {
+        Vault vault = createVault("sdk-import-version-vault-" + System.nanoTime());
+        byte[] material = new byte[32];
+        Arrays.fill(material, (byte) 17);
+
+        try (KmsManagementClient management = EmulatorFixture.kmsManagement(vault.getManagementEndpoint())) {
+            Key key = management.createKey(CreateKeyRequest.builder()
+                    .createKeyDetails(CreateKeyDetails.builder()
+                            .compartmentId(TENANCY).displayName("sdk-version-key")
+                            .keyShape(KeyShape.builder()
+                                    .algorithm(KeyShape.Algorithm.Aes).length(32).build())
+                            .build())
+                    .build()).getKey();
+            WrappingKey wrappingKey = management.getWrappingKey(GetWrappingKeyRequest.builder().build())
+                    .getWrappingKey();
+
+            KeyVersion version = management.importKeyVersion(ImportKeyVersionRequest.builder()
+                    .keyId(key.getId())
+                    .importKeyVersionDetails(ImportKeyVersionDetails.builder()
+                            .wrappedImportKey(WrappedImportKey.builder()
+                                    .keyMaterial(Base64.getEncoder().encodeToString(
+                                            rsaOaepAesSha256(wrappingKey.getPublicKey(), material)))
+                                    .wrappingAlgorithm(WrappedImportKey.WrappingAlgorithm.RsaOaepAesSha256)
+                                    .build())
+                            .build())
+                    .build()).getKeyVersion();
+            assertThat(version.getOrigin().getValue()).isEqualTo("EXTERNAL");
+
+            Key reread = management.getKey(GetKeyRequest.builder().keyId(key.getId()).build()).getKey();
+            assertThat(reread.getCurrentKeyVersion()).isEqualTo(version.getId());
         }
     }
 

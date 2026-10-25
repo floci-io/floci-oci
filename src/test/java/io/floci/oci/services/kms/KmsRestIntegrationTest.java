@@ -281,14 +281,28 @@ class KmsRestIntegrationTest {
     }
 
     @Test
-    void importKeyVersionReturnsNotImplemented() {
+    void importedKeyVersionBecomesTheCurrentVersion() throws Exception {
         String keyId = createAesKey(createVault("it-import-version-" + System.nanoTime()), "it-version");
-        given()
-            .contentType("application/json")
-            .body(Map.of("wrappedImportKey", Map.of("keyMaterial", "AA==", "wrappingAlgorithm", "RSA_OAEP_SHA256")))
+        String publicKeyPem = given().when().get("/20180608/wrappingKeys").then().statusCode(200)
+                .extract().path("publicKey");
+
+        String versionId = given()
+                .contentType("application/json")
+                .body(Map.of("wrappedImportKey", Map.of(
+                        "keyMaterial", Base64.getEncoder().encodeToString(rsaOaepSha256(publicKeyPem, new byte[32])),
+                        "wrappingAlgorithm", "RSA_OAEP_SHA256")))
             .when().post("/20180608/keys/" + keyId + "/keyVersions/import")
-            .then().statusCode(501)
-                .body("code", equalTo("NotImplemented"));
+            .then().statusCode(200)
+                .header("etag", notNullValue())
+                .body("keyId", equalTo(keyId))
+                .body("origin", equalTo("EXTERNAL"))
+                .body("lifecycleState", equalTo("ENABLED"))
+                .extract().path("id");
+
+        given()
+            .when().get("/20180608/keys/" + keyId)
+            .then().statusCode(200)
+                .body("currentKeyVersion", equalTo(versionId));
     }
 
     @Test
