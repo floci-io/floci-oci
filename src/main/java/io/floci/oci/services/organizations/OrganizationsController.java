@@ -160,10 +160,11 @@ public class OrganizationsController {
 
     // ── Links ──────────────────────────────────────────────────────────────────
 
+    /** Unpaged: the request has no {@code page} or {@code limit}, so every feature comes back at once. */
     @GET
     @Path("/linkFeatures")
     public Response listLinkFeatures(@QueryParam("compartmentId") String compartmentId) {
-        return collection(service.listLinkFeatures(compartmentId), null, null);
+        return Response.ok(Map.of("items", service.listLinkFeatures(compartmentId))).build();
     }
 
     @GET

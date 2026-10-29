@@ -109,7 +109,8 @@ The OCI SDKs leave these open, so floci-oci picks:
   `409 Conflict`. The SDKs do not say who approves a transfer; floci-oci makes it the parent,
   like every other change to a member. Nothing moves the approved tenancy yet.
 - `ListLinkFeatures` returns `CORE`, which every link carries (the one feature the SDK names),
-  followed by each other feature on an `ACTIVE` link of the caller's organization. Display names
+  followed by each other feature on an `ACTIVE` link of the caller's organization. The SDK request
+  has no `page` or `limit`, so the list is never paged: every feature comes back at once. Display names
   repeat the feature; the SDK fixes no catalogue of features or their descriptions.
 
 ### Invitations
