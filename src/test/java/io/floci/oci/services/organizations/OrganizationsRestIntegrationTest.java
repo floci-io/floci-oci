@@ -318,4 +318,42 @@ class OrganizationsRestIntegrationTest {
                 .body("size()", equalTo(1))
                 .body("[0].name", equalTo("Tenant_Admin_Policy"));
     }
+
+    @Test
+    void approveAndUnapproveForTransferReturnTheTenancy() {
+        String child = createChild("transfer-" + System.nanoTime(), "us-ashburn-1");
+
+        given().queryParam("compartmentId", config.defaultTenancyId())
+            .when().post("/20230401/organizationTenancies/" + child + "/actions/approveForTransfer")
+            .then()
+                .statusCode(200)
+                .header("opc-request-id", notNullValue())
+                .header("etag", notNullValue())
+                .body("tenancyId", equalTo(child))
+                .body("isApprovedForTransfer", equalTo(true));
+        given().queryParam("compartmentId", config.defaultTenancyId())
+            .when().post("/20230401/organizationTenancies/" + child + "/actions/approveForTransfer")
+            .then().statusCode(409).body("code", equalTo("Conflict"));
+        given().queryParam("compartmentId", config.defaultTenancyId())
+            .when().post("/20230401/organizationTenancies/" + child + "/actions/unapproveForTransfer")
+            .then().statusCode(200).body("isApprovedForTransfer", equalTo(false));
+        given()
+            .when().post("/20230401/organizationTenancies/" + child + "/actions/approveForTransfer")
+            .then().statusCode(400).body("code", equalTo("MissingParameter"));
+    }
+
+    @Test
+    void listLinkFeaturesIsAWrappedCollection() {
+        createChild("features-" + System.nanoTime(), "us-ashburn-1");
+
+        given().queryParam("compartmentId", config.defaultTenancyId())
+            .when().get("/20230401/linkFeatures")
+            .then()
+                .statusCode(200)
+                .header("opc-request-id", notNullValue())
+                .body("items[0].feature", equalTo("CORE"))
+                .body("items.feature", hasItems("CORE", "SUBSCRIPTION_SHARING"))
+                .body("items[0].displayName", notNullValue())
+                .body("items[0].description", notNullValue());
+    }
 }

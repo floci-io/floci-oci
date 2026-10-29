@@ -11,8 +11,8 @@ serves it on port 4599 with the other services.
 |---|---|
 | Child tenancies | CreateChildTenancy |
 | Organizations | ListOrganizations, GetOrganization, UpdateOrganization |
-| Organization tenancies | ListOrganizationTenancies, GetOrganizationTenancy, DeleteOrganizationTenancy, RestoreOrganizationTenancy |
-| Links | ListLinks, GetLink, GetLinkWithTenancyNames, DeleteLink |
+| Organization tenancies | ListOrganizationTenancies, GetOrganizationTenancy, DeleteOrganizationTenancy, RestoreOrganizationTenancy, ApproveOrganizationTenancyForTransfer, UnapproveOrganizationTenancyForTransfer |
+| Links | ListLinks, GetLink, GetLinkWithTenancyNames, DeleteLink, ListLinkFeatures |
 | Invitations | CreateSenderInvitation, GetSenderInvitation, ListSenderInvitations, UpdateSenderInvitation, CancelSenderInvitation, GetRecipientInvitation, ListRecipientInvitations, UpdateRecipientInvitation, AcceptRecipientInvitation, IgnoreRecipientInvitation |
 | Governance | AddGovernance, RemoveGovernance |
 | Work requests | Get, List, errors, logs (`/20230401/workRequests`) |
@@ -102,6 +102,16 @@ The OCI SDKs leave these open, so floci-oci picks:
   `SELF_OPT_OUT`, the closest values in the SDK enum (it names no add or remove type). Only
   members `OPTED_IN` are governed by the parent's [governance rules](governance-rules.md).
 
+- `ApproveOrganizationTenancyForTransfer` and `UnapproveOrganizationTenancyForTransfer` take
+  the parent tenancy as `compartmentId` (mandatory, as in the SDK) and return the organization
+  tenancy with an `etag`, synchronously, with `isApprovedForTransfer` set or cleared. Only the
+  parent may call them, on an `ACTIVE` child; asking for the flag the member already has is
+  `409 Conflict`. The SDKs do not say who approves a transfer; floci-oci makes it the parent,
+  like every other change to a member. Nothing moves the approved tenancy yet.
+- `ListLinkFeatures` returns `CORE`, which every link carries (the one feature the SDK names),
+  followed by each other feature on an `ACTIVE` link of the caller's organization. Display names
+  repeat the feature; the SDK fixes no catalogue of features or their descriptions.
+
 ### Invitations
 
 The SDKs give the shapes but not the flow, so floci-oci picks:
@@ -125,7 +135,7 @@ The SDKs give the shapes but not the flow, so floci-oci picks:
 
 ## Not implemented yet
 
-ApproveForTransfer, UnapproveForTransfer, link features, domains, subscriptions and orders.
+Domains, subscriptions and orders.
 
 ## Quickstart
 

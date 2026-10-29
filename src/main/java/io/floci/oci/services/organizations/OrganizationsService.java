@@ -29,6 +29,7 @@ import org.jboss.logging.Logger;
 
 import java.time.Instant;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -375,7 +376,63 @@ public class OrganizationsService {
                 .toList();
     }
 
+    /**
+     * Approves (or withdraws approval for) moving a child tenancy to another organization:
+     * sets {@code isApprovedForTransfer}. Only the parent may call it; {@code compartmentId}
+     * is the parent tenancy. Synchronous: returns the updated membership.
+     */
+    public synchronized StoredOrganizationTenancy setApprovedForTransfer(String compartmentId, String tenancyId,
+                                                                         boolean approve, String ifMatch) {
+        requireNonBlank(compartmentId, "compartmentId");
+        String parentId = ociContext.tenancyId();
+        if (!compartmentId.equals(parentId)) {
+            throw notFound("tenancy", compartmentId);
+        }
+        StoredOrganizationTenancy membership = childMembership(parentId, tenancyId);
+        Etags.checkIfMatch(ifMatch, membership.getEtag());
+        requireState(membership.getLifecycleState(), "ACTIVE", "tenancy " + tenancyId,
+                approve ? "approved for transfer" : "unapproved for transfer");
+        if (approve == Boolean.TRUE.equals(membership.getIsApprovedForTransfer())) {
+            throw OciException.conflict("The tenancy " + tenancyId + " is already "
+                    + (approve ? "approved" : "not approved") + " for transfer");
+        }
+        membership.setIsApprovedForTransfer(approve);
+        membership.setEtag(Etags.newEtag());
+        saveMembership(parentId, membership);
+        LOG.infov("setApprovedForTransfer {0} {1}", tenancyId, approve);
+        return membership;
+    }
+
     // ── Links ──────────────────────────────────────────────────────────────────
+
+    /**
+     * The link features the caller can use: {@code CORE}, which every link has, plus each feature
+     * on an ACTIVE link of the caller's organization, in that order.
+     */
+    public List<Map<String, Object>> listLinkFeatures(String compartmentId) {
+        requireNonBlank(compartmentId, "compartmentId");
+        if (!compartmentId.equals(ociContext.tenancyId())) {
+            throw notFound("tenancy", compartmentId);
+        }
+        Set<String> features = new LinkedHashSet<>();
+        features.add(CORE_FEATURE);
+        TenancyAwareStorageBackend.scanTenancy(links, ownerPartition()).stream()
+                .filter(l -> "ACTIVE".equals(l.getLifecycleState()))
+                .map(StoredLink::getFeature)
+                .sorted()
+                .forEach(features::add);
+        return features.stream().map(OrganizationsService::linkFeature).toList();
+    }
+
+    private static Map<String, Object> linkFeature(String feature) {
+        Map<String, Object> wire = new LinkedHashMap<>();
+        wire.put("feature", feature);
+        wire.put("displayName", feature);
+        wire.put("description", CORE_FEATURE.equals(feature)
+                ? "The parent-child relationship every link carries"
+                : "Link feature " + feature);
+        return wire;
+    }
 
     public List<StoredLink> listLinks(String parentTenancyId, String childTenancyId, String feature,
                                       String lifecycleState, String sortOrder) {

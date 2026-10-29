@@ -18,6 +18,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
@@ -314,5 +315,52 @@ class OrganizationsServiceTest {
 
         assertEquals(400, e.getHttpStatus());
         assertEquals("InvalidParameter", e.getCode());
+    }
+
+    @Test
+    void approveForTransferSetsTheFlagOnce() {
+        String child = createChild("child", "us-ashburn-1", null);
+
+        StoredOrganizationTenancy approved = service.setApprovedForTransfer(PARENT, child, true, null);
+
+        assertEquals(true, approved.getIsApprovedForTransfer());
+        assertEquals("Conflict", assertThrows(OciException.class,
+                () -> service.setApprovedForTransfer(PARENT, child, true, null)).getCode());
+        assertEquals(false, service.setApprovedForTransfer(PARENT, child, false, null).getIsApprovedForTransfer());
+    }
+
+    @Test
+    void transferApprovalIsTheParentsCallOnAnActiveChild() {
+        String child = createChild("child", "us-ashburn-1", null);
+
+        assertEquals(400, assertThrows(OciException.class,
+                () -> service.setApprovedForTransfer(PARENT, PARENT, true, null)).getHttpStatus());
+        assertEquals(404, assertThrows(OciException.class,
+                () -> service.setApprovedForTransfer("ocid1.tenancy.oc1..other", child, true, null)).getHttpStatus());
+        assertEquals("MissingParameter", assertThrows(OciException.class,
+                () -> service.setApprovedForTransfer(null, child, true, null)).getCode());
+        service.deleteOrganizationTenancy(child, null);
+        assertEquals("Conflict", assertThrows(OciException.class,
+                () -> service.setApprovedForTransfer(PARENT, child, true, null)).getCode());
+        caller.set(child);
+        assertEquals(404, assertThrows(OciException.class,
+                () -> service.setApprovedForTransfer(child, child, true, null)).getHttpStatus());
+    }
+
+    @Test
+    void linkFeaturesStartWithCoreAndAddTheOrganizationsFeatures() {
+        assertEquals(List.of("CORE"), service.listLinkFeatures(PARENT).stream().map(f -> f.get("feature")).toList());
+        createChild("child", "us-ashburn-1", List.of("SUBSCRIPTION_SHARING"));
+
+        List<Map<String, Object>> features = service.listLinkFeatures(PARENT);
+
+        assertEquals(List.of("CORE", "SUBSCRIPTION_SHARING"), features.stream().map(f -> f.get("feature")).toList());
+        assertTrue(features.stream().allMatch(f -> f.get("displayName") != null && f.get("description") != null));
+        assertEquals(404, assertThrows(OciException.class,
+                () -> service.listLinkFeatures("ocid1.tenancy.oc1..other")).getHttpStatus());
+
+        String sharing = service.listLinks(null, null, "SUBSCRIPTION_SHARING", null, null).getFirst().getId();
+        service.deleteLink(sharing, null);
+        assertEquals(List.of("CORE"), service.listLinkFeatures(PARENT).stream().map(f -> f.get("feature")).toList());
     }
 }

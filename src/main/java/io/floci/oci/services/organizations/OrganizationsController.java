@@ -138,7 +138,33 @@ public class OrganizationsController {
         return accepted(service.setGovernance(organizationId, tenancyId, false, ifMatch));
     }
 
+    @POST
+    @Path("/organizationTenancies/{organizationTenancyId}/actions/approveForTransfer")
+    @Consumes(MediaType.WILDCARD)
+    public Response approveForTransfer(@PathParam("organizationTenancyId") String tenancyId,
+                                       @QueryParam("compartmentId") String compartmentId,
+                                       @HeaderParam("if-match") String ifMatch) {
+        StoredOrganizationTenancy membership = service.setApprovedForTransfer(compartmentId, tenancyId, true, ifMatch);
+        return Response.ok(membership.toWire()).header("etag", membership.getEtag()).build();
+    }
+
+    @POST
+    @Path("/organizationTenancies/{organizationTenancyId}/actions/unapproveForTransfer")
+    @Consumes(MediaType.WILDCARD)
+    public Response unapproveForTransfer(@PathParam("organizationTenancyId") String tenancyId,
+                                         @QueryParam("compartmentId") String compartmentId,
+                                         @HeaderParam("if-match") String ifMatch) {
+        StoredOrganizationTenancy membership = service.setApprovedForTransfer(compartmentId, tenancyId, false, ifMatch);
+        return Response.ok(membership.toWire()).header("etag", membership.getEtag()).build();
+    }
+
     // ── Links ──────────────────────────────────────────────────────────────────
+
+    @GET
+    @Path("/linkFeatures")
+    public Response listLinkFeatures(@QueryParam("compartmentId") String compartmentId) {
+        return collection(service.listLinkFeatures(compartmentId), null, null);
+    }
 
     @GET
     @Path("/links")
