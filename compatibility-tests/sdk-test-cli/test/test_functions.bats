@@ -40,7 +40,7 @@ teardown_file() {
 }
 
 @test "fn: function create" {
-    run oci_cmd fn function create --application-id "$APP_ID" --display-name cli-fn \
+    run oci_cmd fn function create container-function --application-id "$APP_ID" --display-name cli-fn \
         --image "phx.ocir.io/floci/hello:0.0.1" --memory-in-mbs 128
     [ "$status" -eq 0 ]
     json_get '.data.id' > "$BATS_FILE_TMPDIR/fn_id"
@@ -58,7 +58,8 @@ teardown_file() {
 }
 
 @test "fn: function update changes memory" {
-    run oci_cmd fn function update --function-id "$FN_ID" --memory-in-mbs 256
+    # container-function always sends sourceDetails, which the CLI confirms before replacing.
+    run oci_cmd fn function update container-function --function-id "$FN_ID" --memory-in-mbs 256 --force
     [ "$status" -eq 0 ]
 
     run oci_cmd fn function get --function-id "$FN_ID"

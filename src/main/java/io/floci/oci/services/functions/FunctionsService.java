@@ -13,8 +13,10 @@ import io.floci.oci.core.common.Ocids;
 import io.floci.oci.core.common.Resettable;
 import io.floci.oci.core.common.ServiceDescriptor;
 import io.floci.oci.core.common.ServiceRegistry;
+import io.floci.oci.core.storage.InMemoryStorage;
 import io.floci.oci.core.storage.StorageBackend;
 import io.floci.oci.core.storage.StorageFactory;
+import io.floci.oci.core.workrequest.WorkRequestService;
 import io.floci.oci.services.functions.model.StoredApplication;
 import io.floci.oci.services.functions.model.StoredFunction;
 import io.quarkus.runtime.StartupEvent;
@@ -33,8 +35,10 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Comparator;
 import java.util.HexFormat;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Stream;
 
 /**
@@ -56,12 +60,18 @@ public class FunctionsService implements Resettable, CompartmentUsage {
     private final OciContext ociContext;
     private final ServiceRegistry serviceRegistry;
     private final FnServerManager fnServer;
+    private final WorkRequestService workRequests;
+
+    /** The work-request partition of Functions, served on {@code /20260325/workRequests}. */
+    static final String WR_SERVICE = "functions";
+    static final Set<String> SHAPES = Set.of("GENERIC_X86", "GENERIC_ARM", "GENERIC_X86_ARM");
 
     @Inject
     public FunctionsService(StorageFactory storageFactory, EmulatorConfig config,
                             ServiceRegistry serviceRegistry, FnServerManager fnServer,
-                            OciContext ociContext) {
+                            OciContext ociContext, WorkRequestService workRequests) {
         this.config = config;
+        this.workRequests = workRequests;
         this.ociContext = ociContext;
         this.serviceRegistry = serviceRegistry;
         this.fnServer = fnServer;
@@ -74,6 +84,13 @@ public class FunctionsService implements Resettable, CompartmentUsage {
     FunctionsService(StorageBackend<String, StoredApplication> applications,
                      StorageBackend<String, StoredFunction> functions,
                      EmulatorConfig config, FnServerManager fnServer) {
+        this(applications, functions, config, fnServer, new WorkRequestService(new InMemoryStorage<>(), config));
+    }
+
+    FunctionsService(StorageBackend<String, StoredApplication> applications,
+                     StorageBackend<String, StoredFunction> functions,
+                     EmulatorConfig config, FnServerManager fnServer, WorkRequestService workRequests) {
+        this.workRequests = workRequests;
         this.ociContext = OciContext.fromConfig(config);
         this.applications = applications;
         this.functions = functions;
@@ -87,7 +104,10 @@ public class FunctionsService implements Resettable, CompartmentUsage {
                 .enabled(config.services().functions().enabled())
                 .storageKey("functions")
                 .resourceClasses(FunctionsManagementController.class,
-                        FunctionsInvokeController.class)
+                        FunctionsInvokeController.class,
+                        FunctionsManagementV2Controller.class,
+                        FunctionsInvokeV2Controller.class,
+                        FunctionsWorkRequestController.class)
                 .build());
     }
 
@@ -119,10 +139,24 @@ public class FunctionsService implements Resettable, CompartmentUsage {
                                                String shape,
                                                Map<String, String> freeformTags,
                                                Map<String, Map<String, Object>> definedTags) {
+        return createApplication(compartmentId, displayName, subnetIds, appConfig, shape, freeformTags, definedTags,
+                null);
+    }
+
+    /** @param settings the optional Application fields returned as sent; null for none */
+    public StoredApplication createApplication(String compartmentId, String displayName,
+                                               List<String> subnetIds, Map<String, String> appConfig,
+                                               String shape,
+                                               Map<String, String> freeformTags,
+                                               Map<String, Map<String, Object>> definedTags,
+                                               Map<String, Object> settings) {
         require(compartmentId, "compartmentId");
         require(displayName, "displayName");
         if (subnetIds == null || subnetIds.isEmpty()) {
             throw OciException.missingParameter("Missing required parameter: subnetIds");
+        }
+        if (shape != null && !SHAPES.contains(shape)) {
+            throw OciException.invalidParameter("Invalid shape: " + shape);
         }
         boolean duplicate = applications.scan(k -> true).stream()
                 .anyMatch(a -> displayName.equals(a.getDisplayName())
@@ -145,6 +179,7 @@ public class FunctionsService implements Resettable, CompartmentUsage {
         app.setTimeUpdated(now);
         app.setFreeformTags(freeformTags);
         app.setDefinedTags(definedTags);
+        app.setSettings(settings != null && !settings.isEmpty() ? settings : null);
         app.setEtag(Etags.newEtag());
         applications.put(app.getId(), app);
         LOG.infof("createApplication %s (%s)", displayName, app.getId());
@@ -171,6 +206,14 @@ public class FunctionsService implements Resettable, CompartmentUsage {
                                                Map<String, String> freeformTags,
                                                Map<String, Map<String, Object>> definedTags,
                                                String ifMatch) {
+        return updateApplication(applicationId, appConfig, freeformTags, definedTags, null, ifMatch);
+    }
+
+    /** @param settings optional Application fields to replace; the others stay as they were */
+    public StoredApplication updateApplication(String applicationId, Map<String, String> appConfig,
+                                               Map<String, String> freeformTags,
+                                               Map<String, Map<String, Object>> definedTags,
+                                               Map<String, Object> settings, String ifMatch) {
         StoredApplication app = getApplication(applicationId);
         Etags.checkIfMatch(ifMatch, app.getEtag());
         if (appConfig != null) {
@@ -182,6 +225,7 @@ public class FunctionsService implements Resettable, CompartmentUsage {
         if (definedTags != null) {
             app.setDefinedTags(definedTags);
         }
+        app.setSettings(merged(app.getSettings(), settings));
         app.setTimeUpdated(Instant.now().toString());
         app.setEtag(Etags.newEtag());
         applications.put(applicationId, app);
@@ -225,6 +269,20 @@ public class FunctionsService implements Resettable, CompartmentUsage {
                                          Map<String, String> fnConfig,
                                          Map<String, String> freeformTags,
                                          Map<String, Map<String, Object>> definedTags) {
+        return createFunction(applicationId, displayName, image, null, memoryInMBs, timeoutInSeconds, fnConfig,
+                freeformTags, definedTags, null);
+    }
+
+    /**
+     * @param imageDigest the digest the client sent with the image; null to derive one
+     * @param settings the optional Function fields returned as sent; null for none
+     */
+    public StoredFunction createFunction(String applicationId, String displayName, String image, String imageDigest,
+                                         Long memoryInMBs, Integer timeoutInSeconds,
+                                         Map<String, String> fnConfig,
+                                         Map<String, String> freeformTags,
+                                         Map<String, Map<String, Object>> definedTags,
+                                         Map<String, Object> settings) {
         StoredApplication app = getApplication(applicationId);
         require(displayName, "displayName");
         if (memoryInMBs == null) {
@@ -244,7 +302,7 @@ public class FunctionsService implements Resettable, CompartmentUsage {
         fn.setDisplayName(displayName);
         fn.setLifecycleState("ACTIVE");
         fn.setImage(image);
-        fn.setImageDigest(digestFor(image));
+        fn.setImageDigest(imageDigest != null ? imageDigest : digestFor(image));
         fn.setShape(app.getShape());
         fn.setMemoryInMBs(memoryInMBs);
         fn.setTimeoutInSeconds(timeoutInSeconds != null ? timeoutInSeconds : 30);
@@ -254,6 +312,7 @@ public class FunctionsService implements Resettable, CompartmentUsage {
         fn.setTimeUpdated(now);
         fn.setFreeformTags(freeformTags);
         fn.setDefinedTags(definedTags);
+        fn.setSettings(settings != null && !settings.isEmpty() ? settings : null);
         fn.setEtag(Etags.newEtag());
         functions.put(fn.getId(), fn);
         LOG.infof("createFunction %s (%s, image=%s)", displayName, fn.getId(), image);
@@ -279,14 +338,28 @@ public class FunctionsService implements Resettable, CompartmentUsage {
                                          Map<String, String> freeformTags,
                                          Map<String, Map<String, Object>> definedTags,
                                          String ifMatch) {
+        return updateFunction(functionId, image, null, memoryInMBs, timeoutInSeconds, fnConfig, freeformTags,
+                definedTags, null, ifMatch);
+    }
+
+    /**
+     * @param imageDigest the digest sent with a new image; null to derive one
+     * @param settings optional Function fields to replace; the others stay as they were
+     */
+    public StoredFunction updateFunction(String functionId, String image, String imageDigest, Long memoryInMBs,
+                                         Integer timeoutInSeconds, Map<String, String> fnConfig,
+                                         Map<String, String> freeformTags,
+                                         Map<String, Map<String, Object>> definedTags,
+                                         Map<String, Object> settings, String ifMatch) {
         StoredFunction fn = getFunction(functionId);
         Etags.checkIfMatch(ifMatch, fn.getEtag());
         if (image != null && !image.equals(fn.getImage())) {
             fn.setImage(image);
             // Terraform's CustomizeDiff demands the digest change with the image.
-            fn.setImageDigest(digestFor(image));
+            fn.setImageDigest(imageDigest != null ? imageDigest : digestFor(image));
             fn.setFnFnId(null); // re-mirror on next invoke
         }
+        fn.setSettings(merged(fn.getSettings(), settings));
         if (memoryInMBs != null) {
             fn.setMemoryInMBs(memoryInMBs);
         }
@@ -312,6 +385,27 @@ public class FunctionsService implements Resettable, CompartmentUsage {
         StoredFunction fn = getFunction(functionId);
         Etags.checkIfMatch(ifMatch, fn.getEtag());
         functions.delete(functionId);
+    }
+
+    /**
+     * Records the work request a {@code /20260325} mutation reports. Every Functions mutation is
+     * finished when it returns, so the work request is SUCCEEDED, with {@code timeFinished} set,
+     * which is what Terraform waits for. The entity types contain "application" and "function",
+     * the substrings Terraform's waiters match.
+     */
+    public String workRequest(String operationType, String compartmentId, String entityType, String actionType,
+                              String resourceId, String entityUri) {
+        return workRequests.succeeded(WR_SERVICE, operationType, compartmentId,
+                List.of(WorkRequestService.resource(entityType, actionType, resourceId, entityUri)));
+    }
+
+    private static Map<String, Object> merged(Map<String, Object> current, Map<String, Object> update) {
+        if (update == null || update.isEmpty()) {
+            return current;
+        }
+        Map<String, Object> merged = current != null ? new LinkedHashMap<>(current) : new LinkedHashMap<>();
+        merged.putAll(update);
+        return merged;
     }
 
     public String invokeEndpoint() {

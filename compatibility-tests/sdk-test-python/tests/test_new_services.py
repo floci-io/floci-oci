@@ -267,17 +267,32 @@ def test_functions_management_plane(sdk_config):
         oci.functions.models.CreateFunctionDetails(
             application_id=app.id,
             display_name=unique("py-fn"),
-            image="iad.ocir.io/tenant/py-hello:0.0.1",
+            source_details=oci.functions.models.CreateContainerImageFunctionSourceDetails(
+                image="iad.ocir.io/tenant/py-hello:0.0.1"
+            ),
             memory_in_mbs=256,
         )
-    ).data
+    )
+    assert fn.headers["opc-work-request-id"]
+    fn = fn.data
     assert fn.lifecycle_state == "ACTIVE"
     assert fn.memory_in_mbs == 256
-    assert fn.image_digest.startswith("sha256:")
+    assert fn.source_details.source_type == "CONTAINER_IMAGE"
+    assert fn.source_details.image_digest.startswith("sha256:")
     assert fn.invoke_endpoint
 
     listed = client.list_functions(app.id).data
     assert any(item.id == fn.id for item in listed)
+
+    work_requests = oci.functions.WorkRequestManagementClient(sdk_config, service_endpoint=ENDPOINT)
+    updated = client.update_function(fn.id, oci.functions.models.UpdateFunctionDetails(memory_in_mbs=512))
+    work_request = work_requests.get_work_request(updated.headers["opc-work-request-id"]).data
+    assert work_request.status == "SUCCEEDED"
+    assert work_request.resources[0].identifier == fn.id
+    assert client.get_function(fn.id).data.memory_in_mbs == 512
+
+    runtimes = client.list_functions_runtimes(name="python312.ol9").data.items
+    assert [runtime.name for runtime in runtimes] == ["python312.ol9"]
 
     client.delete_function(fn.id)
     client.delete_application(app.id)

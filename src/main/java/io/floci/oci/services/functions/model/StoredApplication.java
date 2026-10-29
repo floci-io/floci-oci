@@ -23,6 +23,8 @@ public class StoredApplication {
     private String etag;
     /** Mirrored Fn-server app id, when the sidecar has been provisioned. */
     private String fnAppId;
+    /** The optional settings the API returns as they were sent (traceConfig, logging, ...). */
+    private Map<String, Object> settings;
 
     public StoredApplication() {
     }
@@ -129,5 +131,13 @@ public class StoredApplication {
 
     public void setFnAppId(String fnAppId) {
         this.fnAppId = fnAppId;
+    }
+
+    public Map<String, Object> getSettings() {
+        return settings;
+    }
+
+    public void setSettings(Map<String, Object> settings) {
+        this.settings = settings;
     }
 }

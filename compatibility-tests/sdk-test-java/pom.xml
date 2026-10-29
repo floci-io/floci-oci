@@ -12,7 +12,7 @@
     <properties>
         <maven.compiler.release>21</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <oci.sdk.version>3.92.1</oci.sdk.version>
+        <oci.sdk.version>3.97.1</oci.sdk.version>
         <junit.version>5.11.4</junit.version>
     </properties>
 

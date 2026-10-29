@@ -71,7 +71,7 @@ class FunctionsDockerTest {
     }
 
     @Test
-    @Order(4)
+    @Order(5)
     void cleanUpStateAndSidecar() {
         given().delete("/20181201/functions/" + fnId).then().statusCode(204);
         given().delete("/20181201/applications/" + appId).then().statusCode(204);
@@ -117,6 +117,18 @@ class FunctionsDockerTest {
 
     @Test
     @Order(3)
+    void invokeRunsThroughTheNewApiVersionToo() {
+        String body = given()
+                .contentType("application/json")
+                .body("{\"name\":\"v2\"}".getBytes())
+            .when().post("/20260325/functions/" + fnId + "/actions/invoke")
+            .then().statusCode(200)
+                .extract().asString();
+        assertTrue(body.contains("Hello v2"), "the FDK function should greet the caller by name, got: " + body);
+    }
+
+    @Test
+    @Order(4)
     void dryRunNeverExecutes() {
         given()
             .header("is-dry-run", "true")
