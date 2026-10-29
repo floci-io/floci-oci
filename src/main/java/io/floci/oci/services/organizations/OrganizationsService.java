@@ -51,6 +51,8 @@ public class OrganizationsService {
     static final String DEFAULT_GOVERNANCE_STATUS = "OPTED_IN";
     private static final Set<String> GOVERNANCE_STATUSES = Set.of("OPTED_IN", "OPTED_OUT");
     static final Set<String> SORT_ORDERS = Set.of("ASC", "DESC");
+    static final Set<String> LINK_LIFECYCLE_STATES =
+            Set.of("CREATING", "ACTIVE", "INACTIVE", "UPDATING", "FAILED", "TERMINATED");
     private static final Pattern POLICY_NAME = Pattern.compile("[A-Za-z_]+");
 
     private final StorageBackend<String, StoredOrganization> organizations;
@@ -214,12 +216,70 @@ public class OrganizationsService {
                 .orElseThrow(() -> notFound("organization tenancy", tenancyId));
     }
 
+    /**
+     * Terminates a child tenancy of the caller's organization and its active links. The child
+     * stays registered so {@link #restoreOrganizationTenancy} can bring it back. Returns the
+     * work request id.
+     */
+    public synchronized String deleteOrganizationTenancy(String tenancyId, String ifMatch) {
+        String parentId = ociContext.tenancyId();
+        StoredOrganizationTenancy membership = childMembership(parentId, tenancyId);
+        Etags.checkIfMatch(ifMatch, membership.getEtag());
+        requireState(membership.getLifecycleState(), "ACTIVE", "tenancy " + tenancyId, "terminated");
+        String now = Instant.now().toString();
+        membership.setLifecycleState("DELETED");
+        membership.setTimeLeft(now);
+        membership.setEtag(Etags.newEtag());
+        saveMembership(parentId, membership);
+        for (StoredLink link : linksOfChild(parentId, tenancyId)) {
+            if ("ACTIVE".equals(link.getLifecycleState())) {
+                link.setTerminatedWithTenancy(true);
+                terminate(parentId, link, now);
+            }
+        }
+        LOG.infov("deleteOrganizationTenancy {0}", tenancyId);
+        return workRequests.succeeded(WR_SERVICE, "TERMINATE_ORGANIZATION_TENANCY", parentId,
+                List.of(WorkRequestService.resource("tenancy", "DELETED", tenancyId, null)));
+    }
+
+    /**
+     * Brings a terminated child tenancy back, with the links its termination ended. Links
+     * terminated on their own beforehand stay terminated. Returns the work request id.
+     */
+    public synchronized String restoreOrganizationTenancy(String tenancyId, String ifMatch) {
+        String parentId = ociContext.tenancyId();
+        StoredOrganizationTenancy membership = childMembership(parentId, tenancyId);
+        Etags.checkIfMatch(ifMatch, membership.getEtag());
+        requireState(membership.getLifecycleState(), "DELETED", "tenancy " + tenancyId, "restored");
+        String now = Instant.now().toString();
+        membership.setLifecycleState("ACTIVE");
+        membership.setTimeLeft(null);
+        membership.setEtag(Etags.newEtag());
+        saveMembership(parentId, membership);
+        for (StoredLink link : linksOfChild(parentId, tenancyId)) {
+            if ("TERMINATED".equals(link.getLifecycleState()) && Boolean.TRUE.equals(link.getTerminatedWithTenancy())) {
+                link.setLifecycleState("ACTIVE");
+                link.setTerminatedWithTenancy(null);
+                link.setTimeTerminated(null);
+                link.setTimeUpdated(now);
+                link.setEtag(Etags.newEtag());
+                TenancyAwareStorageBackend.putIn(links, parentId, link.getId(), link);
+            }
+        }
+        LOG.infov("restoreOrganizationTenancy {0}", tenancyId);
+        return workRequests.succeeded(WR_SERVICE, "RESTORE_TENANCY", parentId,
+                List.of(WorkRequestService.resource("tenancy", "UPDATED", tenancyId, null)));
+    }
+
     // ── Links ──────────────────────────────────────────────────────────────────
 
     public List<StoredLink> listLinks(String parentTenancyId, String childTenancyId, String feature,
                                       String lifecycleState, String sortOrder) {
         if (sortOrder != null && !SORT_ORDERS.contains(sortOrder)) {
             throw OciException.invalidParameter("Invalid sortOrder: " + sortOrder);
+        }
+        if (lifecycleState != null && !LINK_LIFECYCLE_STATES.contains(lifecycleState)) {
+            throw OciException.invalidParameter("Invalid lifecycleState: " + lifecycleState);
         }
         Comparator<StoredLink> order = Comparator.comparing(StoredLink::getTimeCreated)
                 .thenComparing(StoredLink::getId);
@@ -237,6 +297,19 @@ public class OrganizationsService {
 
     public StoredLink getLink(String linkId) {
         return TenancyAwareStorageBackend.getIn(links, ownerPartition(), linkId).orElseThrow(() -> notFound("link", linkId));
+    }
+
+    /** Only the parent tenancy can terminate a link. Returns the work request id. */
+    public synchronized String deleteLink(String linkId, String ifMatch) {
+        String parentId = ociContext.tenancyId();
+        StoredLink link = TenancyAwareStorageBackend.getIn(links, parentId, linkId)
+                .orElseThrow(() -> notFound("link", linkId));
+        Etags.checkIfMatch(ifMatch, link.getEtag());
+        requireState(link.getLifecycleState(), "ACTIVE", "link " + linkId, "terminated");
+        terminate(parentId, link, Instant.now().toString());
+        LOG.infov("deleteLink {0}", linkId);
+        return workRequests.succeeded(WR_SERVICE, "TERMINATE_LINK", parentId,
+                List.of(WorkRequestService.resource("link", "DELETED", linkId, null)));
     }
 
     public String tenancyName(String tenancyId) {
@@ -319,6 +392,43 @@ public class OrganizationsService {
 
     private static String membershipKey(String organizationId, String tenancyId) {
         return organizationId + ":" + tenancyId;
+    }
+
+    /**
+     * The membership of {@code tenancyId} in the organization {@code parentId} owns. A caller
+     * that owns no organization, or a tenancy outside it, is not found; the parent itself
+     * cannot be terminated or restored through its organization.
+     */
+    private StoredOrganizationTenancy childMembership(String parentId, String tenancyId) {
+        StoredOrganization organization = TenancyAwareStorageBackend.scanTenancy(organizations, parentId).stream()
+                .findFirst()
+                .orElseThrow(() -> notFound("tenancy", tenancyId));
+        StoredOrganizationTenancy membership = findMembership(parentId, organization.getId(), tenancyId)
+                .orElseThrow(() -> notFound("tenancy", tenancyId));
+        if (!"CHILD".equals(membership.getRole())) {
+            throw OciException.invalidParameter("Tenancy " + tenancyId + " is not a child tenancy of the organization");
+        }
+        return membership;
+    }
+
+    private List<StoredLink> linksOfChild(String parentId, String childTenancyId) {
+        return TenancyAwareStorageBackend.scanTenancy(links, parentId).stream()
+                .filter(l -> childTenancyId.equals(l.getChildTenancyId()))
+                .toList();
+    }
+
+    private void terminate(String parentId, StoredLink link, String now) {
+        link.setLifecycleState("TERMINATED");
+        link.setTimeTerminated(now);
+        link.setTimeUpdated(now);
+        link.setEtag(Etags.newEtag());
+        TenancyAwareStorageBackend.putIn(links, parentId, link.getId(), link);
+    }
+
+    private static void requireState(String actual, String expected, String resource, String action) {
+        if (!expected.equals(actual)) {
+            throw OciException.conflict("The " + resource + " is " + actual + " and cannot be " + action);
+        }
     }
 
     private static void requireNonBlank(String value, String name) {

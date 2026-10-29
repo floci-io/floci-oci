@@ -212,4 +212,107 @@ class OrganizationsServiceTest {
         OciException e = assertThrows(OciException.class, () -> service.getOrganization(organizationId));
         assertEquals(404, e.getHttpStatus());
     }
+
+    @Test
+    void deleteOrganizationTenancyTerminatesTheChildAndItsLinks() {
+        String child = createChild("child", "us-ashburn-1", List.of("SUBSCRIPTION_SHARING"));
+        String organizationId = service.listOrganizations(PARENT).getFirst().getId();
+
+        String workRequestId = service.deleteOrganizationTenancy(child, null);
+
+        StoredWorkRequest wr = workRequests.get(workRequestId);
+        assertEquals("TERMINATE_ORGANIZATION_TENANCY", wr.getOperationType());
+        assertEquals("SUCCEEDED", wr.getStatus());
+        StoredOrganizationTenancy membership = service.getOrganizationTenancy(organizationId, child);
+        assertEquals("DELETED", membership.getLifecycleState());
+        assertTrue(membership.getTimeLeft() != null);
+        assertTrue(service.listLinks(null, child, null, null, null).stream()
+                .allMatch(l -> "TERMINATED".equals(l.getLifecycleState()) && l.getTimeTerminated() != null));
+        assertTrue(tenancies.find(child).isPresent(), "the child stays registered so it can be restored");
+    }
+
+    @Test
+    void restoreOrganizationTenancyBringsBackOnlyTheLinksItsTerminationEnded() {
+        String child = createChild("child", "us-ashburn-1", List.of("SUBSCRIPTION_SHARING"));
+        String organizationId = service.listOrganizations(PARENT).getFirst().getId();
+        StoredLink sharing = service.listLinks(null, child, "SUBSCRIPTION_SHARING", null, null).getFirst();
+        service.deleteLink(sharing.getId(), null);
+        service.deleteOrganizationTenancy(child, null);
+
+        String workRequestId = service.restoreOrganizationTenancy(child, null);
+
+        assertEquals("RESTORE_TENANCY", workRequests.get(workRequestId).getOperationType());
+        StoredOrganizationTenancy membership = service.getOrganizationTenancy(organizationId, child);
+        assertEquals("ACTIVE", membership.getLifecycleState());
+        assertEquals(null, membership.getTimeLeft());
+        assertEquals("ACTIVE", service.listLinks(null, child, "CORE", null, null).getFirst().getLifecycleState());
+        assertEquals("TERMINATED", service.getLink(sharing.getId()).getLifecycleState());
+    }
+
+    @Test
+    void terminationAndRestoreCheckTheLifecycleStateAndEtag() {
+        String child = createChild("child", "us-ashburn-1", null);
+
+        OciException notDeleted = assertThrows(OciException.class, () -> service.restoreOrganizationTenancy(child, null));
+        assertEquals(409, notDeleted.getHttpStatus());
+        assertEquals("Conflict", notDeleted.getCode());
+
+        OciException stale = assertThrows(OciException.class, () -> service.deleteOrganizationTenancy(child, "stale"));
+        assertEquals(412, stale.getHttpStatus());
+
+        service.deleteOrganizationTenancy(child, null);
+        OciException again = assertThrows(OciException.class, () -> service.deleteOrganizationTenancy(child, null));
+        assertEquals("Conflict", again.getCode());
+    }
+
+    @Test
+    void theParentTenancyCannotBeTerminatedThroughItsOrganization() {
+        createChild("child", "us-ashburn-1", null);
+
+        OciException e = assertThrows(OciException.class, () -> service.deleteOrganizationTenancy(PARENT, null));
+
+        assertEquals(400, e.getHttpStatus());
+        assertEquals("InvalidParameter", e.getCode());
+    }
+
+    @Test
+    void onlyTheParentCanTerminateAChildOrALink() {
+        String child = createChild("child", "us-ashburn-1", null);
+        String linkId = service.listLinks(null, child, null, null, null).getFirst().getId();
+        caller.set(child);
+
+        assertEquals(404, assertThrows(OciException.class,
+                () -> service.deleteOrganizationTenancy(child, null)).getHttpStatus());
+        assertEquals(404, assertThrows(OciException.class,
+                () -> service.deleteLink(linkId, null)).getHttpStatus());
+        assertEquals(404, assertThrows(OciException.class,
+                () -> service.deleteOrganizationTenancy("ocid1.tenancy.oc1..unknown", null)).getHttpStatus());
+    }
+
+    @Test
+    void deleteLinkTerminatesTheLinkOnce() {
+        String child = createChild("child", "us-ashburn-1", null);
+        StoredLink link = service.listLinks(null, child, null, null, null).getFirst();
+
+        OciException stale = assertThrows(OciException.class, () -> service.deleteLink(link.getId(), "stale"));
+        assertEquals(412, stale.getHttpStatus());
+
+        String workRequestId = service.deleteLink(link.getId(), link.getEtag());
+
+        assertEquals("TERMINATE_LINK", workRequests.get(workRequestId).getOperationType());
+        StoredLink terminated = service.getLink(link.getId());
+        assertEquals("TERMINATED", terminated.getLifecycleState());
+        assertEquals(1, service.listLinks(null, null, null, "TERMINATED", null).size());
+        assertEquals("Conflict", assertThrows(OciException.class,
+                () -> service.deleteLink(link.getId(), null)).getCode());
+    }
+
+    @Test
+    void listLinksRejectsAnUnknownLifecycleState() {
+        OciException e = assertThrows(OciException.class,
+                () -> service.listLinks(null, null, null, "DELETED", null));
+
+        assertEquals(400, e.getHttpStatus());
+        assertEquals("InvalidParameter", e.getCode());
+    }
 }

@@ -20,6 +20,8 @@ public class StoredLink {
     private String timeTerminated;
     private String feature;
     private String etag;
+    /** Internal: terminated by DeleteOrganizationTenancy, so RestoreOrganizationTenancy brings it back. */
+    private Boolean terminatedWithTenancy;
 
     /** The OCI {@code Link} wire shape. */
     public Map<String, Object> toWire() {
@@ -109,5 +111,13 @@ public class StoredLink {
 
     public void setEtag(String etag) {
         this.etag = etag;
+    }
+
+    public Boolean getTerminatedWithTenancy() {
+        return terminatedWithTenancy;
+    }
+
+    public void setTerminatedWithTenancy(Boolean terminatedWithTenancy) {
+        this.terminatedWithTenancy = terminatedWithTenancy;
     }
 }

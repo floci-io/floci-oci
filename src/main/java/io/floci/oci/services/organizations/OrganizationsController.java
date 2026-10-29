@@ -10,6 +10,7 @@ import io.floci.oci.services.organizations.model.StoredOrganizationTenancy;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.Consumes;
+import jakarta.ws.rs.DELETE;
 import jakarta.ws.rs.GET;
 import jakarta.ws.rs.HeaderParam;
 import jakarta.ws.rs.POST;
@@ -104,6 +105,21 @@ public class OrganizationsController {
         return Response.ok(membership.toWire()).header("etag", membership.getEtag()).build();
     }
 
+    @DELETE
+    @Path("/organizationTenancies/{organizationTenancyId}")
+    public Response deleteOrganizationTenancy(@PathParam("organizationTenancyId") String tenancyId,
+                                              @HeaderParam("if-match") String ifMatch) {
+        return accepted(service.deleteOrganizationTenancy(tenancyId, ifMatch));
+    }
+
+    @POST
+    @Path("/organizationTenancies/{organizationTenancyId}/actions/restore")
+    @Consumes(MediaType.WILDCARD)
+    public Response restoreOrganizationTenancy(@PathParam("organizationTenancyId") String tenancyId,
+                                               @HeaderParam("if-match") String ifMatch) {
+        return accepted(service.restoreOrganizationTenancy(tenancyId, ifMatch));
+    }
+
     // ── Links ──────────────────────────────────────────────────────────────────
 
     @GET
@@ -124,6 +140,13 @@ public class OrganizationsController {
     public Response getLink(@PathParam("linkId") String linkId) {
         StoredLink link = service.getLink(linkId);
         return Response.ok(link.toWire()).header("etag", link.getEtag()).build();
+    }
+
+    @DELETE
+    @Path("/links/{linkId}")
+    public Response deleteLink(@PathParam("linkId") String linkId,
+                               @HeaderParam("if-match") String ifMatch) {
+        return accepted(service.deleteLink(linkId, ifMatch));
     }
 
     @GET
