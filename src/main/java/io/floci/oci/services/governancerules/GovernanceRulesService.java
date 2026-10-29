@@ -26,6 +26,7 @@ import jakarta.enterprise.event.Observes;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -34,6 +35,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 import java.util.function.BooleanSupplier;
 import java.util.function.Function;
 
@@ -468,7 +470,7 @@ public class GovernanceRulesService implements RegionRestriction, OrganizationMe
                 .toList();
     }
 
-    /** An enforced governance rule's wire shape and its etag (the attachment's). */
+    /** An enforced governance rule's wire shape and its etag. */
     public record Enforced(Map<String, Object> wire, String etag) {
     }
 
@@ -480,8 +482,17 @@ public class GovernanceRulesService implements RegionRestriction, OrganizationMe
         return activeAttachmentsOf(parentId.get(), tenancyId).stream()
                 .flatMap(attachment -> TenancyAwareStorageBackend.getIn(rules, parentId.get(),
                                 attachment.getGovernanceRuleId()).stream()
-                        .map(rule -> new Enforced(enforcedWire(attachment, rule), attachment.getEtag())))
+                        .map(rule -> new Enforced(enforcedWire(attachment, rule), enforcedEtag(attachment, rule))))
                 .toList();
+    }
+
+    /**
+     * The enforced rule changes when its rule is edited or its attachment changes state, so its
+     * etag is derived from both: stable across reads, new whenever either side changes.
+     */
+    private static String enforcedEtag(StoredTenancyAttachment attachment, StoredGovernanceRule rule) {
+        byte[] both = (rule.getEtag() + ":" + attachment.getEtag()).getBytes(StandardCharsets.UTF_8);
+        return UUID.nameUUIDFromBytes(both).toString().replace("-", "");
     }
 
     private static Map<String, Object> enforcedWire(StoredTenancyAttachment attachment, StoredGovernanceRule rule) {

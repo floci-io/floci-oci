@@ -22,6 +22,7 @@ import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -242,5 +243,26 @@ class GovernanceRulesServiceTest {
         assertTrue(service.listTenancyAttachments(PARENT, null, null, null, child, null, null).isEmpty());
         service.membershipsChanged(PARENT);
         assertEquals(1, service.listTenancyAttachments(PARENT, null, null, "ACTIVE", child, null, null).size());
+    }
+
+    @Test
+    void theEnforcedRuleEtagChangesWhenTheRuleChanges() {
+        String child = createChild("child");
+        StoredGovernanceRule rule = allowedRegions(List.of("us-ashburn-1"));
+        service.createInclusionCriterion(rule.getId(), "ALL", null, null);
+        caller.set(child);
+        String enforcedId = (String) service.listEnforcedGovernanceRules(child, null, null, null, null, null)
+                .getFirst().get("id");
+        String before = service.getEnforcedGovernanceRule(enforcedId).etag();
+        assertEquals(before, service.getEnforcedGovernanceRule(enforcedId).etag(), "stable across reads");
+
+        caller.set(PARENT);
+        service.updateGovernanceRule(rule.getId(), null, null,
+                Map.of("displayName", "regions", "regions", List.of("us-phoenix-1")), null, null, null, null);
+        caller.set(child);
+
+        GovernanceRulesService.Enforced after = service.getEnforcedGovernanceRule(enforcedId);
+        assertNotEquals(before, after.etag());
+        assertEquals(List.of("us-phoenix-1"), ((Map<?, ?>) after.wire().get("template")).get("regions"));
     }
 }

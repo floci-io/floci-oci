@@ -35,7 +35,8 @@ the other services.
   child. Another compartment is `400 InvalidParameter`.
 - `CancelWorkRequest` on a finished work request, and changing a `DELETED` rule or inclusion
   criterion, are `409 Conflict`.
-- `GetEnforcedGovernanceRule` returns an `etag`.
+- `GetEnforcedGovernanceRule` returns an `etag` that changes whenever the rule is edited or its
+  tenancy attachment changes.
 
 ## Enforcement
 
