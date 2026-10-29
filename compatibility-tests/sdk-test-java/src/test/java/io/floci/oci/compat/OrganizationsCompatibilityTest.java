@@ -10,11 +10,16 @@ import com.oracle.bmc.tenantmanagercontrolplane.model.CreateChildTenancyDetails;
 import com.oracle.bmc.tenantmanagercontrolplane.model.LinkSummary;
 import com.oracle.bmc.tenantmanagercontrolplane.model.OrganizationTenancySummary;
 import com.oracle.bmc.tenantmanagercontrolplane.requests.CreateChildTenancyRequest;
+import com.oracle.bmc.tenantmanagercontrolplane.requests.DeleteLinkRequest;
+import com.oracle.bmc.tenantmanagercontrolplane.requests.DeleteOrganizationTenancyRequest;
+import com.oracle.bmc.tenantmanagercontrolplane.requests.GetLinkRequest;
 import com.oracle.bmc.tenantmanagercontrolplane.requests.GetOrganizationRequest;
+import com.oracle.bmc.tenantmanagercontrolplane.requests.GetOrganizationTenancyRequest;
 import com.oracle.bmc.tenantmanagercontrolplane.requests.GetWorkRequestRequest;
 import com.oracle.bmc.tenantmanagercontrolplane.requests.ListLinksRequest;
 import com.oracle.bmc.tenantmanagercontrolplane.requests.ListOrganizationTenanciesRequest;
 import com.oracle.bmc.tenantmanagercontrolplane.requests.ListOrganizationsRequest;
+import com.oracle.bmc.tenantmanagercontrolplane.requests.RestoreOrganizationTenancyRequest;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -103,5 +108,50 @@ class OrganizationsCompatibilityTest {
                     .compartmentId(child).compartmentIdInSubtree(true).build()).getItems();
             assertThat(compartments).allSatisfy(c -> assertThat(c.getCompartmentId()).isEqualTo(child));
         }
+    }
+
+    private static String workRequestOperation(String workRequestId) {
+        var workRequest = workRequests.getWorkRequest(GetWorkRequestRequest.builder()
+                .workRequestId(workRequestId).build()).getWorkRequest();
+        assertThat(workRequest.getStatus().getValue()).isEqualTo("SUCCEEDED");
+        return workRequest.getOperationType().getValue();
+    }
+
+    @Test
+    void deleteAndRestoreAChildTenancy() {
+        String child = createChild("compat-terminate-" + System.nanoTime());
+        String organizationId = organizations.listOrganizations(ListOrganizationsRequest.builder()
+                .compartmentId(TENANCY).build()).getOrganizationCollection().getItems().get(0).getId();
+
+        var deleted = organizations.deleteOrganizationTenancy(DeleteOrganizationTenancyRequest.builder()
+                .organizationTenancyId(child).build());
+        assertThat(workRequestOperation(deleted.getOpcWorkRequestId())).isEqualTo("TERMINATE_ORGANIZATION_TENANCY");
+        var member = organizations.getOrganizationTenancy(GetOrganizationTenancyRequest.builder()
+                .organizationId(organizationId).tenancyId(child).build()).getOrganizationTenancy();
+        assertThat(member.getLifecycleState().getValue()).isEqualTo("DELETED");
+        assertThat(member.getTimeLeft()).isNotNull();
+
+        var restored = organizations.restoreOrganizationTenancy(RestoreOrganizationTenancyRequest.builder()
+                .organizationTenancyId(child).build());
+        assertThat(workRequestOperation(restored.getOpcWorkRequestId())).isEqualTo("RESTORE_TENANCY");
+        member = organizations.getOrganizationTenancy(GetOrganizationTenancyRequest.builder()
+                .organizationId(organizationId).tenancyId(child).build()).getOrganizationTenancy();
+        assertThat(member.getLifecycleState().getValue()).isEqualTo("ACTIVE");
+    }
+
+    @Test
+    void deleteLinkTerminatesIt() {
+        String child = createChild("compat-link-" + System.nanoTime());
+        String linkId = links.listLinks(ListLinksRequest.builder().childTenancyId(child).build())
+                .getLinkCollection().getItems().stream()
+                .filter(l -> "SUBSCRIPTION_SHARING".equals(l.getFeature()))
+                .findFirst().orElseThrow().getId();
+
+        var deleted = links.deleteLink(DeleteLinkRequest.builder().linkId(linkId).build());
+        assertThat(workRequestOperation(deleted.getOpcWorkRequestId())).isEqualTo("TERMINATE_LINK");
+
+        var link = links.getLink(GetLinkRequest.builder().linkId(linkId).build()).getLink();
+        assertThat(link.getLifecycleState().getValue()).isEqualTo("TERMINATED");
+        assertThat(link.getTimeTerminated()).isNotNull();
     }
 }

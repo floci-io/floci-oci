@@ -177,4 +177,85 @@ class OrganizationsRestIntegrationTest {
                 .statusCode(400)
                 .body("code", equalTo("MissingParameter"));
     }
+
+    @Test
+    void deleteAndRestoreOrganizationTenancy() {
+        String child = createChild("rest-terminate-" + System.nanoTime(), "us-ashburn-1");
+        String organizationId = given().queryParam("compartmentId", config.defaultTenancyId())
+            .when().get("/20230401/organizations")
+            .then().statusCode(200).extract().path("items[0].id");
+
+        String terminateId = given()
+            .when().delete("/20230401/organizationTenancies/" + child)
+            .then()
+                .statusCode(202)
+                .header("opc-request-id", notNullValue())
+                .header("opc-work-request-id", notNullValue())
+                .extract().header("opc-work-request-id");
+        given().when().get("/20230401/workRequests/" + terminateId)
+            .then().statusCode(200)
+                .body("operationType", equalTo("TERMINATE_ORGANIZATION_TENANCY"))
+                .body("status", equalTo("SUCCEEDED"));
+        given().when().get("/20230401/organizations/" + organizationId + "/tenancies/" + child)
+            .then().statusCode(200)
+                .body("lifecycleState", equalTo("DELETED"))
+                .body("timeLeft", notNullValue());
+        given().queryParam("childTenancyId", child).queryParam("lifecycleState", "ACTIVE")
+            .when().get("/20230401/links")
+            .then().statusCode(200).body("items.size()", equalTo(0));
+
+        given().when().post("/20230401/organizationTenancies/" + child + "/actions/restore")
+            .then()
+                .statusCode(202)
+                .header("opc-work-request-id", notNullValue());
+        given().when().get("/20230401/organizations/" + organizationId + "/tenancies/" + child)
+            .then().statusCode(200).body("lifecycleState", equalTo("ACTIVE"));
+
+        given().when().post("/20230401/organizationTenancies/" + child + "/actions/restore")
+            .then()
+                .statusCode(409)
+                .header("opc-request-id", notNullValue())
+                .body("code", equalTo("Conflict"));
+    }
+
+    @Test
+    void deleteLinkTerminatesIt() {
+        String child = createChild("rest-link-" + System.nanoTime(), "us-ashburn-1");
+        String linkId = given().queryParam("childTenancyId", child).queryParam("feature", "CORE")
+            .when().get("/20230401/links")
+            .then().statusCode(200).extract().path("items[0].id");
+
+        given().when().delete("/20230401/links/" + linkId)
+            .then()
+                .statusCode(202)
+                .header("opc-request-id", notNullValue())
+                .header("opc-work-request-id", notNullValue());
+
+        given().when().get("/20230401/links/" + linkId)
+            .then().statusCode(200)
+                .body("lifecycleState", equalTo("TERMINATED"))
+                .body("timeTerminated", notNullValue());
+    }
+
+    @Test
+    void unknownOrganizationTenancyAndLinkAre404() {
+        given().when().delete("/20230401/organizationTenancies/ocid1.tenancy.oc1..nobody")
+            .then()
+                .statusCode(404)
+                .body("code", equalTo("NotAuthorizedOrNotFound"));
+        given().when().delete("/20230401/links/ocid1.link.oc1..nolink")
+            .then()
+                .statusCode(404)
+                .body("code", equalTo("NotAuthorizedOrNotFound"));
+    }
+
+    @Test
+    void listLinksRejectsAnUnknownLifecycleState() {
+        given().queryParam("lifecycleState", "DELETED")
+            .when().get("/20230401/links")
+            .then()
+                .statusCode(400)
+                .header("opc-request-id", notNullValue())
+                .body("code", equalTo("InvalidParameter"));
+    }
 }

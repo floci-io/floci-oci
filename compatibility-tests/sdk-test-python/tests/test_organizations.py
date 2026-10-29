@@ -63,3 +63,32 @@ def test_child_tenancy_reports_its_own_home_region(sdk_config, organizations, wo
     tenancy = identity.get_tenancy(child).data
     assert tenancy.id == child
     assert tenancy.home_region_key == "IAD"
+
+
+def test_delete_and_restore_a_child_tenancy(organizations, work_requests):
+    child = create_child(organizations, work_requests, f"py-terminate-{time.time_ns()}")
+    organization_id = organizations.list_organizations(compartment_id=TENANCY).data.items[0].id
+
+    deleted = organizations.delete_organization_tenancy(child)
+    work_request = work_requests.get_work_request(deleted.headers["opc-work-request-id"]).data
+    assert work_request.operation_type == "TERMINATE_ORGANIZATION_TENANCY"
+    member = organizations.get_organization_tenancy(organization_id, child).data
+    assert member.lifecycle_state == "DELETED"
+    assert member.time_left is not None
+
+    restored = organizations.restore_organization_tenancy(child)
+    work_request = work_requests.get_work_request(restored.headers["opc-work-request-id"]).data
+    assert work_request.operation_type == "RESTORE_TENANCY"
+    assert organizations.get_organization_tenancy(organization_id, child).data.lifecycle_state == "ACTIVE"
+
+
+def test_delete_link_terminates_it(organizations, links, work_requests):
+    child = create_child(organizations, work_requests, f"py-link-{time.time_ns()}")
+    link_id = links.list_links(child_tenancy_id=child).data.items[0].id
+
+    deleted = links.delete_link(link_id)
+    work_request = work_requests.get_work_request(deleted.headers["opc-work-request-id"]).data
+    assert work_request.operation_type == "TERMINATE_LINK"
+    link = links.get_link(link_id).data
+    assert link.lifecycle_state == "TERMINATED"
+    assert link.time_terminated is not None

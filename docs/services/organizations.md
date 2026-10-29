@@ -11,8 +11,8 @@ serves it on port 4599 with the other services.
 |---|---|
 | Child tenancies | CreateChildTenancy |
 | Organizations | ListOrganizations, GetOrganization, UpdateOrganization |
-| Organization tenancies | ListOrganizationTenancies, GetOrganizationTenancy |
-| Links | ListLinks, GetLink, GetLinkWithTenancyNames |
+| Organization tenancies | ListOrganizationTenancies, GetOrganizationTenancy, DeleteOrganizationTenancy, RestoreOrganizationTenancy |
+| Links | ListLinks, GetLink, GetLinkWithTenancyNames, DeleteLink |
 | Work requests | Get, List, errors, logs (`/20230401/workRequests`) |
 
 ## How isolation works
@@ -27,14 +27,23 @@ no region (`localhost:4599`) lands in the signing tenancy's home region. Like an
 child can use other regions only after subscribing to them.
 
 Organizations, organization tenancies and links are stored with the parent tenancy, so a child
-lists the same organization as its parent. Only the parent can update it or create more
-children: `CreateChildTenancy` signed by a child is `404 NotAuthorizedOrNotFound`.
+lists the same organization as its parent. Only the parent can update it, create more
+children, terminate or restore a child, or terminate a link: the same calls signed by a child
+are `404 NotAuthorizedOrNotFound`.
 
 ## Wire notes
 
-- `CreateChildTenancy` and `UpdateOrganization` return `202` with an `opc-work-request-id`
-  header and no body. The work request is already `SUCCEEDED`; its `resources[0].identifier`
-  is the new child tenancy OCID.
+- `CreateChildTenancy`, `UpdateOrganization`, `DeleteOrganizationTenancy`,
+  `RestoreOrganizationTenancy` and `DeleteLink` return `202` with an `opc-work-request-id`
+  header and no body. The work request is already `SUCCEEDED`; for `CreateChildTenancy` its
+  `resources[0].identifier` is the new child tenancy OCID.
+- The `organizationTenancyId` path parameter of `DeleteOrganizationTenancy` and
+  `RestoreOrganizationTenancy` is the child's tenancy OCID. The parent tenancy cannot be
+  terminated this way (`400 InvalidParameter`).
+- Terminating needs an `ACTIVE` member, restoring a `DELETED` one, and `DeleteLink` an `ACTIVE`
+  link; anything else is `409 Conflict`. All three honour `if-match`.
+- `ListLinks` rejects a `lifecycleState` outside `CREATING`, `ACTIVE`, `INACTIVE`, `UPDATING`,
+  `FAILED`, `TERMINATED` with `400 InvalidParameter`.
 - Lists are wrapped (`{"items":[…]}`) and paged with `opc-next-page`.
 - `GetOrganization`, `GetOrganizationTenancy` and `GetLink` return an `etag`;
   `UpdateOrganization` honours `if-match`.
@@ -58,11 +67,19 @@ The OCI SDKs leave these open, so floci-oci picks:
   `ocid1.link.<realm>..…`. A child tenancy's OCID uses the realm of its home region.
 - When no `subscriptionId` is given, the organization gets a synthetic
   `ocid1.organizationssubscription…` default subscription.
+- Termination is immediate and reversible. `DeleteOrganizationTenancy` moves the member to
+  `DELETED` with `timeLeft` set and terminates its active links, under the work request type
+  `TERMINATE_ORGANIZATION_TENANCY`. The child tenancy stays registered and its data is kept, so
+  requests signed with it still work. `RestoreOrganizationTenancy` (`RESTORE_TENANCY`) makes it
+  `ACTIVE` again and reactivates the links its termination ended, but not links terminated on
+  their own before. Real OCI does not document the termination lifecycle or how long a
+  terminated tenancy stays restorable.
+- `DeleteLink` moves the link to `TERMINATED` with `timeTerminated` set (`TERMINATE_LINK`),
+  for any feature, `CORE` included; the child stays a member of the organization.
 
 ## Not implemented yet
 
-DeleteOrganizationTenancy, RestoreOrganizationTenancy, ApproveForTransfer,
-UnapproveForTransfer, DeleteLink, link features, invitations, governance (including governance
+ApproveForTransfer, UnapproveForTransfer, link features, invitations, governance (including governance
 rules), domains, subscriptions and orders. The child tenancy limit is not enforced, and no
 administrator user or policy is created in the child.
 
