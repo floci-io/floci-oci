@@ -11,6 +11,7 @@ import java.io.IOException;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
@@ -98,6 +99,48 @@ class TlsProxyServerTest {
         // AWS-HTTPS port: same protocol detection as the public port.
         assertEquals("TLS", roundTrip(awsHttpsPort, TLS_HANDSHAKE));
         assertEquals("PLAIN", roundTrip(awsHttpsPort, (byte) 'G'));
+    }
+
+    @Test
+    @Timeout(20)
+    void tlsConnectionWaitsForALateBackend() throws Exception {
+        int httpBe = freePort();
+        int httpsBe = freePort();
+        int publicPort = freePort();
+        httpBackend = startMarkerBackend(httpBe, "PLAIN");
+        proxy = new TlsProxyServer(vertx, configWith(true, publicPort, 0), httpBe, httpsBe);
+        awaitListening(publicPort);
+
+        // The HTTPS backend is still starting when the handshake arrives, as right after start-up.
+        CompletableFuture<NetServer> lateBackend = CompletableFuture.supplyAsync(() -> {
+            try {
+                Thread.sleep(300);
+                return startMarkerBackend(httpsBe, "TLS");
+            } catch (Exception e) {
+                throw new IllegalStateException(e);
+            }
+        });
+        try {
+            assertEquals("TLS", roundTrip(publicPort, TLS_HANDSHAKE));
+        } finally {
+            httpsBackend = lateBackend.get(5, TimeUnit.SECONDS);
+        }
+    }
+
+    @Test
+    @Timeout(20)
+    void connectionClosesWhenTheBackendNeverListens() throws Exception {
+        int publicPort = freePort();
+        proxy = new TlsProxyServer(vertx, configWith(true, publicPort, 0), freePort(), freePort(),
+                Duration.ofMillis(200));
+        awaitListening(publicPort);
+
+        try (Socket sock = new Socket("127.0.0.1", publicPort)) {
+            sock.setSoTimeout(5_000);
+            sock.getOutputStream().write(new byte[]{TLS_HANDSHAKE});
+            sock.getOutputStream().flush();
+            assertEquals(-1, sock.getInputStream().read(), "the proxy closes once the wait runs out");
+        }
     }
 
     @Test
