@@ -199,6 +199,8 @@ public interface EmulatorConfig {
 
         OrganizationsServiceConfig organizations();
 
+        GovernanceRulesServiceConfig governancerules();
+
         PsqlServiceConfig psql();
 
         interface IdentityServiceConfig {
@@ -245,6 +247,11 @@ public interface EmulatorConfig {
         }
 
         interface OrganizationsServiceConfig {
+            @WithDefault("true")
+            boolean enabled();
+        }
+
+        interface GovernanceRulesServiceConfig {
             @WithDefault("true")
             boolean enabled();
         }

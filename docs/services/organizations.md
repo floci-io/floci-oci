@@ -14,6 +14,7 @@ serves it on port 4599 with the other services.
 | Organization tenancies | ListOrganizationTenancies, GetOrganizationTenancy, DeleteOrganizationTenancy, RestoreOrganizationTenancy |
 | Links | ListLinks, GetLink, GetLinkWithTenancyNames, DeleteLink |
 | Invitations | CreateSenderInvitation, GetSenderInvitation, ListSenderInvitations, UpdateSenderInvitation, CancelSenderInvitation, GetRecipientInvitation, ListRecipientInvitations, UpdateRecipientInvitation, AcceptRecipientInvitation, IgnoreRecipientInvitation |
+| Governance | AddGovernance, RemoveGovernance |
 | Work requests | Get, List, errors, logs (`/20230401/workRequests`) |
 
 ## How isolation works
@@ -83,6 +84,13 @@ The OCI SDKs leave these open, so floci-oci picks:
 - `DeleteLink` moves the link to `TERMINATED` with `timeTerminated` set (`TERMINATE_LINK`),
   for any feature, `CORE` included; the child stays a member of the organization.
 
+- `AddGovernance` and `RemoveGovernance` set a member's `governanceStatus` to `OPTED_IN` or
+  `OPTED_OUT`. The parent or the member itself may call them; asking for the status a member
+  already has is `409 Conflict`; the member must be an `ACTIVE` child (the parent is
+  `400 InvalidParameter`). Their work requests use the types `SELF_OPT_IN` and
+  `SELF_OPT_OUT`, the closest values in the SDK enum (it names no add or remove type). Only
+  members `OPTED_IN` are governed by the parent's [governance rules](governance-rules.md).
+
 ### Invitations
 
 The SDKs give the shapes but not the flow, so floci-oci picks:
@@ -106,9 +114,9 @@ The SDKs give the shapes but not the flow, so floci-oci picks:
 
 ## Not implemented yet
 
-ApproveForTransfer, UnapproveForTransfer, link features, governance (including governance
-rules), domains, subscriptions and orders. The child tenancy limit is not enforced, and no
-administrator user or policy is created in the child.
+ApproveForTransfer, UnapproveForTransfer, link features, domains, subscriptions and orders.
+The child tenancy limit is not enforced, and no administrator user or policy is created in the
+child.
 
 ## Quickstart
 

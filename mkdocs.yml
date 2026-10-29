@@ -74,4 +74,5 @@ nav:
     - Container Engine (OKE): services/containerengine.md
     - Database with PostgreSQL: services/psql.md
     - Organizations: services/organizations.md
+    - Governance Rules: services/governance-rules.md
   - Contributing: contributing.md

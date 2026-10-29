@@ -78,6 +78,20 @@ public final class EmulatorFixture {
         return client;
     }
 
+    public static com.oracle.bmc.governancerulescontrolplane.GovernanceRuleClient governanceRulesAs(String tenancyId) {
+        var client = com.oracle.bmc.governancerulescontrolplane.GovernanceRuleClient.builder()
+                .region(Region.US_ASHBURN_1).build(buildAuth(tenancyId));
+        client.setEndpoint(ENDPOINT);
+        return client;
+    }
+
+    public static com.oracle.bmc.governancerulescontrolplane.WorkRequestClient governanceWorkRequestsAs(String tenancyId) {
+        var client = com.oracle.bmc.governancerulescontrolplane.WorkRequestClient.builder()
+                .region(Region.US_ASHBURN_1).build(buildAuth(tenancyId));
+        client.setEndpoint(ENDPOINT);
+        return client;
+    }
+
     public static com.oracle.bmc.tenantmanagercontrolplane.WorkRequestClient organizationsWorkRequests() {
         var client = com.oracle.bmc.tenantmanagercontrolplane.WorkRequestClient.builder()
                 .region(Region.US_ASHBURN_1).build(AUTH);
