@@ -3,6 +3,9 @@ package io.floci.oci.core.storage;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -95,5 +98,93 @@ class TenancyAwareStorageBackendTest {
         assertEquals(other, found.tenancyId());
         assertEquals("ashburn", found.value());
         assertTrue(TenancyAwareStorageBackend.findInRegion(store, "us-ashburn-1", "elsewhere", TENANCY).isEmpty());
+    }
+
+    @Test
+    void regionOfReadsTheRegionOfARegionalPartition() {
+        assertEquals(Optional.of("us-phoenix-1"), TenancyAwareStorageBackend.regionOf(
+                TenancyAwareStorageBackend.regionalPartition(TENANCY, "us-phoenix-1")));
+        assertTrue(TenancyAwareStorageBackend.regionOf(TENANCY).isEmpty());
+    }
+
+    @Test
+    void putAllInAndDeleteAllInChangeOnlyTheGivenPartition() {
+        TenancyAwareStorageBackend<String> store = new TenancyAwareStorageBackend<>(
+                new InMemoryStorage<>(), () -> TENANCY + ":us-ashburn-1");
+        String phoenix = TenancyAwareStorageBackend.regionalPartition(TENANCY, "us-phoenix-1");
+        store.put("q1", "ashburn");
+
+        TenancyAwareStorageBackend.putAllIn(store, phoenix, Map.of("q1", "phoenix", "q2", "phoenix"));
+        TenancyAwareStorageBackend.deleteAllIn(store, phoenix, List.of("q1"));
+
+        assertEquals("ashburn", store.get("q1").orElseThrow());
+        assertEquals(Set.of("q2"), store.keysForTenancy(phoenix));
+    }
+
+    @Test
+    void putAllInAndDeleteAllInTreatAPlainStoreAsOnePartition() {
+        InMemoryStorage<String, String> plain = new InMemoryStorage<>();
+
+        TenancyAwareStorageBackend.putAllIn(plain, "ignored", Map.of("q1", "a", "q2", "b"));
+        TenancyAwareStorageBackend.deleteAllIn(plain, "ignored", List.of("q1"));
+
+        assertEquals(Set.of("q2"), plain.keys());
+    }
+
+    @Test
+    void scanAllReadsEveryPartition() {
+        TenancyAwareStorageBackend<String> store = new TenancyAwareStorageBackend<>(
+                new InMemoryStorage<>(), () -> TENANCY + ":us-ashburn-1");
+        store.put("q1", "ashburn");
+        TenancyAwareStorageBackend.putIn(store, "ocid1.tenancy.oc1..other:us-phoenix-1", "q2", "phoenix");
+        InMemoryStorage<String, String> plain = new InMemoryStorage<>();
+        plain.put("q1", "plain");
+
+        assertEquals(Set.of("ashburn", "phoenix"), Set.copyOf(TenancyAwareStorageBackend.scanAll(store)));
+        assertEquals(List.of("plain"), TenancyAwareStorageBackend.scanAll(plain));
+    }
+
+    @Test
+    void findInTenancyLooksAcrossRegionsButNotAcrossTenancies() {
+        String other = "ocid1.tenancy.oc1..other";
+        TenancyAwareStorageBackend<String> store = new TenancyAwareStorageBackend<>(
+                new InMemoryStorage<>(), () -> TENANCY + ":us-ashburn-1");
+        TenancyAwareStorageBackend.putIn(store, TENANCY + ":us-phoenix-1", "cluster", "phoenix");
+        TenancyAwareStorageBackend.putIn(store, other + ":us-ashburn-1", "foreign", "other");
+
+        assertEquals("phoenix", TenancyAwareStorageBackend.findInTenancy(store, TENANCY, "cluster").orElseThrow());
+        assertTrue(TenancyAwareStorageBackend.findInTenancy(store, TENANCY, "foreign").isEmpty());
+    }
+
+    @Test
+    void findInTenancyTreatsAPlainStoreAsOnePartition() {
+        InMemoryStorage<String, String> plain = new InMemoryStorage<>();
+        plain.put("cluster", "value");
+
+        assertEquals("value", TenancyAwareStorageBackend.findInTenancy(plain, TENANCY, "cluster").orElseThrow());
+    }
+
+    @Test
+    void entriesByPartitionGroupsEntriesByPartition() {
+        TenancyAwareStorageBackend<String> store = new TenancyAwareStorageBackend<>(
+                new InMemoryStorage<>(), () -> TENANCY + ":us-ashburn-1");
+        store.put("q1", "ashburn");
+        TenancyAwareStorageBackend.putIn(store, TENANCY + ":us-phoenix-1", "q2", "phoenix");
+
+        assertEquals(Map.of(TENANCY + ":us-ashburn-1", Map.of("q1", "ashburn"),
+                        TENANCY + ":us-phoenix-1", Map.of("q2", "phoenix")),
+                TenancyAwareStorageBackend.entriesByPartition(store));
+    }
+
+    @Test
+    void entriesByPartitionOfAPlainStoreIsEmptyUnlessASolePartitionIsNamed() {
+        InMemoryStorage<String, String> plain = new InMemoryStorage<>();
+        plain.put("q1", "value");
+
+        assertTrue(TenancyAwareStorageBackend.entriesByPartition(plain).isEmpty());
+        assertEquals(Map.of("sole", Map.of("q1", "value")),
+                TenancyAwareStorageBackend.entriesByPartition(plain, "sole"));
+        assertTrue(TenancyAwareStorageBackend.entriesByPartition(new InMemoryStorage<String, String>(), "sole")
+                .isEmpty());
     }
 }
