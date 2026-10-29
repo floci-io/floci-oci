@@ -145,4 +145,34 @@ class InvitationsRestIntegrationTest {
             .when().get("/20230401/senderInvitations")
             .then().statusCode(400).body("code", equalTo("InvalidParameter"));
     }
+
+    @Test
+    void tagsMustHaveTheSdkShape() {
+        String sender = tenancy("sender");
+
+        given().header("Authorization", signedAs(sender)).contentType("application/json")
+                .body(Map.of("compartmentId", sender, "recipientTenancyId", tenancy("recipient"),
+                        "freeformTags", Map.of("team", Map.of("name", "dev"))))
+            .when().post("/20230401/senderInvitations")
+            .then()
+                .statusCode(400)
+                .header("opc-request-id", notNullValue())
+                .body("code", equalTo("InvalidParameter"));
+        given().header("Authorization", signedAs(sender)).contentType("application/json")
+                .body(Map.of("compartmentId", sender, "recipientTenancyId", tenancy("recipient"),
+                        "definedTags", Map.of("Operations", "text")))
+            .when().post("/20230401/senderInvitations")
+            .then()
+                .statusCode(400)
+                .body("code", equalTo("InvalidParameter"));
+        given().header("Authorization", signedAs(sender)).contentType("application/json")
+                .body(Map.of("compartmentId", sender, "recipientTenancyId", tenancy("recipient"),
+                        "freeformTags", Map.of("team", "dev"),
+                        "definedTags", Map.of("Operations", Map.of("CostCenter", "42"))))
+            .when().post("/20230401/senderInvitations")
+            .then()
+                .statusCode(200)
+                .body("freeformTags.team", equalTo("dev"))
+                .body("definedTags.Operations.CostCenter", equalTo("42"));
+    }
 }

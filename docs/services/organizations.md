@@ -106,7 +106,7 @@ The SDKs give the shapes but not the flow, so floci-oci picks:
 
 ## Not implemented yet
 
-ApproveForTransfer, UnapproveForTransfer, link features, invitations, governance (including governance
+ApproveForTransfer, UnapproveForTransfer, link features, governance (including governance
 rules), domains, subscriptions and orders. The child tenancy limit is not enforced, and no
 administrator user or policy is created in the child.
 

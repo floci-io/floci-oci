@@ -18,6 +18,7 @@ import jakarta.ws.rs.QueryParam;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -185,13 +186,43 @@ public class InvitationsController {
         throw OciException.invalidParameter("Invalid " + key + ": expected a list of strings");
     }
 
-    @SuppressWarnings("unchecked")
+    /** {@code freeformTags} as the SDK types it, {@code map[string]string}. */
     private static Map<String, String> freeformTags(Map<String, Object> body) {
-        return body.get("freeformTags") instanceof Map<?, ?> m ? (Map<String, String>) m : null;
+        Object value = body.get("freeformTags");
+        if (value == null) {
+            return null;
+        }
+        if (!(value instanceof Map<?, ?> map)) {
+            throw OciException.invalidParameter("Invalid freeformTags: expected an object");
+        }
+        Map<String, String> tags = new LinkedHashMap<>();
+        for (Map.Entry<?, ?> entry : map.entrySet()) {
+            if (!(entry.getValue() instanceof String tag)) {
+                throw OciException.invalidParameter("Invalid freeformTags." + entry.getKey() + ": expected a string");
+            }
+            tags.put((String) entry.getKey(), tag);
+        }
+        return tags;
     }
 
-    @SuppressWarnings("unchecked")
+    /** {@code definedTags} as the SDK types it, {@code map[string]map[string]interface{}}. */
     private static Map<String, Map<String, Object>> definedTags(Map<String, Object> body) {
-        return body.get("definedTags") instanceof Map<?, ?> m ? (Map<String, Map<String, Object>>) m : null;
+        Object value = body.get("definedTags");
+        if (value == null) {
+            return null;
+        }
+        if (!(value instanceof Map<?, ?> map)) {
+            throw OciException.invalidParameter("Invalid definedTags: expected an object");
+        }
+        Map<String, Map<String, Object>> tags = new LinkedHashMap<>();
+        for (Map.Entry<?, ?> entry : map.entrySet()) {
+            if (!(entry.getValue() instanceof Map<?, ?> namespace)) {
+                throw OciException.invalidParameter("Invalid definedTags." + entry.getKey() + ": expected an object");
+            }
+            Map<String, Object> keys = new LinkedHashMap<>();
+            namespace.forEach((key, tag) -> keys.put((String) key, tag));
+            tags.put((String) entry.getKey(), keys);
+        }
+        return tags;
     }
 }
