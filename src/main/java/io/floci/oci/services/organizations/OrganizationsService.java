@@ -105,7 +105,7 @@ public class OrganizationsService {
         serviceRegistry.register(ServiceDescriptor.builder("organizations")
                 .enabled(config.services().organizations().enabled())
                 .storageKey("organizations")
-                .resourceClasses(OrganizationsController.class)
+                .resourceClasses(OrganizationsController.class, InvitationsController.class)
                 .global(true)
                 .build());
     }
@@ -141,12 +141,45 @@ public class OrganizationsService {
 
         StoredTenancy parent = tenancies.get(parentId);
         StoredTenancy child = tenancies.registerChild(parentId, tenancyName, region);
+        joinAsChild(parent, child, status, subscriptionId, features);
+        LOG.infov("createChildTenancy {0} ({1}) in {2}", tenancyName, child.getId(), region);
+        return workRequests.succeeded(WR_SERVICE, "CREATE_CHILD_TENANCY", parentId,
+                List.of(WorkRequestService.resource("tenancy", "CREATED", child.getId(), null)));
+    }
+
+    /**
+     * Makes {@code recipientId} a child of {@code senderId} in the organization the sender owns,
+     * as accepting an invitation does. The checks and the join run under one lock, so a
+     * concurrent child creation or acceptance cannot see the organization half-built. The
+     * recipient must be outside any organization, and the sender must not have become a child
+     * since it sent the invitation.
+     */
+    synchronized void admitInvitedChild(String senderId, String recipientId, List<String> features) {
+        if (belongsToAnOrganization(recipientId)) {
+            throw OciException.conflict("Tenancy " + recipientId + " already belongs to an organization");
+        }
+        if (parentOf(senderId).isPresent()) {
+            throw OciException.conflict("Tenancy " + senderId + " is a child tenancy and cannot admit children");
+        }
+        StoredTenancy parent = tenancies.get(senderId);
+        StoredTenancy child = tenancies.attachToParent(recipientId, senderId);
+        joinAsChild(parent, child, DEFAULT_GOVERNANCE_STATUS, null, features);
+    }
+
+    /**
+     * Adds {@code child} to the organization {@code parent} owns (created on its first child),
+     * with a CORE link plus one link per feature. The caller has already made {@code child} a
+     * child of {@code parent} in the tenancy registry.
+     */
+    private void joinAsChild(StoredTenancy parent, StoredTenancy child, String governanceStatus,
+                     String subscriptionId, List<String> features) {
+        String parentId = parent.getId();
         StoredOrganization organization = organizationOf(parent, subscriptionId);
         String now = Instant.now().toString();
         if (findMembership(parentId, organization.getId(), parentId).isEmpty()) {
-            saveMembership(parentId, membership(organization.getId(), parent, "PARENT", status, now));
+            saveMembership(parentId, membership(organization.getId(), parent, "PARENT", governanceStatus, now));
         }
-        saveMembership(parentId, membership(organization.getId(), child, "CHILD", status, now));
+        saveMembership(parentId, membership(organization.getId(), child, "CHILD", governanceStatus, now));
 
         Set<String> linkFeatures = new LinkedHashSet<>();
         linkFeatures.add(CORE_FEATURE);
@@ -155,7 +188,7 @@ public class OrganizationsService {
         }
         for (String feature : linkFeatures) {
             StoredLink link = new StoredLink();
-            link.setId(Ocids.generateGlobal("link", ociContext.realmOf(region)));
+            link.setId(Ocids.generateGlobal("link", ociContext.realmOf(child.getHomeRegion())));
             link.setParentTenancyId(parentId);
             link.setChildTenancyId(child.getId());
             link.setTimeCreated(now);
@@ -164,9 +197,22 @@ public class OrganizationsService {
             link.setEtag(Etags.newEtag());
             TenancyAwareStorageBackend.putIn(links, parentId, link.getId(), link);
         }
-        LOG.infov("createChildTenancy {0} ({1}) in {2}", tenancyName, child.getId(), region);
-        return workRequests.succeeded(WR_SERVICE, "CREATE_CHILD_TENANCY", parentId,
-                List.of(WorkRequestService.resource("tenancy", "CREATED", child.getId(), null)));
+    }
+
+    /** Whether {@code tenancyId} is a child of another tenancy or owns an organization. */
+    boolean belongsToAnOrganization(String tenancyId) {
+        boolean isChild = tenancies.find(tenancyId).map(StoredTenancy::getParentTenancyId).isPresent();
+        return isChild || !TenancyAwareStorageBackend.scanTenancy(organizations, tenancyId).isEmpty();
+    }
+
+    /** The parent of {@code tenancyId}, if it is a child tenancy. */
+    public Optional<String> parentOf(String tenancyId) {
+        return tenancies.find(tenancyId).map(StoredTenancy::getParentTenancyId);
+    }
+
+    /** Whether the caller is a child tenancy, which cannot act as a parent. */
+    boolean callerIsAChild() {
+        return !ownerPartition().equals(ociContext.tenancyId());
     }
 
     // ── Organizations ──────────────────────────────────────────────────────────

@@ -92,3 +92,29 @@ def test_delete_link_terminates_it(organizations, links, work_requests):
     link = links.get_link(link_id).data
     assert link.lifecycle_state == "TERMINATED"
     assert link.time_terminated is not None
+
+
+def test_invited_tenancy_joins_on_accept(sdk_config):
+    sender = f"ocid1.tenancy.oc1..pysender{time.time_ns()}"
+    recipient = f"ocid1.tenancy.oc1..pyrecipient{time.time_ns()}"
+    senders = oci.tenant_manager_control_plane.SenderInvitationClient(
+        dict(sdk_config, tenancy=sender), service_endpoint=ENDPOINT)
+    recipients = oci.tenant_manager_control_plane.RecipientInvitationClient(
+        dict(sdk_config, tenancy=recipient), service_endpoint=ENDPOINT)
+
+    created = senders.create_sender_invitation(
+        oci.tenant_manager_control_plane.models.CreateSenderInvitationDetails(
+            compartment_id=sender, recipient_tenancy_id=recipient, display_name="py invitation"
+        )
+    )
+    assert created.headers["etag"]
+    assert created.data.status == "PENDING"
+
+    received = recipients.list_recipient_invitations(compartment_id=recipient).data.items
+    assert [r.sender_tenancy_id for r in received] == [sender]
+
+    ignored = recipients.ignore_recipient_invitation(received[0].id)
+    assert ignored.data.status == "IGNORED"
+
+    senders.cancel_sender_invitation(created.data.id)
+    assert senders.get_sender_invitation(created.data.id).data.status == "CANCELED"
