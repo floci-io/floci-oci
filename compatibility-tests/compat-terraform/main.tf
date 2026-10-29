@@ -142,11 +142,50 @@ output "stream_messages_endpoint" {
 
 # ── Container Engine for Kubernetes (OKE) ───────────────────────────────────
 
+# Every optional setting Terraform reads back is set, so the second plan in the bats suite
+# shows any of them the emulator fails to return as sent.
 resource "oci_containerengine_cluster" "tf_cluster" {
   compartment_id     = var.tenancy_ocid
   name               = "tf-compat-cluster"
   vcn_id             = "ocid1.vcn.oc1.iad.tfvcn"
   kubernetes_version = "v1.30.1"
+  type               = "ENHANCED_CLUSTER"
+
+  endpoint_config {
+    subnet_id            = "ocid1.subnet.oc1.iad.tfapisubnet"
+    is_public_ip_enabled = false
+    nsg_ids              = []
+  }
+
+  cluster_pod_network_options {
+    cni_type = "FLANNEL_OVERLAY"
+  }
+
+  options {
+    service_lb_subnet_ids = ["ocid1.subnet.oc1.iad.tflbsubnet"]
+
+    kubernetes_network_config {
+      pods_cidr     = "10.244.0.0/16"
+      services_cidr = "10.96.0.0/16"
+    }
+
+    add_ons {
+      is_kubernetes_dashboard_enabled = false
+      is_tiller_enabled               = false
+    }
+
+    admission_controller_options {
+      is_pod_security_policy_enabled = false
+    }
+  }
+
+  image_policy_config {
+    is_policy_enabled = false
+  }
+
+  freeform_tags = {
+    "suite" = "compat"
+  }
 }
 
 resource "oci_containerengine_node_pool" "tf_node_pool" {
@@ -159,6 +198,10 @@ resource "oci_containerengine_node_pool" "tf_node_pool" {
 
 output "cluster_id" {
   value = oci_containerengine_cluster.tf_cluster.id
+}
+
+output "cluster_type" {
+  value = oci_containerengine_cluster.tf_cluster.type
 }
 
 data "oci_tenantmanagercontrolplane_organizations" "orgs" {

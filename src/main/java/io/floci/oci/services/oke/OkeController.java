@@ -11,6 +11,7 @@ import jakarta.inject.Inject;
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.DELETE;
 import jakarta.ws.rs.GET;
+import jakarta.ws.rs.HeaderParam;
 import jakarta.ws.rs.POST;
 import jakarta.ws.rs.PUT;
 import jakarta.ws.rs.Path;
@@ -63,7 +64,9 @@ public class OkeController {
                 req.kubernetesVersion,
                 req.kmsKeyId,
                 req.freeformTags,
-                req.definedTags
+                req.definedTags,
+                new OkeService.ClusterSettings(req.type, req.endpointConfig, req.options, req.imagePolicyConfig,
+                        req.clusterPodNetworkOptions)
             );
 
             return Response.status(Response.Status.ACCEPTED)
@@ -77,7 +80,7 @@ public class OkeController {
     @Path("/clusters/{clusterId}")
     public Response getCluster(@PathParam("clusterId") String clusterId) {
         StoredOkeCluster cluster = service.getCluster(clusterId);
-        return Response.ok(cluster.toWire()).build();
+        return Response.ok(cluster.toWire()).header("etag", cluster.getEtag()).build();
     }
 
     @GET
@@ -92,12 +95,33 @@ public class OkeController {
 
     @PUT
     @Path("/clusters/{clusterId}")
-    public Response updateCluster(@PathParam("clusterId") String clusterId, UpdateClusterDetails details) {
-        String workRequestId = service.updateCluster(
-            clusterId,
-            details != null ? details.name : null,
-            details != null ? details.kubernetesVersion : null
-        );
+    public Response updateCluster(@PathParam("clusterId") String clusterId,
+                                  @HeaderParam("if-match") String ifMatch,
+                                  UpdateClusterDetails details) {
+        UpdateClusterDetails req = details != null ? details : new UpdateClusterDetails();
+        String workRequestId = service.updateCluster(clusterId, req.name, req.kubernetesVersion, req.freeformTags,
+                req.definedTags, new OkeService.ClusterSettings(req.type, null, req.options, req.imagePolicyConfig,
+                        null), ifMatch);
+        return accepted(workRequestId);
+    }
+
+    @POST
+    @Path("/clusters/{clusterId}/actions/updateEndpointConfig")
+    public Response updateClusterEndpointConfig(@PathParam("clusterId") String clusterId,
+                                                @HeaderParam("if-match") String ifMatch,
+                                                Map<String, Object> details) {
+        return accepted(service.updateClusterEndpointConfig(clusterId, details, ifMatch));
+    }
+
+    @POST
+    @Path("/clusters/{clusterId}/actions/migrateToNativeVcn")
+    public Response clusterMigrateToNativeVcn(@PathParam("clusterId") String clusterId,
+                                              @HeaderParam("if-match") String ifMatch,
+                                              Map<String, Object> details) {
+        return accepted(service.migrateClusterToNativeVcn(clusterId, details, ifMatch));
+    }
+
+    private static Response accepted(String workRequestId) {
         return Response.status(Response.Status.ACCEPTED)
                 .header("opc-work-request-id", workRequestId)
                 .build();
@@ -265,11 +289,22 @@ public class OkeController {
         public String kmsKeyId;
         public Map<String, String> freeformTags;
         public Map<String, Map<String, Object>> definedTags;
+        public String type;
+        public Map<String, Object> endpointConfig;
+        public Map<String, Object> options;
+        public Map<String, Object> imagePolicyConfig;
+        public List<Map<String, Object>> clusterPodNetworkOptions;
     }
 
+    /** {@code UpdateClusterDetails}: no endpoint config or pod network options, which cannot change. */
     public static class UpdateClusterDetails {
         public String name;
         public String kubernetesVersion;
+        public Map<String, String> freeformTags;
+        public Map<String, Map<String, Object>> definedTags;
+        public String type;
+        public Map<String, Object> options;
+        public Map<String, Object> imagePolicyConfig;
     }
 
     /**

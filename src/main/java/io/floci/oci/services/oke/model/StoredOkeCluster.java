@@ -4,6 +4,7 @@ import io.quarkus.runtime.annotations.RegisterForReflection;
 
 import java.time.Instant;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -30,10 +31,18 @@ public class StoredOkeCluster {
     private ClusterMetadata metadata;
     private Map<String, String> freeformTags;
     private Map<String, Map<String, Object>> definedTags;
+    private String type;
+    private Map<String, Object> endpointConfig;
+    private Map<String, Object> options;
+    private Map<String, Object> imagePolicyConfig;
+    private List<Map<String, Object>> clusterPodNetworkOptions;
+    private String etag;
 
     /**
      * The OCI wire shape: excludes internal properties like {@code hostPort}, {@code apiToken},
-     * {@code tenancyId}, {@code region}, {@code caCertificate} and {@code createWorkRequestId}.
+     * {@code tenancyId}, {@code region}, {@code caCertificate}, {@code createWorkRequestId} and
+     * {@code etag} (a response header). The optional settings read back exactly as they were
+     * sent; {@code availableKubernetesUpgrades} and {@code systemTags} are always present.
      */
     public Map<String, Object> toWire() {
         Map<String, Object> wire = new LinkedHashMap<>();
@@ -49,8 +58,11 @@ public class StoredOkeCluster {
         if (lifecycleDetails != null) {
             wire.put("lifecycleDetails", lifecycleDetails);
         }
+        if (endpointConfig != null) {
+            wire.put("endpointConfig", endpointConfig);
+        }
         if (endpoints != null) {
-            wire.put("endpoints", endpoints);
+            wire.put("endpoints", wireEndpoints());
         }
         if (metadata != null) {
             wire.put("metadata", metadata);
@@ -61,6 +73,35 @@ public class StoredOkeCluster {
         if (definedTags != null) {
             wire.put("definedTags", definedTags);
         }
+        wire.put("systemTags", Map.of());
+        if (options != null) {
+            wire.put("options", options);
+        }
+        if (imagePolicyConfig != null) {
+            wire.put("imagePolicyConfig", imagePolicyConfig);
+        }
+        if (clusterPodNetworkOptions != null) {
+            wire.put("clusterPodNetworkOptions", clusterPodNetworkOptions);
+        }
+        if (type != null) {
+            wire.put("type", type);
+        }
+        wire.put("availableKubernetesUpgrades", List.of());
+        return wire;
+    }
+
+    /**
+     * The endpoints, plus {@code publicEndpoint} (host:port, like {@code privateEndpoint}) when the
+     * endpoint config asks for a public IP: the one reachable address is the Kubernetes API's.
+     */
+    private Map<String, String> wireEndpoints() {
+        boolean publicIp = endpointConfig != null && Boolean.TRUE.equals(endpointConfig.get("isPublicIpEnabled"));
+        String kubernetes = endpoints.get("kubernetes");
+        if (!publicIp || kubernetes == null) {
+            return endpoints;
+        }
+        Map<String, String> wire = new LinkedHashMap<>(endpoints);
+        wire.put("publicEndpoint", kubernetes.replaceFirst("^https://", ""));
         return wire;
     }
 
@@ -214,6 +255,54 @@ public class StoredOkeCluster {
 
     public void setDefinedTags(Map<String, Map<String, Object>> definedTags) {
         this.definedTags = definedTags;
+    }
+
+    public String getType() {
+        return type;
+    }
+
+    public void setType(String type) {
+        this.type = type;
+    }
+
+    public Map<String, Object> getEndpointConfig() {
+        return endpointConfig;
+    }
+
+    public void setEndpointConfig(Map<String, Object> endpointConfig) {
+        this.endpointConfig = endpointConfig;
+    }
+
+    public Map<String, Object> getOptions() {
+        return options;
+    }
+
+    public void setOptions(Map<String, Object> options) {
+        this.options = options;
+    }
+
+    public Map<String, Object> getImagePolicyConfig() {
+        return imagePolicyConfig;
+    }
+
+    public void setImagePolicyConfig(Map<String, Object> imagePolicyConfig) {
+        this.imagePolicyConfig = imagePolicyConfig;
+    }
+
+    public List<Map<String, Object>> getClusterPodNetworkOptions() {
+        return clusterPodNetworkOptions;
+    }
+
+    public void setClusterPodNetworkOptions(List<Map<String, Object>> clusterPodNetworkOptions) {
+        this.clusterPodNetworkOptions = clusterPodNetworkOptions;
+    }
+
+    public String getEtag() {
+        return etag;
+    }
+
+    public void setEtag(String etag) {
+        this.etag = etag;
     }
 
     @RegisterForReflection

@@ -15,6 +15,17 @@ import static org.hamcrest.Matchers.equalTo;
 class OkeDisabledRestIntegrationTest {
 
     @Test
+    void disabledOkeRejectsAClusterAction() {
+        given()
+            .contentType("application/json")
+            .body("{}")
+            .when().post("/20180222/clusters/ocid1.cluster.oc1.iad.x/actions/updateEndpointConfig")
+            .then()
+                .statusCode(503)
+                .body("code", equalTo("ServiceUnavailable"));
+    }
+
+    @Test
     void disabledOkeReturns503() {
         given()
             .queryParam("compartmentId", "ocid1.compartment.oc1..x")

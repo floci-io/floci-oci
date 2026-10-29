@@ -58,6 +58,9 @@ setup() {
     run "$TF_BIN" output -raw db_system_port
     [ "$output" -gt 0 ]
 
+    run "$TF_BIN" output -raw cluster_type
+    [ "$output" = "ENHANCED_CLUSTER" ]
+
     run "$TF_BIN" output -raw db_system_ca_certificate
     [[ "$output" == "-----BEGIN CERTIFICATE-----"* ]]
 }

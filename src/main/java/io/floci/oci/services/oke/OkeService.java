@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import io.floci.oci.config.EmulatorConfig;
 import io.floci.oci.core.common.CompartmentUsage;
 import io.floci.oci.core.common.OciContext;
+import io.floci.oci.core.common.Etags;
 import io.floci.oci.core.common.OciException;
 import io.floci.oci.core.common.Ocids;
 import io.floci.oci.core.common.Resettable;
@@ -327,6 +328,16 @@ public class OkeService implements Resettable, CompartmentUsage {
     }
 
     public record CreateClusterResult(String workRequestId, StoredOkeCluster cluster) {}
+
+    /**
+     * The optional settings of CreateClusterDetails, or of UpdateClusterDetails (where
+     * {@code endpointConfig} and {@code clusterPodNetworkOptions} cannot change).
+     */
+    public record ClusterSettings(String type, Map<String, Object> endpointConfig, Map<String, Object> options,
+                                  Map<String, Object> imagePolicyConfig,
+                                  List<Map<String, Object>> clusterPodNetworkOptions) {
+        static final ClusterSettings NONE = new ClusterSettings(null, null, null, null, null);
+    }
     public record CreateNodePoolResult(String workRequestId, StoredNodePool nodePool) {}
 
     // ── Clusters ─────────────────────────────────────────────────────────────
@@ -335,6 +346,15 @@ public class OkeService implements Resettable, CompartmentUsage {
                                 String kubernetesVersion, String kmsKeyId,
                                 Map<String, String> freeformTags,
                                 Map<String, Map<String, Object>> definedTags) {
+        return createCluster(compartmentId, name, vcnId, kubernetesVersion, kmsKeyId, freeformTags, definedTags,
+                ClusterSettings.NONE);
+    }
+
+    public CreateClusterResult createCluster(String compartmentId, String name, String vcnId,
+                                String kubernetesVersion, String kmsKeyId,
+                                Map<String, String> freeformTags,
+                                Map<String, Map<String, Object>> definedTags,
+                                ClusterSettings settings) {
         if (compartmentId == null || compartmentId.isBlank()) {
             throw OciException.missingParameter("Missing required parameter: compartmentId");
         }
@@ -344,6 +364,12 @@ public class OkeService implements Resettable, CompartmentUsage {
         if (vcnId == null || vcnId.isBlank()) {
             throw OciException.missingParameter("Missing required parameter: vcnId");
         }
+        String type = OkeClusterSettings.type(settings.type());
+        Map<String, Object> endpointConfig = OkeClusterSettings.endpointConfig(settings.endpointConfig());
+        Map<String, Object> options = OkeClusterSettings.createOptions(settings.options());
+        Map<String, Object> imagePolicyConfig = OkeClusterSettings.imagePolicyConfig(settings.imagePolicyConfig());
+        List<Map<String, Object>> podNetworkOptions =
+                OkeClusterSettings.podNetworkOptions(settings.clusterPodNetworkOptions());
 
         String clusterId = Ocids.generate("cluster", ociContext.realm(), ociContext.regionCode());
         StoredOkeCluster cluster = new StoredOkeCluster();
@@ -358,6 +384,12 @@ public class OkeService implements Resettable, CompartmentUsage {
         cluster.setMetadata(new StoredOkeCluster.ClusterMetadata(Instant.now()));
         cluster.setFreeformTags(freeformTags);
         cluster.setDefinedTags(definedTags);
+        cluster.setType(type);
+        cluster.setEndpointConfig(endpointConfig);
+        cluster.setOptions(options);
+        cluster.setImagePolicyConfig(imagePolicyConfig);
+        cluster.setClusterPodNetworkOptions(podNetworkOptions);
+        cluster.setEtag(Etags.newEtag());
         cluster.setApiToken(newApiToken());
         cluster.setTenancyId(tenancyId.get());
         cluster.setRegion(ociContext.region());
@@ -402,17 +434,75 @@ public class OkeService implements Resettable, CompartmentUsage {
     }
 
     public String updateCluster(String clusterId, String name, String kubernetesVersion) {
+        return updateCluster(clusterId, name, kubernetesVersion, null, null, ClusterSettings.NONE, null);
+    }
+
+    /**
+     * UpdateCluster: the name, version, tags, type, image policy and the options
+     * UpdateClusterOptionsDetails allows. Everything is checked before anything changes.
+     */
+    public String updateCluster(String clusterId, String name, String kubernetesVersion,
+                                Map<String, String> freeformTags, Map<String, Map<String, Object>> definedTags,
+                                ClusterSettings settings, String ifMatch) {
         StoredOkeCluster cluster = getCluster(clusterId);
+        Etags.checkIfMatch(ifMatch, cluster.getEtag());
+        String type = OkeClusterSettings.type(settings.type());
+        Map<String, Object> imagePolicyConfig = OkeClusterSettings.imagePolicyConfig(settings.imagePolicyConfig());
+        Map<String, Object> options = OkeClusterSettings.updatedOptions(cluster.getOptions(), settings.options());
         if (name != null && !name.isBlank()) {
             cluster.setName(name);
         }
         if (kubernetesVersion != null && !kubernetesVersion.isBlank()) {
             cluster.setKubernetesVersion(kubernetesVersion);
         }
-        clusters.put(clusterId, cluster);
+        if (freeformTags != null) {
+            cluster.setFreeformTags(freeformTags);
+        }
+        if (definedTags != null) {
+            cluster.setDefinedTags(definedTags);
+        }
+        if (type != null) {
+            cluster.setType(type);
+        }
+        if (imagePolicyConfig != null) {
+            cluster.setImagePolicyConfig(imagePolicyConfig);
+        }
+        cluster.setOptions(options);
+        return clusterUpdated(cluster);
+    }
 
+    /** UpdateClusterEndpointConfig: NSGs, public IP and security attributes; the subnet stays. */
+    public String updateClusterEndpointConfig(String clusterId, Map<String, Object> details, String ifMatch) {
+        StoredOkeCluster cluster = getCluster(clusterId);
+        Etags.checkIfMatch(ifMatch, cluster.getEtag());
+        cluster.setEndpointConfig(OkeClusterSettings.updatedEndpointConfig(cluster.getEndpointConfig(),
+                details != null ? details : Map.of()));
+        return clusterUpdated(cluster);
+    }
+
+    /**
+     * ClusterMigrateToNativeVcn: gives a cluster without one its endpoint config, which is what
+     * Terraform calls when {@code endpoint_config} is added to an existing cluster. There is no
+     * VCN, so nothing else changes.
+     */
+    public String migrateClusterToNativeVcn(String clusterId, Map<String, Object> details, String ifMatch) {
+        StoredOkeCluster cluster = getCluster(clusterId);
+        Etags.checkIfMatch(ifMatch, cluster.getEtag());
+        Object endpointConfig = details != null ? details.get("endpointConfig") : null;
+        if (!(endpointConfig instanceof Map<?, ?> config)) {
+            throw OciException.missingParameter("Missing required parameter: endpointConfig");
+        }
+        @SuppressWarnings("unchecked")
+        Map<String, Object> requested = (Map<String, Object>) config;
+        cluster.setEndpointConfig(OkeClusterSettings.endpointConfig(requested));
+        return clusterUpdated(cluster);
+    }
+
+    private String clusterUpdated(StoredOkeCluster cluster) {
+        cluster.setEtag(Etags.newEtag());
+        clusters.put(cluster.getId(), cluster);
         StoredWorkRequest.Resource res = WorkRequestService.resource(
-            "cluster", "UPDATED", clusterId, "/20180222/clusters/" + clusterId
+            "cluster", "UPDATED", cluster.getId(), "/20180222/clusters/" + cluster.getId()
         );
         return workRequests.succeeded("oke", "CLUSTER_UPDATE", cluster.getCompartmentId(), List.of(res));
     }
