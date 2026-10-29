@@ -63,6 +63,12 @@ public class TenancyAwareStorageBackend<V> implements StorageBackend<String, V> 
         return colon < 0 ? partition : partition.substring(0, colon);
     }
 
+    /** The region of a regional partition; empty for a global store's partition. */
+    public static Optional<String> regionOf(String partition) {
+        int colon = partition.indexOf(':');
+        return colon < 0 ? Optional.empty() : Optional.of(partition.substring(colon + 1));
+    }
+
     /**
      * Moves entries written before region partitioning into {@code <tenancy>:<region>/<key>},
      * so existing persisted data lands in {@code region}: {@code <tenancy>/<key>} keeps its
@@ -208,6 +214,93 @@ public class TenancyAwareStorageBackend<V> implements StorageBackend<String, V> 
         } else {
             store.put(key, value);
         }
+    }
+
+    /** Puts {@code entries} into {@code partition} of {@code store} as one change; see {@link #getIn}. */
+    public static <V> void putAllIn(StorageBackend<String, V> store, String partition, Map<String, V> entries) {
+        if (store instanceof TenancyAwareStorageBackend<V> tenancyAware) {
+            tenancyAware.putAllForTenancy(partition, entries);
+        } else {
+            store.putAllAndDelete(entries, List.of());
+        }
+    }
+
+    /** Deletes {@code keys} from {@code partition} of {@code store} as one change; see {@link #getIn}. */
+    public static <V> void deleteAllIn(StorageBackend<String, V> store, String partition, Collection<String> keys) {
+        if (store instanceof TenancyAwareStorageBackend<V> tenancyAware) {
+            tenancyAware.deleteAllForTenancy(partition, keys);
+        } else {
+            store.putAllAndDelete(Map.of(), keys);
+        }
+    }
+
+    /** Every entry of every partition of {@code store}; all of it for a store that is not tenancy-aware. */
+    public static <V> List<V> scanAll(StorageBackend<String, V> store) {
+        if (store instanceof TenancyAwareStorageBackend<V> tenancyAware) {
+            return tenancyAware.scanAllTenancies();
+        }
+        return store.scan(k -> true);
+    }
+
+    /**
+     * Finds {@code key} in any partition {@code tenancyId} owns (its region partitions in a
+     * regional store), for callers outside a request scope. A store that is not tenancy-aware
+     * has one partition.
+     */
+    public static <V> Optional<V> findInTenancy(StorageBackend<String, V> store, String tenancyId, String key) {
+        if (!(store instanceof TenancyAwareStorageBackend<V> tenancyAware)) {
+            return store.get(key);
+        }
+        for (String partition : tenancyAware.tenancies()) {
+            if (tenancyOf(partition).equals(tenancyId)) {
+                Optional<V> found = tenancyAware.getForTenancy(partition, key);
+                if (found.isPresent()) {
+                    return found;
+                }
+            }
+        }
+        return Optional.empty();
+    }
+
+    /**
+     * Every entry of {@code store}, grouped by partition and keyed by logical key, for startup
+     * migrations. A store that is not tenancy-aware (unit tests) has nothing to migrate, so the
+     * result is empty.
+     */
+    public static <V> Map<String, Map<String, V>> entriesByPartition(StorageBackend<String, V> store) {
+        if (!(store instanceof TenancyAwareStorageBackend<V> tenancyAware)) {
+            return Map.of();
+        }
+        Map<String, Map<String, V>> result = new LinkedHashMap<>();
+        for (String partition : tenancyAware.tenancies()) {
+            Map<String, V> entries = new LinkedHashMap<>();
+            for (String key : tenancyAware.keysForTenancy(partition)) {
+                tenancyAware.getForTenancy(partition, key).ifPresent(value -> entries.put(key, value));
+            }
+            result.put(partition, entries);
+        }
+        return result;
+    }
+
+    /**
+     * Like {@link #entriesByPartition(StorageBackend)}, but a store that is not tenancy-aware
+     * is one partition named {@code solePartition} (which may be null when the caller has no
+     * tenancy, as in unit tests), for callers that treat it as live data.
+     */
+    public static <V> Map<String, Map<String, V>> entriesByPartition(StorageBackend<String, V> store,
+                                                                     String solePartition) {
+        if (store instanceof TenancyAwareStorageBackend<V>) {
+            return entriesByPartition(store);
+        }
+        Map<String, V> entries = new LinkedHashMap<>();
+        for (String key : store.keys()) {
+            store.get(key).ifPresent(value -> entries.put(key, value));
+        }
+        Map<String, Map<String, V>> result = new LinkedHashMap<>();
+        if (!entries.isEmpty()) {
+            result.put(solePartition, entries);
+        }
+        return result;
     }
 
     /** An entry of a regional store and the tenancy whose partition holds it. */

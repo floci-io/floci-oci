@@ -822,10 +822,7 @@ public class PsqlService implements Resettable, CompartmentUsage {
 
     /** Every DB system of every tenancy and region, for startup, shutdown and reset. */
     private List<StoredDbSystem> allSystems() {
-        if (systems instanceof TenancyAwareStorageBackend<StoredDbSystem> tenancyAware) {
-            return tenancyAware.scanAllTenancies();
-        }
-        return systems.scan(k -> true);
+        return TenancyAwareStorageBackend.scanAll(systems);
     }
 
     // ── Helpers ────────────────────────────────────────────────────────────────

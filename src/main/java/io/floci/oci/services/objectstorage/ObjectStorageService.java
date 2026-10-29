@@ -119,28 +119,24 @@ public class ObjectStorageService implements CompartmentUsage {
 
     private <V> int migrateSavedNamespaces(StorageBackend<String, V> store, Function<V, String> namespaceOfEntry,
                                            BiConsumer<V, String> setNamespace) {
-        if (!(store instanceof TenancyAwareStorageBackend<V> tenancyAware)) {
-            return 0;
-        }
         int rewritten = 0;
-        for (String partition : tenancyAware.tenancies()) {
-            String namespace = namespaceOf(TenancyAwareStorageBackend.tenancyOf(partition));
+        for (Map.Entry<String, Map<String, V>> partition
+                : TenancyAwareStorageBackend.entriesByPartition(store).entrySet()) {
+            String namespace = namespaceOf(TenancyAwareStorageBackend.tenancyOf(partition.getKey()));
             Map<String, V> updates = new LinkedHashMap<>();
-            for (String key : tenancyAware.keysForTenancy(partition)) {
-                tenancyAware.getForTenancy(partition, key)
-                        .filter(entry -> !namespace.equals(namespaceOfEntry.apply(entry)))
-                        .ifPresent(entry -> {
-                            setNamespace.accept(entry, namespace);
-                            updates.put(key, entry);
-                        });
-            }
+            partition.getValue().forEach((key, entry) -> {
+                if (!namespace.equals(namespaceOfEntry.apply(entry))) {
+                    setNamespace.accept(entry, namespace);
+                    updates.put(key, entry);
+                }
+            });
             if (!updates.isEmpty()) {
-                tenancyAware.putAllForTenancy(partition, updates);
+                TenancyAwareStorageBackend.putAllIn(store, partition.getKey(), updates);
                 rewritten += updates.size();
             }
         }
         if (rewritten > 0) {
-            tenancyAware.flush();
+            store.flush();
         }
         return rewritten;
     }

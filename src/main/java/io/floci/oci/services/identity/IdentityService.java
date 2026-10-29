@@ -40,7 +40,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.locks.Lock;
@@ -207,21 +206,18 @@ public class IdentityService {
     private <V> void adoptLegacyRoot(String kind, StorageBackend<String, V> store,
                                      Function<V, String> getCompartmentId,
                                      BiConsumer<V, String> setCompartmentId) {
-        if (!(store instanceof TenancyAwareStorageBackend<V> tenancyAware)) {
-            return;
-        }
         String defaultTenancyId = config.defaultTenancyId();
         int adopted = 0;
-        for (String tenancy : tenancyAware.tenancies()) {
+        for (Map.Entry<String, Map<String, V>> partition
+                : TenancyAwareStorageBackend.entriesByPartition(store).entrySet()) {
+            String tenancy = partition.getKey();
             if (tenancy.equals(defaultTenancyId)) {
                 continue;
             }
-            for (String key : tenancyAware.keysForTenancy(tenancy)) {
-                Optional<V> record = tenancyAware.getForTenancy(tenancy, key);
-                if (record.isPresent()
-                        && defaultTenancyId.equals(getCompartmentId.apply(record.get()))) {
-                    setCompartmentId.accept(record.get(), tenancy);
-                    tenancyAware.putForTenancy(tenancy, key, record.get());
+            for (Map.Entry<String, V> record : partition.getValue().entrySet()) {
+                if (defaultTenancyId.equals(getCompartmentId.apply(record.getValue()))) {
+                    setCompartmentId.accept(record.getValue(), tenancy);
+                    TenancyAwareStorageBackend.putIn(store, tenancy, record.getKey(), record.getValue());
                     adopted++;
                 }
             }

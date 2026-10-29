@@ -171,24 +171,19 @@ public class OkeService implements Resettable, CompartmentUsage {
      */
     private List<OwnedCluster> backfillInternalFields() {
         List<OwnedCluster> existingClusters = new ArrayList<>();
-        if (clusters instanceof TenancyAwareStorageBackend<StoredOkeCluster> tenancyAware) {
-            for (String partition : tenancyAware.tenancies()) {
-                String owner = TenancyAwareStorageBackend.tenancyOf(partition);
-                String region = partition.contains(":")
-                        ? partition.substring(partition.indexOf(':') + 1)
-                        : defaultRegion();
-                for (StoredOkeCluster cluster : tenancyAware.scanForTenancy(partition, k -> true)) {
-                    if (backfill(cluster, owner, region)) {
-                        tenancyAware.putForTenancy(partition, cluster.getId(), cluster);
-                    }
-                    existingClusters.add(new OwnedCluster(owner, cluster));
-                }
-            }
-        } else {
-            String owner = tenancyId.get();
-            for (StoredOkeCluster cluster : clusters.scan(k -> true)) {
-                if (backfill(cluster, owner, defaultRegion())) {
-                    clusters.put(cluster.getId(), cluster);
+        // A store that is not tenancy-aware (unit tests) is one partition, named null: the
+        // request tenancy in the default region.
+        Map<String, Map<String, StoredOkeCluster>> partitions =
+                TenancyAwareStorageBackend.entriesByPartition(clusters, null);
+        for (Map.Entry<String, Map<String, StoredOkeCluster>> partition : partitions.entrySet()) {
+            String name = partition.getKey();
+            String owner = name == null ? tenancyId.get() : TenancyAwareStorageBackend.tenancyOf(name);
+            String region = name == null
+                    ? defaultRegion()
+                    : TenancyAwareStorageBackend.regionOf(name).orElse(defaultRegion());
+            for (StoredOkeCluster cluster : partition.getValue().values()) {
+                if (backfill(cluster, owner, region)) {
+                    TenancyAwareStorageBackend.putIn(clusters, partition.getKey(), cluster.getId(), cluster);
                 }
                 existingClusters.add(new OwnedCluster(owner, cluster));
             }
@@ -302,29 +297,13 @@ public class OkeService implements Resettable, CompartmentUsage {
      * custom default region shares that code.
      */
     Optional<StoredOkeCluster> findCluster(String owner, String clusterId) {
-        if (clusters instanceof TenancyAwareStorageBackend<StoredOkeCluster> tenancyAware) {
-            for (String partition : tenancyAware.tenancies()) {
-                if (TenancyAwareStorageBackend.tenancyOf(partition).equals(owner)) {
-                    Optional<StoredOkeCluster> found = tenancyAware.getForTenancy(partition, clusterId);
-                    if (found.isPresent()) {
-                        return found;
-                    }
-                }
-            }
-            return Optional.empty();
-        }
-        return clusters.get(clusterId);
+        return TenancyAwareStorageBackend.findInTenancy(clusters, owner, clusterId);
     }
 
     /** Stores a cluster in the partition of the tenancy and region it was created in. */
     private void putCluster(String owner, StoredOkeCluster cluster) {
-        if (clusters instanceof TenancyAwareStorageBackend<StoredOkeCluster> tenancyAware) {
-            tenancyAware.putForTenancy(
-                    TenancyAwareStorageBackend.regionalPartition(owner, cluster.getRegion()),
-                    cluster.getId(), cluster);
-        } else {
-            clusters.put(cluster.getId(), cluster);
-        }
+        TenancyAwareStorageBackend.putIn(clusters,
+                TenancyAwareStorageBackend.regionalPartition(owner, cluster.getRegion()), cluster.getId(), cluster);
     }
 
     private boolean realMode() {

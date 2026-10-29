@@ -210,29 +210,26 @@ public class WorkRequestService {
      * moves them into the global one, keeping their tenancy.
      */
     void moveIdentityWorkRequestsToGlobalStore() {
-        if (!(store instanceof TenancyAwareStorageBackend<StoredWorkRequest> regional)
-                || !(globalStore instanceof TenancyAwareStorageBackend<StoredWorkRequest> global)
-                || store == globalStore) {
+        if (store == globalStore) {
             return;
         }
         Map<String, Map<String, StoredWorkRequest>> byPartition = new LinkedHashMap<>();
-        for (String partition : regional.tenancies()) {
-            for (String key : regional.keysForTenancy(partition)) {
-                regional.getForTenancy(partition, key)
-                        .filter(wr -> LEGACY_GLOBAL_SERVICE.equals(wr.getService()))
-                        .ifPresent(wr -> byPartition.computeIfAbsent(partition, p -> new LinkedHashMap<>())
-                                .put(key, wr));
-            }
-        }
+        TenancyAwareStorageBackend.entriesByPartition(store).forEach((partition, records) ->
+                records.forEach((key, wr) -> {
+                    if (LEGACY_GLOBAL_SERVICE.equals(wr.getService())) {
+                        byPartition.computeIfAbsent(partition, p -> new LinkedHashMap<>()).put(key, wr);
+                    }
+                }));
         if (byPartition.isEmpty()) {
             return;
         }
         // Copy and persist before deleting, so an interrupted move duplicates rather than loses.
+        byPartition.forEach((partition, records) -> TenancyAwareStorageBackend.putAllIn(
+                globalStore, TenancyAwareStorageBackend.tenancyOf(partition), records));
+        globalStore.flush();
         byPartition.forEach((partition, records) ->
-                global.putAllForTenancy(TenancyAwareStorageBackend.tenancyOf(partition), records));
-        global.flush();
-        byPartition.forEach((partition, records) -> regional.deleteAllForTenancy(partition, records.keySet()));
-        regional.flush();
+                TenancyAwareStorageBackend.deleteAllIn(store, partition, records.keySet()));
+        store.flush();
         LOG.infov("Moved {0} Identity work requests into the global store",
                 byPartition.values().stream().mapToInt(Map::size).sum());
     }
