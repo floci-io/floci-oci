@@ -195,7 +195,7 @@ flowchart LR
 | Serverless | Functions (applications, functions, real invocation through an Fn Project sidecar) |
 | Kubernetes | Container Engine for Kubernetes (OKE): clusters, node pools, options, kubeconfig generation, work requests, real-mode k3s sidecar |
 | Database | Database with PostgreSQL: DB systems, start/stop/restart, master password reset, connection details with a CA certificate, shapes, default configurations, work requests, real PostgreSQL sidecar |
-| Organizations | Child tenancies (each with its own home region and isolated storage), organizations, organization tenancies, links |
+| Organizations | Child tenancies (each with its own home region and isolated storage), organizations, organization tenancies, links, invitations; Governance Rules (allowed regions enforced) |
 | Async operations | Work requests, partitioned per service (Identity/Queue/Streaming use `SUCCEEDED`, Object Storage/OKE use `COMPLETED`) |
 
 For operation-level compatibility, see the [Services Overview](https://floci.io/floci-oci/services/).
@@ -214,7 +214,8 @@ For operation-level compatibility, see the [Services Overview](https://floci.io/
 | Functions | Real Docker (Fn Project) | Applications and functions with deterministic image digests; invocation proxied to a shared `fnproject/fnserver` sidecar that runs your real FDK image. `mock: true` disables Docker entirely |
 | OKE (Container Engine) | Real Docker (k3s) / In-process | Control plane CRUD (`/20180222`), options, kubeconfig YAML generator, work requests tracking; real-mode k3s sidecar driver (`rancher/k3s:v1.30.1-k3s1`) binding dynamic host ports (`6443..6543`) and persistent volumes (`/var/lib/rancher/k3s`). `mock: true` disables sidecar |
 | Database with PostgreSQL | Real Docker (PostgreSQL) / In-process | DB system CRUD (`/20220915`) driven by work requests, with a `DELETED` tombstone clients can poll; one `postgres:<major>-alpine` container per DB system, started in the background; connection details with a per-system CA certificate (`sslmode=verify-full` works); master password from the request or a Vault secret, never stored, reset in the running database; start/stop/restart keep the data volume; shapes and default configurations catalog. `mock: true` disables Docker |
-| Organizations | In-process | `CreateChildTenancy` registers a child tenancy with its own home region; requests signed with it see only its own resources; organizations, organization tenancies and links live with the parent tenancy; wrapped `{"items":[…]}` lists |
+| Organizations | In-process | `CreateChildTenancy` registers a child tenancy with its own home region; requests signed with it see only its own resources; organizations, organization tenancies and links live with the parent tenancy; invitations bring an existing tenancy in; wrapped `{"items":[…]}` lists |
+| Governance Rules | In-process | Governance rules (`/20220504`) of type `QUOTA`, `TAG` and `ALLOWED_REGIONS`, inclusion criteria, tenancy attachments for children opted in to governance, enforced rules as the child sees them; `ALLOWED_REGIONS` refuses a governed child's region subscription outside the list |
 | Work Requests | In-process | `202` + `opc-work-request-id` responses, pollable per service (`/20160918`, `/20210201`, `/20180418`, `/20180222` and unversioned `/workRequests`) with errors/logs endpoints |
 
 Not implemented yet: identity domains, API keys/auth tokens, dynamic groups, tag namespaces, object versioning, retention rules (stubbed empty for Terraform compatibility), lifecycle policies, replication, the Amazon S3 Compatibility API, queue consumer groups, stream pools' Kafka settings and connect harnesses, KMS key backup and replication, secret rotation, and pre-built functions (PBF).
@@ -429,8 +430,8 @@ The [`compatibility-tests`](./compatibility-tests/) directory validates floci-oc
 
 | Module | Language / Tool | SDK / Client | Tests |
 |---|---|---|---:|
-| `sdk-test-java` | Java | oci-java-sdk (incl. OKE integration, Organizations child tenancies and a JDBC connection to a PostgreSQL DB system) | 26 |
-| `sdk-test-python` | Python 3 | oci (incl. `UploadManager` streaming) | 25 |
+| `sdk-test-java` | Java | oci-java-sdk (incl. OKE integration, Organizations child tenancies and invitations, governance rules and a JDBC connection to a PostgreSQL DB system) | 33 |
+| `sdk-test-python` | Python 3 | oci (incl. `UploadManager` streaming, Organizations invitations and governance rules) | 29 |
 | `sdk-test-go` | Go | oci-go-sdk (OKE container engine) | 1 |
 | `sdk-test-cli` | Bash / BATS | OCI CLI 3.89.3 (all 10 services, incl. error codes and PAR access) | 68 |
 | `compat-terraform` | Terraform | oracle/oci provider (14 resources, zero-drift plan) | 6 |

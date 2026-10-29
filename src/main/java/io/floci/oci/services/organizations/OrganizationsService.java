@@ -6,6 +6,7 @@ import io.floci.oci.core.common.Etags;
 import io.floci.oci.core.common.OciContext;
 import io.floci.oci.core.common.OciException;
 import io.floci.oci.core.common.Ocids;
+import io.floci.oci.core.common.OrganizationMembershipListener;
 import io.floci.oci.core.common.Regions;
 import io.floci.oci.core.common.ServiceDescriptor;
 import io.floci.oci.core.common.ServiceRegistry;
@@ -22,6 +23,7 @@ import io.floci.oci.services.organizations.model.StoredOrganizationTenancy;
 import io.quarkus.runtime.StartupEvent;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.Observes;
+import jakarta.enterprise.inject.Instance;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
@@ -64,12 +66,14 @@ public class OrganizationsService {
     private final OciContext ociContext;
     private final EmulatorConfig config;
     private final ServiceRegistry serviceRegistry;
+    private final Iterable<OrganizationMembershipListener> membershipListeners;
 
     @Inject
     public OrganizationsService(StorageFactory storageFactory, TenancyRegistry tenancies,
                                 IdentityService identity, WorkRequestService workRequests,
                                 OciContext ociContext, EmulatorConfig config,
-                                ServiceRegistry serviceRegistry) {
+                                ServiceRegistry serviceRegistry,
+                                Instance<OrganizationMembershipListener> membershipListeners) {
         this.organizations = storageFactory.createGlobal("organizations", "organizations.json",
                 new TypeReference<Map<String, StoredOrganization>>() {});
         this.organizationTenancies = storageFactory.createGlobal("organizations",
@@ -83,6 +87,7 @@ public class OrganizationsService {
         this.ociContext = ociContext;
         this.config = config;
         this.serviceRegistry = serviceRegistry;
+        this.membershipListeners = membershipListeners;
     }
 
     OrganizationsService(StorageBackend<String, StoredOrganization> organizations,
@@ -99,6 +104,7 @@ public class OrganizationsService {
         this.ociContext = ociContext;
         this.config = null;
         this.serviceRegistry = null;
+        this.membershipListeners = List.of();
     }
 
     void onStart(@Observes StartupEvent ev) {
@@ -197,6 +203,13 @@ public class OrganizationsService {
             link.setEtag(Etags.newEtag());
             TenancyAwareStorageBackend.putIn(links, parentId, link.getId(), link);
         }
+        notifyMembershipsChanged(parentId);
+    }
+
+    private void notifyMembershipsChanged(String parentId) {
+        for (OrganizationMembershipListener listener : membershipListeners) {
+            listener.membershipsChanged(parentId);
+        }
     }
 
     /** Whether {@code tenancyId} is a child of another tenancy or owns an organization. */
@@ -283,6 +296,7 @@ public class OrganizationsService {
                 terminate(parentId, link, now);
             }
         }
+        notifyMembershipsChanged(parentId);
         LOG.infov("deleteOrganizationTenancy {0}", tenancyId);
         return workRequests.succeeded(WR_SERVICE, "TERMINATE_ORGANIZATION_TENANCY", parentId,
                 List.of(WorkRequestService.resource("tenancy", "DELETED", tenancyId, null)));
@@ -312,9 +326,52 @@ public class OrganizationsService {
                 TenancyAwareStorageBackend.putIn(links, parentId, link.getId(), link);
             }
         }
+        notifyMembershipsChanged(parentId);
         LOG.infov("restoreOrganizationTenancy {0}", tenancyId);
         return workRequests.succeeded(WR_SERVICE, "RESTORE_TENANCY", parentId,
                 List.of(WorkRequestService.resource("tenancy", "UPDATED", tenancyId, null)));
+    }
+
+    /**
+     * Opts a member of an organization in to ({@code OPTED_IN}) or out of ({@code OPTED_OUT})
+     * the parent's governance rules. The parent or the member itself may call it. Returns the
+     * work request id.
+     */
+    public synchronized String setGovernance(String organizationId, String tenancyId, boolean optIn,
+                                             String ifMatch) {
+        String partition = ownerPartition();
+        String caller = ociContext.tenancyId();
+        if (!caller.equals(partition) && !caller.equals(tenancyId)) {
+            throw notFound("tenancy", tenancyId);
+        }
+        TenancyAwareStorageBackend.getIn(organizations, partition, organizationId)
+                .orElseThrow(() -> notFound("organization", organizationId));
+        StoredOrganizationTenancy membership = findMembership(partition, organizationId, tenancyId)
+                .orElseThrow(() -> notFound("tenancy", tenancyId));
+        Etags.checkIfMatch(ifMatch, membership.getEtag());
+        if (!"CHILD".equals(membership.getRole())) {
+            throw OciException.invalidParameter("Tenancy " + tenancyId + " is not a child tenancy of the organization");
+        }
+        requireState(membership.getLifecycleState(), "ACTIVE", "tenancy " + tenancyId,
+                optIn ? "opted in to governance" : "opted out of governance");
+        String target = optIn ? "OPTED_IN" : "OPTED_OUT";
+        if (target.equals(membership.getGovernanceStatus())) {
+            throw OciException.conflict("The tenancy " + tenancyId + " is already " + target);
+        }
+        membership.setGovernanceStatus(target);
+        membership.setEtag(Etags.newEtag());
+        saveMembership(partition, membership);
+        notifyMembershipsChanged(partition);
+        LOG.infov("setGovernance {0} {1}", tenancyId, target);
+        return workRequests.succeeded(WR_SERVICE, optIn ? "SELF_OPT_IN" : "SELF_OPT_OUT", partition,
+                List.of(WorkRequestService.resource("tenancy", "UPDATED", tenancyId, null)));
+    }
+
+    /** The ACTIVE child members of the organization {@code parentId} owns. */
+    public List<StoredOrganizationTenancy> activeChildren(String parentId) {
+        return TenancyAwareStorageBackend.scanTenancy(organizationTenancies, parentId).stream()
+                .filter(m -> "CHILD".equals(m.getRole()) && "ACTIVE".equals(m.getLifecycleState()))
+                .toList();
     }
 
     // ── Links ──────────────────────────────────────────────────────────────────

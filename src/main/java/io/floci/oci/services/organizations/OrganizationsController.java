@@ -120,6 +120,24 @@ public class OrganizationsController {
         return accepted(service.restoreOrganizationTenancy(tenancyId, ifMatch));
     }
 
+    @POST
+    @Path("/organizations/{organizationId}/tenancies/{organizationTenancyId}/actions/addGovernance")
+    @Consumes(MediaType.WILDCARD)
+    public Response addGovernance(@PathParam("organizationId") String organizationId,
+                                  @PathParam("organizationTenancyId") String tenancyId,
+                                  @HeaderParam("if-match") String ifMatch) {
+        return accepted(service.setGovernance(organizationId, tenancyId, true, ifMatch));
+    }
+
+    @POST
+    @Path("/organizations/{organizationId}/tenancies/{organizationTenancyId}/actions/removeGovernance")
+    @Consumes(MediaType.WILDCARD)
+    public Response removeGovernance(@PathParam("organizationId") String organizationId,
+                                     @PathParam("organizationTenancyId") String tenancyId,
+                                     @HeaderParam("if-match") String ifMatch) {
+        return accepted(service.setGovernance(organizationId, tenancyId, false, ifMatch));
+    }
+
     // ── Links ──────────────────────────────────────────────────────────────────
 
     @GET

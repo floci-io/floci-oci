@@ -7,6 +7,7 @@ import io.floci.oci.core.common.Etags;
 import io.floci.oci.core.common.OciContext;
 import io.floci.oci.core.common.OciException;
 import io.floci.oci.core.common.Ocids;
+import io.floci.oci.core.common.RegionRestriction;
 import io.floci.oci.core.common.Regions;
 import io.floci.oci.core.common.ServiceDescriptor;
 import io.floci.oci.core.common.ServiceRegistry;
@@ -84,6 +85,7 @@ public class IdentityService {
     private final OciContext ociContext;
     private final TenancyRegistry tenancies;
     private final Iterable<CompartmentUsage> compartmentUsages;
+    private final Iterable<RegionRestriction> regionRestrictions;
     /**
      * Compartment locks, striped. A service creating a resource in a compartment, or moving one
      * into it, holds the read side from its ACTIVE check to its write; deletion holds the write
@@ -98,9 +100,11 @@ public class IdentityService {
     public IdentityService(StorageFactory storageFactory, EmulatorConfig config,
                            ServiceRegistry serviceRegistry, WorkRequestService workRequests,
                            OciContext ociContext, TenancyRegistry tenancies,
-                           Instance<CompartmentUsage> compartmentUsages) {
+                           Instance<CompartmentUsage> compartmentUsages,
+                           Instance<RegionRestriction> regionRestrictions) {
         this.config = config;
         this.compartmentUsages = compartmentUsages;
+        this.regionRestrictions = regionRestrictions;
         this.ociContext = ociContext;
         this.tenancies = tenancies;
         this.serviceRegistry = serviceRegistry;
@@ -156,6 +160,7 @@ public class IdentityService {
                     OciContext ociContext,
                     Iterable<CompartmentUsage> compartmentUsages) {
         this.compartmentUsages = compartmentUsages;
+        this.regionRestrictions = List.of();
         this.ociContext = ociContext;
         this.tenancies = new TenancyRegistry(new InMemoryStorage<>(), config, ociContext);
         this.compartments = compartments;
@@ -803,6 +808,11 @@ public class IdentityService {
                 .anyMatch(sub -> sub.getRegionKey().equals(region.key()));
         if (subscribed) {
             throw OciException.conflict("The tenancy is already subscribed to " + region.name());
+        }
+        for (RegionRestriction restriction : regionRestrictions) {
+            restriction.denial(tenancyId(), region.name()).ifPresent(reason -> {
+                throw OciException.invalidParameter(reason);
+            });
         }
         StoredRegionSubscription sub =
                 new StoredRegionSubscription(region.key(), region.name(), "READY", false);
