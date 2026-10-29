@@ -10,7 +10,9 @@ import java.util.Map;
 
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.equalTo;
+import static org.hamcrest.Matchers.hasItem;
 import static org.hamcrest.Matchers.hasItems;
+import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.notNullValue;
 import static org.hamcrest.Matchers.startsWith;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -257,5 +259,63 @@ class OrganizationsRestIntegrationTest {
                 .statusCode(400)
                 .header("opc-request-id", notNullValue())
                 .body("code", equalTo("InvalidParameter"));
+    }
+
+    @Test
+    void aChildTenancyStartsWithAnAdministrator() {
+        String workRequestId = given()
+                .contentType("application/json")
+                .body(Map.of("compartmentId", config.defaultTenancyId(), "tenancyName", "admin-" + System.nanoTime(),
+                        "homeRegion", "us-ashburn-1", "adminEmail", "owner@example.com",
+                        "policyName", "Child_Admins"))
+            .when().post("/20230401/childTenancies")
+            .then().statusCode(202).extract().header("opc-work-request-id");
+        String child = given().when().get("/20230401/workRequests/" + workRequestId)
+            .then().statusCode(200).extract().path("resources[0].identifier");
+
+        given().header("Authorization", signedAs(child)).queryParam("compartmentId", child)
+            .when().get("/20160918/users")
+            .then().statusCode(200)
+                .body("size()", equalTo(1))
+                .body("[0].name", equalTo("owner@example.com"))
+                .body("[0].email", equalTo("owner@example.com"));
+        String groupId = given().header("Authorization", signedAs(child)).queryParam("compartmentId", child)
+            .when().get("/20160918/groups")
+            .then().statusCode(200)
+                .body("size()", equalTo(1))
+                .body("[0].name", equalTo("Administrators"))
+                .extract().path("[0].id");
+        given().header("Authorization", signedAs(child)).queryParam("compartmentId", child)
+                .queryParam("groupId", groupId)
+            .when().get("/20160918/userGroupMemberships")
+            .then().statusCode(200).body("size()", equalTo(1));
+        given().header("Authorization", signedAs(child)).queryParam("compartmentId", child)
+            .when().get("/20160918/policies")
+            .then().statusCode(200)
+                .body("size()", equalTo(1))
+                .body("[0].name", equalTo("Child_Admins"))
+                .body("[0].statements[0]", equalTo("ALLOW GROUP Administrators to manage all-resources IN TENANCY"));
+        given().queryParam("compartmentId", config.defaultTenancyId())
+            .when().get("/20160918/policies")
+            .then().statusCode(200)
+                .body("name", not(hasItem("Child_Admins")));
+    }
+
+    @Test
+    void theAdministratorPolicyHasADefaultName() {
+        String workRequestId = given()
+                .contentType("application/json")
+                .body(Map.of("compartmentId", config.defaultTenancyId(), "tenancyName", "default-" + System.nanoTime(),
+                        "homeRegion", "us-ashburn-1", "adminEmail", "owner@example.com"))
+            .when().post("/20230401/childTenancies")
+            .then().statusCode(202).extract().header("opc-work-request-id");
+        String child = given().when().get("/20230401/workRequests/" + workRequestId)
+            .then().statusCode(200).extract().path("resources[0].identifier");
+
+        given().header("Authorization", signedAs(child)).queryParam("compartmentId", child)
+            .when().get("/20160918/policies")
+            .then().statusCode(200)
+                .body("size()", equalTo(1))
+                .body("[0].name", equalTo("Tenant_Admin_Policy"));
     }
 }

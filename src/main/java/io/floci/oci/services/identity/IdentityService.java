@@ -54,6 +54,8 @@ import java.util.stream.Stream;
 public class IdentityService {
 
     private static final Logger LOG = Logger.getLogger(IdentityService.class);
+    private static final String ADMINISTRATORS_GROUP = "Administrators";
+    private static final String DEFAULT_ADMIN_POLICY = "Tenant_Admin_Policy";
     private static final int AVAILABILITY_DOMAINS = 3;
     private static final int FAULT_DOMAINS_PER_AD = 3;
     private static final Set<String> ACCESS_LEVELS = Set.of("ANY", "ACCESSIBLE");
@@ -619,6 +621,61 @@ public class IdentityService {
     public void removeUserFromGroup(String membershipId) {
         getMembership(membershipId);
         memberships.delete(membershipId);
+    }
+
+    /**
+     * Seeds a new child tenancy's IAM, as {@code CreateChildTenancy} does: an
+     * {@code Administrators} group, an administrator user named after {@code adminEmail} in it,
+     * and a policy named {@code policyName} that lets the group manage everything in the
+     * tenancy. Writes into the child's partition, whatever tenancy the request is signed with.
+     */
+    public void bootstrapAdministrator(String childTenancyId, String realm, String adminEmail,
+                                       String policyName) {
+        String now = Instant.now().toString();
+        StoredGroup group = new StoredGroup();
+        group.setId(Ocids.generateGlobal("group", realm));
+        group.setCompartmentId(childTenancyId);
+        group.setName(ADMINISTRATORS_GROUP);
+        group.setDescription("Administrators of the tenancy");
+        group.setTimeCreated(now);
+        group.setLifecycleState("ACTIVE");
+        group.setEtag(Etags.newEtag());
+        TenancyAwareStorageBackend.putIn(groups, childTenancyId, group.getId(), group);
+
+        StoredUser user = new StoredUser();
+        user.setId(Ocids.generateGlobal("user", realm));
+        user.setCompartmentId(childTenancyId);
+        user.setName(adminEmail);
+        user.setDescription("Tenancy administrator");
+        user.setEmail(adminEmail);
+        user.setEmailVerified(false);
+        user.setTimeCreated(now);
+        user.setLifecycleState("ACTIVE");
+        user.setIsMfaActivated(false);
+        user.setEtag(Etags.newEtag());
+        TenancyAwareStorageBackend.putIn(users, childTenancyId, user.getId(), user);
+
+        StoredUserGroupMembership membership = new StoredUserGroupMembership();
+        membership.setId(Ocids.generateGlobal("groupmembership", realm));
+        membership.setCompartmentId(childTenancyId);
+        membership.setUserId(user.getId());
+        membership.setGroupId(group.getId());
+        membership.setTimeCreated(now);
+        membership.setLifecycleState("ACTIVE");
+        membership.setEtag(Etags.newEtag());
+        TenancyAwareStorageBackend.putIn(memberships, childTenancyId, membership.getId(), membership);
+
+        StoredPolicy policy = new StoredPolicy();
+        policy.setId(Ocids.generateGlobal("policy", realm));
+        policy.setCompartmentId(childTenancyId);
+        policy.setName(policyName != null ? policyName : DEFAULT_ADMIN_POLICY);
+        policy.setDescription("Lets the Administrators group manage all resources in the tenancy");
+        policy.setStatements(List.of("ALLOW GROUP " + ADMINISTRATORS_GROUP + " to manage all-resources IN TENANCY"));
+        policy.setTimeCreated(now);
+        policy.setLifecycleState("ACTIVE");
+        policy.setEtag(Etags.newEtag());
+        TenancyAwareStorageBackend.putIn(policies, childTenancyId, policy.getId(), policy);
+        LOG.infov("Bootstrapped administrator {0} in tenancy {1}", adminEmail, childTenancyId);
     }
 
     // ── Policies ───────────────────────────────────────────────────────────────

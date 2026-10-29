@@ -74,6 +74,17 @@ The OCI SDKs leave these open, so floci-oci picks:
   `ocid1.link.<realm>..…`. A child tenancy's OCID uses the realm of its home region.
 - When no `subscriptionId` is given, the organization gets a synthetic
   `ocid1.organizationssubscription…` default subscription.
+- **The child tenancy limit is not enforced.** Oracle's `child-tenancy-count` limit defaults to
+  0 in every tenancy (service limits, Organizations), so a tenancy needs it raised before its
+  first child; floci-oci behaves as a tenancy whose limit has been raised, and creates any
+  number of children.
+- **A new child starts with an administrator.** The SDK only says that `policyName` names "the
+  administrator policy in the child tenancy". floci-oci seeds the child's IAM with an
+  `Administrators` group, a user named after `adminEmail` (also its email) in that group, and
+  a policy named `policyName` (`Tenant_Admin_Policy` when omitted) with the single statement
+  `ALLOW GROUP Administrators to manage all-resources IN TENANCY`. Requests signed with the
+  child see them; policies are stored, not evaluated. A tenancy that joins through an
+  invitation already exists and is not seeded.
 - Termination is immediate and reversible. `DeleteOrganizationTenancy` moves the member to
   `DELETED` with `timeLeft` set and terminates its active links, under the work request type
   `TERMINATE_ORGANIZATION_TENANCY`. The child tenancy stays registered and its data is kept, so
@@ -115,8 +126,6 @@ The SDKs give the shapes but not the flow, so floci-oci picks:
 ## Not implemented yet
 
 ApproveForTransfer, UnapproveForTransfer, link features, domains, subscriptions and orders.
-The child tenancy limit is not enforced, and no administrator user or policy is created in the
-child.
 
 ## Quickstart
 

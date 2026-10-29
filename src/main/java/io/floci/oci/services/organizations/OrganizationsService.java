@@ -147,6 +147,7 @@ public class OrganizationsService {
 
         StoredTenancy parent = tenancies.get(parentId);
         StoredTenancy child = tenancies.registerChild(parentId, tenancyName, region);
+        identity.bootstrapAdministrator(child.getId(), ociContext.realmOf(region), adminEmail, policyName);
         joinAsChild(parent, child, status, subscriptionId, features);
         LOG.infov("createChildTenancy {0} ({1}) in {2}", tenancyName, child.getId(), region);
         return workRequests.succeeded(WR_SERVICE, "CREATE_CHILD_TENANCY", parentId,
