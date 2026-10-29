@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.List;
 import java.util.Map;
+import java.util.stream.IntStream;
 
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.equalTo;
@@ -14,6 +15,7 @@ import static org.hamcrest.Matchers.hasItem;
 import static org.hamcrest.Matchers.hasItems;
 import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.notNullValue;
+import static org.hamcrest.Matchers.nullValue;
 import static org.hamcrest.Matchers.startsWith;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
@@ -317,5 +319,62 @@ class OrganizationsRestIntegrationTest {
             .then().statusCode(200)
                 .body("size()", equalTo(1))
                 .body("[0].name", equalTo("Tenant_Admin_Policy"));
+    }
+
+    @Test
+    void approveAndUnapproveForTransferReturnTheTenancy() {
+        String child = createChild("transfer-" + System.nanoTime(), "us-ashburn-1");
+
+        given().queryParam("compartmentId", config.defaultTenancyId())
+            .when().post("/20230401/organizationTenancies/" + child + "/actions/approveForTransfer")
+            .then()
+                .statusCode(200)
+                .header("opc-request-id", notNullValue())
+                .header("etag", notNullValue())
+                .body("tenancyId", equalTo(child))
+                .body("isApprovedForTransfer", equalTo(true));
+        given().queryParam("compartmentId", config.defaultTenancyId())
+            .when().post("/20230401/organizationTenancies/" + child + "/actions/approveForTransfer")
+            .then().statusCode(409).body("code", equalTo("Conflict"));
+        given().queryParam("compartmentId", config.defaultTenancyId())
+            .when().post("/20230401/organizationTenancies/" + child + "/actions/unapproveForTransfer")
+            .then().statusCode(200).body("isApprovedForTransfer", equalTo(false));
+        given()
+            .when().post("/20230401/organizationTenancies/" + child + "/actions/approveForTransfer")
+            .then().statusCode(400).body("code", equalTo("MissingParameter"));
+    }
+
+    @Test
+    void listLinkFeaturesIsAWrappedCollection() {
+        createChild("features-" + System.nanoTime(), "us-ashburn-1");
+
+        given().queryParam("compartmentId", config.defaultTenancyId())
+            .when().get("/20230401/linkFeatures")
+            .then()
+                .statusCode(200)
+                .header("opc-request-id", notNullValue())
+                .body("items[0].feature", equalTo("CORE"))
+                .body("items.feature", hasItems("CORE", "SUBSCRIPTION_SHARING"))
+                .body("items[0].displayName", notNullValue())
+                .body("items[0].description", notNullValue());
+    }
+
+    @Test
+    void listLinkFeaturesReturnsEveryFeatureInOneResponse() {
+        String parent = "ocid1.tenancy.oc1..features" + System.nanoTime();
+        List<String> features = IntStream.range(0, 120).mapToObj(i -> "FEATURE_" + i).toList();
+        given().header("Authorization", signedAs(parent)).contentType("application/json")
+                .body(Map.of("compartmentId", parent, "tenancyName", "many-features", "homeRegion", "us-ashburn-1",
+                        "adminEmail", "admin@example.com", "features", features))
+            .when().post("/20230401/childTenancies")
+            .then().statusCode(202);
+
+        given().header("Authorization", signedAs(parent)).queryParam("compartmentId", parent)
+            .when().get("/20230401/linkFeatures")
+            .then()
+                .statusCode(200)
+                .header("opc-next-page", nullValue())
+                .body("items.size()", equalTo(121))
+                .body("items[0].feature", equalTo("CORE"));
     }
 }

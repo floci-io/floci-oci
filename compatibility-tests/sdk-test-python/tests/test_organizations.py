@@ -118,3 +118,21 @@ def test_invited_tenancy_joins_on_accept(sdk_config):
 
     senders.cancel_sender_invitation(created.data.id)
     assert senders.get_sender_invitation(created.data.id).data.status == "CANCELED"
+
+
+def test_transfer_approval_and_link_features(sdk_config, organizations, work_requests):
+    child = create_child(organizations, work_requests, f"py-transfer-{time.time_ns()}")
+
+    approved = organizations.approve_organization_tenancy_for_transfer(TENANCY, child)
+    assert approved.headers["etag"]
+    assert approved.data.tenancy_id == child
+    assert approved.data.is_approved_for_transfer is True
+
+    unapproved = organizations.unapprove_organization_tenancy_for_transfer(TENANCY, child)
+    assert unapproved.data.is_approved_for_transfer is False
+
+    features = oci.tenant_manager_control_plane.LinkFeaturesClient(sdk_config, service_endpoint=ENDPOINT)
+    listed = features.list_link_features(TENANCY).data.items
+    assert listed[0].feature == "CORE"
+    assert all(item.display_name and item.description for item in listed)
+
