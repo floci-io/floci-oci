@@ -24,6 +24,15 @@ class OrganizationsDisabledRestIntegrationTest {
                 .body("message", equalTo("Service organizations is not enabled."));
     }
 
+    @Test
+    void disabledOrganizationsAlsoDisablesInvitations() {
+        given().queryParam("compartmentId", "ocid1.tenancy.oc1..any")
+            .when().get("/20230401/senderInvitations")
+            .then()
+                .statusCode(503)
+                .body("code", equalTo("ServiceUnavailable"));
+    }
+
     public static class DisabledOrganizationsProfile implements QuarkusTestProfile {
         @Override
         public Map<String, String> getConfigOverrides() {

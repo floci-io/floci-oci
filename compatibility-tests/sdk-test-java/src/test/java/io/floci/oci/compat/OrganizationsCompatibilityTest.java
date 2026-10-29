@@ -7,18 +7,23 @@ import com.oracle.bmc.tenantmanagercontrolplane.LinkClient;
 import com.oracle.bmc.tenantmanagercontrolplane.OrganizationClient;
 import com.oracle.bmc.tenantmanagercontrolplane.WorkRequestClient;
 import com.oracle.bmc.tenantmanagercontrolplane.model.CreateChildTenancyDetails;
+import com.oracle.bmc.tenantmanagercontrolplane.model.CreateSenderInvitationDetails;
 import com.oracle.bmc.tenantmanagercontrolplane.model.LinkSummary;
 import com.oracle.bmc.tenantmanagercontrolplane.model.OrganizationTenancySummary;
+import com.oracle.bmc.tenantmanagercontrolplane.requests.AcceptRecipientInvitationRequest;
 import com.oracle.bmc.tenantmanagercontrolplane.requests.CreateChildTenancyRequest;
+import com.oracle.bmc.tenantmanagercontrolplane.requests.CreateSenderInvitationRequest;
 import com.oracle.bmc.tenantmanagercontrolplane.requests.DeleteLinkRequest;
 import com.oracle.bmc.tenantmanagercontrolplane.requests.DeleteOrganizationTenancyRequest;
 import com.oracle.bmc.tenantmanagercontrolplane.requests.GetLinkRequest;
 import com.oracle.bmc.tenantmanagercontrolplane.requests.GetOrganizationRequest;
 import com.oracle.bmc.tenantmanagercontrolplane.requests.GetOrganizationTenancyRequest;
+import com.oracle.bmc.tenantmanagercontrolplane.requests.GetSenderInvitationRequest;
 import com.oracle.bmc.tenantmanagercontrolplane.requests.GetWorkRequestRequest;
 import com.oracle.bmc.tenantmanagercontrolplane.requests.ListLinksRequest;
 import com.oracle.bmc.tenantmanagercontrolplane.requests.ListOrganizationTenanciesRequest;
 import com.oracle.bmc.tenantmanagercontrolplane.requests.ListOrganizationsRequest;
+import com.oracle.bmc.tenantmanagercontrolplane.requests.ListRecipientInvitationsRequest;
 import com.oracle.bmc.tenantmanagercontrolplane.requests.RestoreOrganizationTenancyRequest;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -153,5 +158,37 @@ class OrganizationsCompatibilityTest {
         var link = links.getLink(GetLinkRequest.builder().linkId(linkId).build()).getLink();
         assertThat(link.getLifecycleState().getValue()).isEqualTo("TERMINATED");
         assertThat(link.getTimeTerminated()).isNotNull();
+    }
+
+    @Test
+    void anInvitedTenancyJoinsTheOrganizationOnAccept() {
+        String sender = "ocid1.tenancy.oc1..compatsender" + System.nanoTime();
+        String recipient = "ocid1.tenancy.oc1..compatrecipient" + System.nanoTime();
+        try (var senders = EmulatorFixture.senderInvitationsAs(sender);
+             var recipients = EmulatorFixture.recipientInvitationsAs(recipient)) {
+            var created = senders.createSenderInvitation(CreateSenderInvitationRequest.builder()
+                    .createSenderInvitationDetails(CreateSenderInvitationDetails.builder()
+                            .compartmentId(sender)
+                            .recipientTenancyId(recipient)
+                            .displayName("compat invitation")
+                            .build())
+                    .build());
+            assertThat(created.getEtag()).isNotBlank();
+            assertThat(created.getOpcWorkRequestId()).isNotBlank();
+            assertThat(created.getSenderInvitation().getStatus().getValue()).isEqualTo("PENDING");
+
+            var received = recipients.listRecipientInvitations(ListRecipientInvitationsRequest.builder()
+                    .compartmentId(recipient).build()).getRecipientInvitationCollection().getItems();
+            assertThat(received).hasSize(1);
+            assertThat(received.get(0).getSenderTenancyId()).isEqualTo(sender);
+
+            var accepted = recipients.acceptRecipientInvitation(AcceptRecipientInvitationRequest.builder()
+                    .recipientInvitationId(received.get(0).getId()).build());
+            assertThat(accepted.getOpcWorkRequestId()).isNotBlank();
+
+            var sent = senders.getSenderInvitation(GetSenderInvitationRequest.builder()
+                    .senderInvitationId(created.getSenderInvitation().getId()).build()).getSenderInvitation();
+            assertThat(sent.getStatus().getValue()).isEqualTo("ACCEPTED");
+        }
     }
 }

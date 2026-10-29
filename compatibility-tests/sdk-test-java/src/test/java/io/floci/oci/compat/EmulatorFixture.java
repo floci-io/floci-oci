@@ -64,6 +64,20 @@ public final class EmulatorFixture {
         return client;
     }
 
+    public static com.oracle.bmc.tenantmanagercontrolplane.SenderInvitationClient senderInvitationsAs(String tenancyId) {
+        var client = com.oracle.bmc.tenantmanagercontrolplane.SenderInvitationClient.builder()
+                .region(Region.US_ASHBURN_1).build(buildAuth(tenancyId));
+        client.setEndpoint(ENDPOINT);
+        return client;
+    }
+
+    public static com.oracle.bmc.tenantmanagercontrolplane.RecipientInvitationClient recipientInvitationsAs(String tenancyId) {
+        var client = com.oracle.bmc.tenantmanagercontrolplane.RecipientInvitationClient.builder()
+                .region(Region.US_ASHBURN_1).build(buildAuth(tenancyId));
+        client.setEndpoint(ENDPOINT);
+        return client;
+    }
+
     public static com.oracle.bmc.tenantmanagercontrolplane.WorkRequestClient organizationsWorkRequests() {
         var client = com.oracle.bmc.tenantmanagercontrolplane.WorkRequestClient.builder()
                 .region(Region.US_ASHBURN_1).build(AUTH);

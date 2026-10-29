@@ -3,6 +3,7 @@ package io.floci.oci.core.tenancy;
 import com.fasterxml.jackson.core.type.TypeReference;
 import io.floci.oci.config.EmulatorConfig;
 import io.floci.oci.core.common.OciContext;
+import io.floci.oci.core.common.OciException;
 import io.floci.oci.core.common.Ocids;
 import io.floci.oci.core.storage.StorageBackend;
 import io.floci.oci.core.storage.StorageFactory;
@@ -104,6 +105,21 @@ public class TenancyRegistry {
         save(child);
         LOG.infov("Registered child tenancy {0} ({1}) of {2} in {3}", name, id, parentTenancyId, homeRegion);
         return child;
+    }
+
+    /**
+     * Makes an existing tenancy a child of {@code parentTenancyId}, as accepting an invitation
+     * does, registering it with the default home region on first sight.
+     */
+    public synchronized StoredTenancy attachToParent(String tenancyId, String parentTenancyId) {
+        StoredTenancy tenancy = get(tenancyId);
+        if (tenancy.getParentTenancyId() != null && !tenancy.getParentTenancyId().equals(parentTenancyId)) {
+            throw OciException.conflict("Tenancy " + tenancyId + " is already a child of " + tenancy.getParentTenancyId());
+        }
+        tenancy.setParentTenancyId(parentTenancyId);
+        save(tenancy);
+        LOG.infov("Attached tenancy {0} to parent {1}", tenancyId, parentTenancyId);
+        return tenancy;
     }
 
     private static StoredTenancy newTenancy(String id, String name, String homeRegion, String parentTenancyId) {

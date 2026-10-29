@@ -13,6 +13,7 @@ serves it on port 4599 with the other services.
 | Organizations | ListOrganizations, GetOrganization, UpdateOrganization |
 | Organization tenancies | ListOrganizationTenancies, GetOrganizationTenancy, DeleteOrganizationTenancy, RestoreOrganizationTenancy |
 | Links | ListLinks, GetLink, GetLinkWithTenancyNames, DeleteLink |
+| Invitations | CreateSenderInvitation, GetSenderInvitation, ListSenderInvitations, UpdateSenderInvitation, CancelSenderInvitation, GetRecipientInvitation, ListRecipientInvitations, UpdateRecipientInvitation, AcceptRecipientInvitation, IgnoreRecipientInvitation |
 | Work requests | Get, List, errors, logs (`/20230401/workRequests`) |
 
 ## How isolation works
@@ -42,6 +43,11 @@ are `404 NotAuthorizedOrNotFound`.
   terminated this way (`400 InvalidParameter`).
 - Terminating needs an `ACTIVE` member, restoring a `DELETED` one, and `DeleteLink` an `ACTIVE`
   link; anything else is `409 Conflict`. All three honour `if-match`.
+- `CreateSenderInvitation` returns `200` with the invitation, an `etag` and an
+  `opc-work-request-id`; `CancelSenderInvitation` and `AcceptRecipientInvitation` return `202`
+  with an `opc-work-request-id`; `IgnoreRecipientInvitation` and both updates return the
+  invitation with an `etag`. Invitation lists are wrapped and take the SDK's `status` and
+  `lifecycleState` enums; `ListRecipientInvitations` has no `limit` or sort, as in the SDK.
 - `ListLinks` rejects a `lifecycleState` outside `CREATING`, `ACTIVE`, `INACTIVE`, `UPDATING`,
   `FAILED`, `TERMINATED` with `400 InvalidParameter`.
 - Lists are wrapped (`{"items":[…]}`) and paged with `opc-next-page`.
@@ -77,9 +83,30 @@ The OCI SDKs leave these open, so floci-oci picks:
 - `DeleteLink` moves the link to `TERMINATED` with `timeTerminated` set (`TERMINATE_LINK`),
   for any feature, `CORE` included; the child stays a member of the organization.
 
+### Invitations
+
+The SDKs give the shapes but not the flow, so floci-oci picks:
+
+- The recipient invitation is delivered at once, with its own OCID
+  (`ocid1.recipientinvitation…`, the sender's is `ocid1.senderinvitation…`); each points at
+  the other. Both start `ACTIVE` with status `PENDING`, and `subjects` defaults to `LINK`.
+- Only a tenancy that is not a child can invite (`404` otherwise), and only a tenancy outside
+  any organization can be invited or accept (`409 Conflict`). A second pending invitation to
+  the same tenancy is also `409 Conflict`; inviting yourself is `400 InvalidParameter`.
+- Accepting makes the recipient a child of the sender: it joins the sender's organization
+  (created if needed) with a `CORE` link plus one link per invitation feature, and both
+  invitations become `ACCEPTED`.
+- Ignoring marks the recipient's side `IGNORED`. The sender's side stays `PENDING`, since its
+  status enum has no ignored value, until the sender cancels it.
+- Cancel, accept and ignore need a `PENDING` invitation (`409 Conflict` otherwise). Accepting
+  is also `409 Conflict` when the recipient has joined another organization, or the sender has
+  become a child, since the invitation was sent.
+- An invitation without `displayName` uses its own OCID as the name, because the summary
+  shape requires one.
+
 ## Not implemented yet
 
-ApproveForTransfer, UnapproveForTransfer, link features, invitations, governance (including governance
+ApproveForTransfer, UnapproveForTransfer, link features, governance (including governance
 rules), domains, subscriptions and orders. The child tenancy limit is not enforced, and no
 administrator user or policy is created in the child.
 
