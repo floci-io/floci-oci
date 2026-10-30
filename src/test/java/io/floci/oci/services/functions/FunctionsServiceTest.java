@@ -79,6 +79,24 @@ class FunctionsServiceTest {
     }
 
     @Test
+    void aNewDigestForTheSameImageRedeploysIt() {
+        StoredFunction fn = service.createFunction(app("redeploy-app").getId(), "redeploy-fn", "iad.ocir.io/t/fn:latest",
+                "sha256:one", 128L, null, null, null, null, null);
+        fn.setFnFnId("fn-mirror");
+
+        service.updateFunction(fn.getId(), "iad.ocir.io/t/fn:latest", "sha256:two", null, null, null, null, null,
+                null, null);
+
+        StoredFunction updated = service.getFunction(fn.getId());
+        assertEquals("sha256:two", updated.getImageDigest());
+        assertNull(updated.getFnFnId(), "the next invoke mirrors the new image");
+
+        service.updateFunction(fn.getId(), null, "sha256:three", null, null, null, null, null, null, null);
+        assertEquals("iad.ocir.io/t/fn:latest", service.getFunction(fn.getId()).getImage());
+        assertEquals("sha256:three", service.getFunction(fn.getId()).getImageDigest());
+    }
+
+    @Test
     void settingsEnumsAreChecked() {
         assertEquals("InvalidParameter", assertThrows(OciException.class, () -> FunctionsRequests.settings(
                 Map.of("logging", Map.of("lineFormat", "XML")), FunctionsRequests.APPLICATION_SETTINGS)).getCode());

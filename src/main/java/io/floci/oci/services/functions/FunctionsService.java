@@ -353,10 +353,14 @@ public class FunctionsService implements Resettable, CompartmentUsage {
                                          Map<String, Object> settings, String ifMatch) {
         StoredFunction fn = getFunction(functionId);
         Etags.checkIfMatch(ifMatch, fn.getEtag());
-        if (image != null && !image.equals(fn.getImage())) {
-            fn.setImage(image);
+        boolean newImage = image != null && !image.equals(fn.getImage());
+        // A mutable tag (":latest") is redeployed by sending the same image with a new digest.
+        boolean newDigest = imageDigest != null && !imageDigest.equals(fn.getImageDigest());
+        if (newImage || newDigest) {
+            String target = image != null ? image : fn.getImage();
+            fn.setImage(target);
             // Terraform's CustomizeDiff demands the digest change with the image.
-            fn.setImageDigest(imageDigest != null ? imageDigest : digestFor(image));
+            fn.setImageDigest(imageDigest != null ? imageDigest : digestFor(target));
             fn.setFnFnId(null); // re-mirror on next invoke
         }
         fn.setSettings(merged(fn.getSettings(), settings));
