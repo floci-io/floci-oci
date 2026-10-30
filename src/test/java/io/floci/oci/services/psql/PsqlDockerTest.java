@@ -22,6 +22,7 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -218,6 +219,48 @@ class PsqlDockerTest {
 
     @Test
     @Order(6)
+    void aBackupRestoresInPlaceAndIntoANewSystem() throws Exception {
+        String backup = given().contentType("application/json")
+                .body(Map.of("displayName", "docker-nightly", "compartmentId", compartment, "dbSystemId", dbSystemId))
+            .when().post("/20220915/backups")
+            .then().statusCode(202).extract().header("opc-work-request-id");
+        awaitWorkRequest(backup);
+        String backupId = given().when().get("/20220915/workRequests/" + backup)
+            .then().statusCode(200).extract().path("resources[0].identifier");
+        try (Connection connection = connect(NEW_PASSWORD); Statement statement = connection.createStatement()) {
+            statement.execute("INSERT INTO orders VALUES (2, 'after the backup')");
+        }
+
+        String restore = given().contentType("application/json").body(Map.of("backupId", backupId))
+            .when().post("/20220915/dbSystems/" + dbSystemId + "/actions/restore")
+            .then().statusCode(202).extract().header("opc-work-request-id");
+        awaitWorkRequest(restore);
+        awaitState("ACTIVE");
+        assertEquals(List.of("kept across a restart"), items(jdbcUrl, NEW_PASSWORD));
+
+        Map<String, Object> details = new HashMap<>();
+        details.put("displayName", "docker-psql-restored");
+        details.put("compartmentId", compartment);
+        details.put("dbVersion", "16");
+        details.put("shape", "PostgreSQL.VM.Standard.E4.Flex.2.32GB");
+        details.put("storageDetails", Map.of("systemType", "OCI_OPTIMIZED_STORAGE", "isRegionallyDurable", true));
+        details.put("networkDetails", Map.of("subnetId", "ocid1.subnet.oc1.iad.psqldockersubnet"));
+        details.put("credentials", Map.of("username", USER,
+                "passwordDetails", Map.of("passwordType", "PLAIN_TEXT", "password", PASSWORD)));
+        details.put("source", Map.of("sourceType", "BACKUP", "backupId", backupId));
+        String restoredId = given().contentType("application/json").body(details)
+            .when().post("/20220915/dbSystems")
+            .then().statusCode(200).extract().path("id");
+        awaitState(restoredId, "ACTIVE");
+        assertEquals(List.of("kept across a restart"), items(jdbcUrl(restoredId), PASSWORD),
+                "the new system has the backup's data and its own credentials");
+
+        given().when().delete("/20220915/dbSystems/" + restoredId).then().statusCode(202);
+        awaitState(restoredId, "DELETED");
+    }
+
+    @Test
+    @Order(7)
     void stopAndStartKeepTheData() throws Exception {
         given().when().post("/20220915/dbSystems/" + dbSystemId + "/actions/stop")
             .then().statusCode(202);
@@ -237,7 +280,7 @@ class PsqlDockerTest {
     }
 
     @Test
-    @Order(7)
+    @Order(8)
     void deleteRemovesTheContainer() throws Exception {
         given().when().delete("/20220915/dbSystems/" + dbSystemId)
             .then().statusCode(202);
@@ -253,7 +296,11 @@ class PsqlDockerTest {
     }
 
     private String jdbcUrl() throws Exception {
-        Response connection = given().when().get("/20220915/dbSystems/" + dbSystemId + "/connectionDetails")
+        return jdbcUrl(dbSystemId);
+    }
+
+    private String jdbcUrl(String systemId) throws Exception {
+        Response connection = given().when().get("/20220915/dbSystems/" + systemId + "/connectionDetails")
             .then().statusCode(200).extract().response();
         Path caCertificate = Files.createTempFile("floci-psql-ca", ".pem");
         caCertificate.toFile().deleteOnExit();
@@ -263,6 +310,22 @@ class PsqlDockerTest {
         // verify-full also checks the host name against the certificate.
         return "jdbc:postgresql://" + host + ":" + port + "/postgres?sslmode=verify-full&sslrootcert="
                 + caCertificate.toAbsolutePath();
+    }
+
+    private static List<String> items(String url, String password) throws SQLException {
+        Properties properties = new Properties();
+        properties.setProperty("user", USER);
+        properties.setProperty("password", password);
+        properties.setProperty("connectTimeout", "10");
+        List<String> items = new ArrayList<>();
+        try (Connection connection = DriverManager.getConnection(url, properties);
+             Statement statement = connection.createStatement();
+             ResultSet rows = statement.executeQuery("SELECT item FROM orders ORDER BY id")) {
+            while (rows.next()) {
+                items.add(rows.getString(1));
+            }
+        }
+        return items;
     }
 
     private String show(String setting) throws SQLException {
@@ -282,11 +345,15 @@ class PsqlDockerTest {
     }
 
     private void awaitState(String expected) throws InterruptedException {
+        awaitState(dbSystemId, expected);
+    }
+
+    private void awaitState(String systemId, String expected) throws InterruptedException {
         Instant deadline = Instant.now().plus(READY_TIMEOUT);
         String state = null;
         String details = null;
         while (Instant.now().isBefore(deadline)) {
-            Response system = given().when().get("/20220915/dbSystems/" + dbSystemId)
+            Response system = given().when().get("/20220915/dbSystems/" + systemId)
                 .then().statusCode(200).extract().response();
             state = system.path("lifecycleState");
             details = system.path("lifecycleDetails");

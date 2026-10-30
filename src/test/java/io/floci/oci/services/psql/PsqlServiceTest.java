@@ -10,6 +10,7 @@ import io.floci.oci.core.tls.CertificateGenerator;
 import io.floci.oci.core.tls.CertificateGenerator.GeneratedCertificate;
 import io.floci.oci.core.workrequest.StoredWorkRequest;
 import io.floci.oci.core.workrequest.WorkRequestService;
+import io.floci.oci.services.psql.model.StoredBackup;
 import io.floci.oci.services.psql.model.StoredDbSystem;
 import io.floci.oci.services.vault.VaultSecretsService;
 import io.floci.oci.services.vault.model.StoredVaultSecret;
@@ -61,6 +62,7 @@ class PsqlServiceTest {
     private MutableClock clock;
     private CertificateGenerator certificates;
     private PsqlConfigurationsService configurations;
+    private PsqlBackupsService backups;
     private PsqlService mock;
     private PsqlService real;
 
@@ -92,6 +94,8 @@ class PsqlServiceTest {
         lenient().when(containers.isRunning(any())).thenReturn(true);
 
         configurations = new PsqlConfigurationsService(new InMemoryStorage<>(), OciContext.fromConfig(config), clock);
+        backups = new PsqlBackupsService(new InMemoryStorage<>(), workRequests, containers, OciContext.fromConfig(config),
+                config, clock, Runnable::run);
 
         // Mock mode has no manager at all; real mode runs its Docker work inline.
         mock = service(null);
@@ -100,7 +104,7 @@ class PsqlServiceTest {
 
     private PsqlService service(PsqlContainerManager manager) {
         return new PsqlService(systems, config, null, workRequests, manager, OciContext.fromConfig(config),
-                certificates, vaultSecrets, configurations, clock, Runnable::run);
+                certificates, vaultSecrets, configurations, backups, clock, Runnable::run);
     }
 
     private static Map<String, Object> createDetails() {
@@ -261,9 +265,14 @@ class PsqlServiceTest {
         assertEquals("InvalidParameter", assertThrows(OciException.class,
                 () -> mock.createDbSystem(with("instanceCount", 0))).getCode());
 
-        OciException fromBackup = assertThrows(OciException.class, () -> mock.createDbSystem(
+        OciException fromUnknownBackup = assertThrows(OciException.class, () -> mock.createDbSystem(
                 with("source", Map.of("sourceType", "BACKUP", "backupId", "ocid1.postgresqlbackup.oc1.iad.x"))));
-        assertEquals(501, fromBackup.getHttpStatus());
+        assertEquals(400, fromUnknownBackup.getHttpStatus());
+        assertEquals("RelatedResourceNotAuthorizedOrNotFound", fromUnknownBackup.getCode());
+
+        OciException fromDbSystem = assertThrows(OciException.class, () -> mock.createDbSystem(
+                with("source", Map.of("sourceType", "DB_SYSTEM", "primaryDbSystemId", "ocid1.postgresqldbsystem.oc1.iad.x"))));
+        assertEquals(501, fromDbSystem.getHttpStatus());
 
         OciException unknownConfig = assertThrows(OciException.class, () -> mock.createDbSystem(
                 with("configId", "ocid1.postgresqlconfiguration.oc1.iad.custom")));
@@ -576,7 +585,7 @@ class PsqlServiceTest {
     /** Shares the store with {@link #real} but never runs its Docker work, as if it were cut off. */
     private PsqlService interrupted() {
         return new PsqlService(systems, config, null, workRequests, containers, OciContext.fromConfig(config),
-                certificates, vaultSecrets, configurations, clock, task -> { });
+                certificates, vaultSecrets, configurations, backups, clock, task -> { });
     }
 
     @Test
@@ -942,5 +951,81 @@ class PsqlServiceTest {
             Thread.currentThread().interrupt();
             throw new IllegalStateException(e);
         }
+        }
+
+    // ── Backups and restore ────────────────────────────────────────────────────
+
+    private StoredBackup backupOf(StoredDbSystem system) {
+        backups.createBackup(real.backupSource(system.getId()), Map.of("displayName", "nightly",
+                "compartmentId", COMPARTMENT, "dbSystemId", system.getId()));
+        return backups.listBackups(null, null, null, null, null, null, system.getId(), null, null, null).getFirst();
+    }
+
+    @Test
+    void aSystemCreatedFromABackupLoadsItBeforeTurningActive() {
+        StoredBackup backup = backupOf(activeRealSystem());
+
+        PsqlService.Created created = real.createDbSystem(with("source",
+                Map.of("sourceType", "BACKUP", "backupId", backup.getId())));
+        real.pollReadiness();
+
+        StoredDbSystem restored = real.getDbSystem(created.system().getId());
+        verify(containers).restore(any(), eq(backup.getDumpId()));
+        assertEquals("ACTIVE", restored.getLifecycleState());
+        assertEquals(Map.of("sourceType", "BACKUP", "backupId", backup.getId()), restored.getSource());
+        assertEquals(null, restored.getRestoreBackupId());
+    }
+
+    @Test
+    void aPointInTimeSourceRestoresTheBackupBeforeIt() {
+        StoredDbSystem original = activeRealSystem();
+        StoredBackup backup = backupOf(original);
+
+        PsqlService.Created created = real.createDbSystem(with("source", Map.of("sourceType",
+                "POINT_IN_TIME_DB_SYSTEM", "dbSystemId", original.getId(), "timeToRestore", "2099-01-01T00:00:00Z")));
+        real.pollReadiness();
+
+        verify(containers).restore(any(), eq(backup.getDumpId()));
+        assertEquals("POINT_IN_TIME_DB_SYSTEM", created.system().getSource().get("sourceType"));
+    }
+
+    @Test
+    void restoreDbSystemLoadsTheBackupInPlace() {
+        StoredDbSystem system = activeRealSystem();
+        StoredBackup backup = backupOf(system);
+
+        String workRequestId = real.restoreDbSystem(system.getId(), Map.of("backupId", backup.getId()), null);
+
+        verify(containers).restore(any(), eq(backup.getDumpId()));
+        assertEquals("ACTIVE", real.getDbSystem(system.getId()).getLifecycleState());
+        assertEquals("SUCCEEDED", workRequests.get(workRequestId).getStatus());
+        assertEquals("MissingParameter", assertThrows(OciException.class,
+                () -> real.restoreDbSystem(system.getId(), Map.of(), null)).getCode());
+    }
+
+    @Test
+    void aFailedRestoreNeedsAttention() {
+        StoredDbSystem system = activeRealSystem();
+        StoredBackup backup = backupOf(system);
+        doThrow(new IllegalStateException("dump missing")).when(containers).restore(any(), any());
+
+        real.restoreDbSystem(system.getId(), Map.of("backupId", backup.getId()), null);
+
+        assertEquals("NEEDS_ATTENTION", real.getDbSystem(system.getId()).getLifecycleState());
+    }
+
+    @Test
+    void aBackupOfAnotherMajorCannotBeRestored() {
+        StoredBackup backup = backupOf(activeRealSystem());
+
+        assertEquals("InvalidParameter", assertThrows(OciException.class, () -> real.createDbSystem(
+                withAll(Map.of("dbVersion", "16", "source", Map.of("sourceType", "BACKUP", "backupId", backup.getId())))))
+                .getCode());
+    }
+
+    private static Map<String, Object> withAll(Map<String, Object> overrides) {
+        Map<String, Object> details = createDetails();
+        details.putAll(overrides);
+        return details;
     }
 }

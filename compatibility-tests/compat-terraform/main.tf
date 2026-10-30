@@ -279,3 +279,17 @@ output "configuration_state" {
 output "configuration_shape" {
   value = oci_psql_configuration.tf_flexible_configuration.shape
 }
+
+resource "oci_psql_backup" "tf_db_backup" {
+  compartment_id = var.tenancy_ocid
+  db_system_id   = oci_psql_db_system.tf_db_system.id
+  display_name   = "tf-db-backup"
+}
+
+output "backup_state" {
+  value = oci_psql_backup.tf_db_backup.state
+}
+
+output "backup_source_type" {
+  value = oci_psql_backup.tf_db_backup.source_type
+}

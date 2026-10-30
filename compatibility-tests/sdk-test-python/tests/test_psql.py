@@ -85,6 +85,26 @@ def test_db_system_lifecycle(postgresql):
         started = postgresql.start_db_system(db_system_id, oci.psql.models.StartDbSystemDetails())
         assert wait_for_work_request(postgresql, started.headers["opc-work-request-id"]).status == "SUCCEEDED"
         assert postgresql.get_db_system(db_system_id).data.lifecycle_state == "ACTIVE"
+
+        backed_up = postgresql.create_backup(oci.psql.models.CreateBackupDetails(
+            compartment_id=TENANCY, display_name="python-sdk-backup", db_system_id=db_system_id))
+        backup_request = wait_for_work_request(postgresql, backed_up.headers["opc-work-request-id"])
+        assert backup_request.status == "SUCCEEDED"
+        backup_id = backup_request.resources[0].identifier
+        try:
+            backup = postgresql.get_backup(backup_id)
+            assert backup.headers["etag"]
+            assert backup.data.lifecycle_state == "ACTIVE"
+            assert backup.data.source_type == "MANUAL"
+            assert backup_id in [item.id for item in postgresql.list_backups(id=db_system_id).data.items]
+
+            restored = postgresql.restore_db_system(
+                db_system_id, oci.psql.models.RestoreDbSystemDetails(backup_id=backup_id))
+            assert wait_for_work_request(postgresql, restored.headers["opc-work-request-id"]).status == "SUCCEEDED"
+            assert postgresql.get_db_system(db_system_id).data.lifecycle_state == "ACTIVE"
+            assert postgresql.get_pitr_details(db_system_id).data.pitr_state in ("ACTIVE", "INACTIVE")
+        finally:
+            postgresql.delete_backup(backup_id)
     finally:
         deleted = postgresql.delete_db_system(db_system_id)
         wait_for_work_request(postgresql, deleted.headers["opc-work-request-id"])

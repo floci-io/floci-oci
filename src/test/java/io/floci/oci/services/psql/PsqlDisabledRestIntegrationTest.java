@@ -27,6 +27,15 @@ class PsqlDisabledRestIntegrationTest {
     }
 
     @Test
+    void disabledPsqlAlsoDisablesBackups() {
+        given()
+            .when().get("/20220915/backups")
+            .then()
+                .statusCode(503)
+                .body("code", equalTo("ServiceUnavailable"));
+    }
+
+    @Test
     void disabledPsqlAlsoDisablesConfigurations() {
         given()
             .when().get("/20220915/configurations")

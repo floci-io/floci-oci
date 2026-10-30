@@ -20,6 +20,7 @@ import io.floci.oci.core.tls.KeyAlgorithm;
 import io.floci.oci.core.workrequest.StoredWorkRequest;
 import io.floci.oci.core.workrequest.WorkRequestService;
 import io.floci.oci.services.psql.model.StoredDbInstance;
+import io.floci.oci.services.psql.model.StoredBackup;
 import io.floci.oci.services.psql.model.StoredConfiguration;
 import io.floci.oci.services.psql.model.StoredDbSystem;
 import io.floci.oci.services.vault.VaultSecretsService;
@@ -100,6 +101,7 @@ public class PsqlService implements Resettable, CompartmentUsage {
     private final CertificateGenerator certificates;
     private final VaultSecretsService vaultSecrets;
     private final PsqlConfigurationsService configurations;
+    private final PsqlBackupsService backups;
     private final Clock clock;
     private final Executor lifecycle;
     private final ExecutorService ownedLifecycle;
@@ -111,11 +113,11 @@ public class PsqlService implements Resettable, CompartmentUsage {
                        ServiceRegistry serviceRegistry, WorkRequestService workRequests,
                        PsqlContainerManager containers, OciContext ociContext,
                        CertificateGenerator certificates, VaultSecretsService vaultSecrets,
-                       PsqlConfigurationsService configurations) {
+                       PsqlConfigurationsService configurations, PsqlBackupsService backups) {
         this(storageFactory.create("psql", "psql-dbsystems.json",
                         new TypeReference<Map<String, StoredDbSystem>>() {}),
                 config, serviceRegistry, workRequests, containers, ociContext, certificates,
-                vaultSecrets, configurations, Clock.systemUTC(), null);
+                vaultSecrets, configurations, backups, Clock.systemUTC(), null);
     }
 
     /**
@@ -127,7 +129,8 @@ public class PsqlService implements Resettable, CompartmentUsage {
                 ServiceRegistry serviceRegistry, WorkRequestService workRequests,
                 PsqlContainerManager containers, OciContext ociContext,
                 CertificateGenerator certificates, VaultSecretsService vaultSecrets,
-                PsqlConfigurationsService configurations, Clock clock, Executor lifecycle) {
+                PsqlConfigurationsService configurations, PsqlBackupsService backups, Clock clock,
+                Executor lifecycle) {
         this.systems = systems;
         this.config = config;
         this.serviceRegistry = serviceRegistry;
@@ -137,6 +140,7 @@ public class PsqlService implements Resettable, CompartmentUsage {
         this.certificates = certificates;
         this.vaultSecrets = vaultSecrets;
         this.configurations = configurations;
+        this.backups = backups;
         this.clock = clock;
         // No thread starts until the first task is submitted, which only real mode does.
         this.ownedLifecycle = lifecycle != null ? null : Executors.newSingleThreadExecutor(daemon("psql-lifecycle"));
@@ -148,7 +152,8 @@ public class PsqlService implements Resettable, CompartmentUsage {
         serviceRegistry.register(ServiceDescriptor.builder("psql")
                 .enabled(config.services().psql().enabled())
                 .storageKey("psql")
-                .resourceClasses(PsqlController.class, PsqlConfigurationsController.class)
+                .resourceClasses(PsqlController.class, PsqlConfigurationsController.class,
+                        PsqlBackupsController.class)
                 .build());
         if (realMode() && config.services().psql().enabled()) {
             readinessPoller.scheduleWithFixedDelay(this::pollReadinessSafely,
@@ -187,6 +192,12 @@ public class PsqlService implements Resettable, CompartmentUsage {
                     purgeQuietly(system);
                 }
             }
+            // After the containers: Docker does not remove a volume a container still mounts.
+            try {
+                containers.removeBackups();
+            } catch (RuntimeException e) {
+                LOG.warnv("Could not remove the PostgreSQL backup volume: {0}", e.getMessage());
+            }
         }
         systems.clear();
     }
@@ -218,7 +229,7 @@ public class PsqlService implements Resettable, CompartmentUsage {
         PsqlCatalog.Shape shape = PsqlCatalog.parseShape(PsqlRequests.requireString(details, "shape"));
         Map<String, Object> storage = storageDetails(PsqlRequests.requireMap(details, "storageDetails"));
         Map<String, Object> network = networkDetails(PsqlRequests.requireMap(details, "networkDetails"));
-        Map<String, Object> source = sourceDetails(PsqlRequests.map(details, "source"));
+        RestoreSource source = sourceDetails(PsqlRequests.map(details, "source"), major);
         Map<String, Object> credentials = PsqlRequests.requireMap(details, "credentials");
         String adminUsername = PsqlRequests.requireString(credentials, "username");
         String masterPassword = resolvePassword(PsqlRequests.requireMap(credentials, "passwordDetails"));
@@ -256,7 +267,8 @@ public class PsqlService implements Resettable, CompartmentUsage {
         system.setStorageDetails(storage);
         system.setNetworkDetails(network);
         system.setManagementPolicy(managementPolicy(PsqlRequests.map(details, "managementPolicy"), null));
-        system.setSource(source);
+        system.setSource(source.wire());
+        system.setRestoreBackupId(source.backupId());
         system.setConfigId(configId != null ? configId : defaultConfigId);
         system.setConfigOverrides(overrides);
         system.setAdminUsername(adminUsername);
@@ -538,6 +550,68 @@ public class PsqlService implements Resettable, CompartmentUsage {
         });
     }
 
+    // ── Backups and restore ────────────────────────────────────────────────────
+
+    /** The DB system to back up: it must be ACTIVE, with its server running in real mode. */
+    public StoredDbSystem backupSource(String dbSystemId) {
+        StoredDbSystem system = getDbSystem(dbSystemId);
+        if (!"ACTIVE".equals(system.getLifecycleState())) {
+            throw incorrectState(system, "backed up");
+        }
+        return system;
+    }
+
+    /**
+     * Restores a backup over the running system's data, in place: the dump drops and recreates
+     * what it contains and keeps the admin password. {@code timeToRestore} picks the backup at or
+     * before it; otherwise {@code backupId} names it. Returns the work request id.
+     */
+    public String restoreDbSystem(String dbSystemId, Map<String, Object> details, String ifMatch) {
+        StoredDbSystem system = mutable(dbSystemId, ifMatch, "ACTIVE");
+        String timeToRestore = PsqlRequests.string(details, "timeToRestore");
+        String backupId = PsqlRequests.string(details, "backupId");
+        StoredBackup backup;
+        if (timeToRestore != null) {
+            backup = backups.requireAtOrBefore(dbSystemId, timeToRestore);
+        } else if (backupId != null) {
+            backup = backups.requireRestorable(backupId);
+        } else {
+            throw OciException.missingParameter("Missing required parameter: backupId or timeToRestore");
+        }
+        String major = PsqlCatalog.major(system.getDbVersion());
+        if (!major.equals(backup.getDbSystemDetails().get("dbVersion"))) {
+            throw OciException.invalidParameter("Backup " + backup.getId() + " is of PostgreSQL "
+                    + backup.getDbSystemDetails().get("dbVersion") + ", not " + major);
+        }
+        if (!realMode()) {
+            return finishAtOnce(system, "ACTIVE");
+        }
+        String workRequestId = begin(system, "UPDATING", "UPDATE_POSTGRESQL_DB_SYSTEM", "UPDATED");
+        setInstanceStates(system, "UPDATING");
+        systems.put(system.getId(), system);
+        String dumpId = backup.getDumpId();
+        runAsync(system, current -> {
+            try {
+                containers.restore(current, dumpId);
+            } catch (RuntimeException e) {
+                return () -> fail(current, "NEEDS_ATTENTION", "The backup could not be restored: " + e.getMessage());
+            }
+            return () -> {
+                current.setLifecycleState("ACTIVE");
+                setInstanceStates(current, "ACTIVE");
+                touch(current);
+                saveIn(current);
+                finishWorkRequest(current, "SUCCEEDED", null);
+                LOG.infov("restoreDbSystem {0} from backup {1}", current.getId(), dumpId);
+            };
+        });
+        return workRequestId;
+    }
+
+    public Map<String, Object> pitrDetails(String dbSystemId) {
+        return backups.pitrDetails(getDbSystem(dbSystemId));
+    }
+
     // ── Runtime actions ────────────────────────────────────────────────────────
 
     public String stopDbSystem(String dbSystemId, String ifMatch) {
@@ -806,6 +880,16 @@ public class PsqlService implements Resettable, CompartmentUsage {
                 settle(system, () -> fail(system, waiting.failureState(),
                         "The configuration could not be applied: " + e.getMessage()));
                 return;
+            }
+            if (system.getRestoreBackupId() != null) {
+                try {
+                    containers.restore(system, system.getRestoreBackupId());
+                } catch (RuntimeException e) {
+                    settle(system, () -> fail(system, waiting.failureState(),
+                            "The backup could not be restored: " + e.getMessage()));
+                    return;
+                }
+                system.setRestoreBackupId(null);
             }
             settle(system, () -> {
                 containers.serverVersion(system).ifPresent(system::setDbVersion);
@@ -1100,13 +1184,48 @@ public class PsqlService implements Resettable, CompartmentUsage {
     }
 
     /** Only a fresh DB system is supported; creating from a backup or another system is not. */
-    private static Map<String, Object> sourceDetails(Map<String, Object> requested) {
+    /** A create's {@code source}, as echoed back on GET, and the backup it restores, if any. */
+    private record RestoreSource(Map<String, Object> wire, String backupId) {
+    }
+
+    /**
+     * The {@code source} of a create: none, a backup, or a point in time of another DB system
+     * (the backup at or before it). The echo carries exactly the fields the SDK defines for the
+     * source type, since Terraform plans a replacement if any of them read back differently.
+     */
+    private RestoreSource sourceDetails(Map<String, Object> requested, String major) {
         String sourceType = requested == null ? "NONE" : PsqlRequests.requireString(requested, "sourceType");
-        if (!"NONE".equals(sourceType)) {
-            throw OciException.notImplemented("Creating a DB system from source " + sourceType
+        Map<String, Object> wire = new LinkedHashMap<>();
+        wire.put("sourceType", sourceType);
+        StoredBackup backup;
+        switch (sourceType) {
+            case "NONE" -> {
+                return new RestoreSource(wire, null);
+            }
+            case "BACKUP" -> {
+                String backupId = PsqlRequests.requireString(requested, "backupId");
+                backup = backups.requireRestorable(backupId);
+                wire.put("backupId", backupId);
+                if (requested.get("isHavingRestoreConfigOverrides") instanceof Boolean overrides) {
+                    wire.put("isHavingRestoreConfigOverrides", overrides);
+                }
+            }
+            case "POINT_IN_TIME_DB_SYSTEM" -> {
+                String dbSystemId = PsqlRequests.requireString(requested, "dbSystemId");
+                String timeToRestore = PsqlRequests.requireString(requested, "timeToRestore");
+                backup = backups.requireAtOrBefore(dbSystemId, timeToRestore);
+                wire.put("dbSystemId", dbSystemId);
+                wire.put("timeToRestore", timeToRestore);
+            }
+            default -> throw OciException.notImplemented("Creating a DB system from source " + sourceType
                     + " is not supported by floci-oci");
         }
-        return Map.of("sourceType", "NONE");
+        Object backupMajor = backup.getDbSystemDetails().get("dbVersion");
+        if (!major.equals(backupMajor)) {
+            throw OciException.invalidParameter("Backup " + backup.getId() + " is of PostgreSQL " + backupMajor
+                    + ", not " + major);
+        }
+        return new RestoreSource(wire, backup.getDumpId());
     }
 
     /** The response always carries a maintenance window and a backup policy; fill in what is missing. */

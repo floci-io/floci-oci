@@ -36,6 +36,14 @@ public class PsqlContainerManager {
     private static final String TLS_DIR = "/etc/floci-tls";
     private static final Duration EXEC_TIMEOUT = Duration.ofSeconds(30);
     private static final Duration PROBE_TIMEOUT = Duration.ofSeconds(5);
+    private static final Duration DUMP_TIMEOUT = Duration.ofMinutes(10);
+    /** Where every DB system container mounts the volume that holds the backups. */
+    static final String BACKUP_DIR = "/floci-backups";
+    private static final String RESTORE = "test -f \"$FLOCI_DUMP\""
+            + " && printf '%s\\n' \"SELECT format('DROP DATABASE %I WITH (FORCE)', datname) FROM pg_database"
+            + " WHERE NOT datistemplate \\\\gexec\" 'CREATE DATABASE postgres;'"
+            + " | psql -v ON_ERROR_STOP=1 -q -U \"$FLOCI_ROLE\" -d template1"
+            + " && psql -q -U \"$FLOCI_ROLE\" -d template1 -f \"$FLOCI_DUMP\" > /dev/null";
 
     /**
      * Writes the certificate and key the container received in its environment where Postgres
@@ -119,6 +127,7 @@ public class PsqlContainerManager {
         int hostPort = claimPort(system.getHostPort());
         try {
             lifecycleManager.ensureVolume(system.getVolumeName());
+            lifecycleManager.ensureVolume(backupVolumeName());
             ContainerSpec spec = containerBuilder.newContainer(image)
                     .withName(name)
                     .withEnv("POSTGRES_USER", system.getAdminUsername())
@@ -129,6 +138,7 @@ public class PsqlContainerManager {
                     .withEntrypoint(entrypoint(system))
                     .withPortBinding(POSTGRES_PORT, hostPort)
                     .withNamedVolume(system.getVolumeName(), dataPath(major))
+                    .withNamedVolume(backupVolumeName(), BACKUP_DIR)
                     .withDockerNetwork(Optional.empty())
                     .withLogRotation()
                     .withLabels(ContainerStorageHelper.resourceIdentityLabels(
@@ -275,6 +285,58 @@ public class PsqlContainerManager {
     public void purge(StoredDbSystem system) {
         stop(system);
         lifecycleManager.removeVolume(system.getVolumeName());
+    }
+
+    /** The one volume every DB system container shares, holding a dump file per backup. */
+    public String backupVolumeName() {
+        return ContainerStorageHelper.dockerName(config, "psql-backups");
+    }
+
+    /**
+     * Dumps every database and role of the running system into the backup volume, as
+     * {@code <dumpId>.sql}, and returns the dump's size in bytes. Role passwords stay out
+     * ({@code --no-role-passwords}), so a system the dump is loaded into keeps its own.
+     *
+     * @throws IllegalStateException when the dump fails
+     */
+    public long dump(StoredDbSystem system, String dumpId) {
+        String file = BACKUP_DIR + "/" + dumpId + ".sql";
+        ExecResult result = lifecycleManager.exec(system.getContainerName(),
+                List.of("FLOCI_ROLE=" + system.getAdminUsername(), "FLOCI_DUMP=" + file),
+                List.of("sh", "-c", "pg_dumpall --no-role-passwords -U \"$FLOCI_ROLE\""
+                        + " -f \"$FLOCI_DUMP\" && stat -c %s \"$FLOCI_DUMP\""),
+                DUMP_TIMEOUT);
+        if (!result.succeeded()) {
+            throw new IllegalStateException("pg_dumpall failed (exit " + result.exitCode() + "): "
+                    + result.stderr().strip());
+        }
+        return Long.parseLong(result.stdout().strip());
+    }
+
+    /**
+     * Replaces the running system's databases with the dump {@code dumpId}. From
+     * {@code template1}, every database that is not a template is dropped (closing its
+     * connections) and an empty {@code postgres} created; then the dump is loaded. Roles are
+     * kept: a role the dump creates that already exists, such as the admin, fails and is
+     * skipped, as psql does without ON_ERROR_STOP.
+     *
+     * @throws IllegalStateException when the dump file is missing or the databases cannot be dropped
+     */
+    public void restore(StoredDbSystem system, String dumpId) {
+        String file = BACKUP_DIR + "/" + dumpId + ".sql";
+        ExecResult result = lifecycleManager.exec(system.getContainerName(),
+                List.of("FLOCI_ROLE=" + system.getAdminUsername(), "FLOCI_DUMP=" + file),
+                List.of("sh", "-c", RESTORE),
+                DUMP_TIMEOUT);
+        if (!result.succeeded()) {
+            throw new IllegalStateException("The backup could not be restored (exit " + result.exitCode() + "): "
+                    + result.stderr().strip());
+        }
+    }
+
+    /** Removes the backup volume: for a state reset, once no container uses it. */
+    public void removeBackups() {
+        lifecycleManager.removeVolume(backupVolumeName());
     }
 
     /** The host a client reaches a published port at, which the certificate has to name. */

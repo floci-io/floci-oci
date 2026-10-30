@@ -194,7 +194,7 @@ flowchart LR
 | Security | Vault + KMS (vaults, keys, key versions, **real** AES-GCM / RSA / ECDSA crypto), Secrets and secret bundles |
 | Serverless | Functions on API versions `20260325` and `20181201` (applications, functions, work requests, runtime catalog, real invocation through an Fn Project sidecar) |
 | Kubernetes | Container Engine for Kubernetes (OKE): clusters with their settings read back as sent, endpoint config updates, node pools, options, kubeconfig generation, work requests, real-mode k3s sidecar |
-| Database | Database with PostgreSQL: DB systems, start/stop/restart, master password reset, connection details with a CA certificate, shapes, default and custom configurations, work requests, real PostgreSQL sidecar |
+| Database | Database with PostgreSQL: DB systems, start/stop/restart, master password reset, connection details with a CA certificate, shapes, default and custom configurations, backups, restore and point-in-time recovery, work requests, real PostgreSQL sidecar |
 | Organizations | Child tenancies (each with its own home region and isolated storage), organizations, organization tenancies, links, invitations; Governance Rules (allowed regions enforced) |
 | Async operations | Work requests, partitioned per service (Identity/Queue/Streaming use `SUCCEEDED`, Object Storage/OKE use `COMPLETED`) |
 
@@ -230,7 +230,7 @@ floci-oci runs a real container where in-process emulation would not be faithful
 |---|---|---|
 | Functions | `fnproject/fnserver:latest` | The open-source engine OCI Functions is built on. Your function image runs for real: fnserver spawns it as a sibling container and speaks the FDK http-stream contract |
 | OKE | `rancher/k3s:v1.30.1-k3s1` | Real local Kubernetes cluster execution via a k3s sidecar container with dynamic host port mapping (`6443..6543`) and named data volume `/var/lib/rancher/k3s` |
-| Database with PostgreSQL | `postgres:{major}-alpine` | A real PostgreSQL server per DB system, of the major the DB system asks for, with TLS, a host port from `15432..15531` and a named data volume |
+| Database with PostgreSQL | `postgres:{major}-alpine` | A real PostgreSQL server per DB system, of the major the DB system asks for, with TLS, a host port from `15432..15531` and a named data volume, plus one shared volume for backup dumps |
 
 Docker-backed services need the Docker socket:
 
@@ -430,8 +430,8 @@ The [`compatibility-tests`](./compatibility-tests/) directory validates floci-oc
 
 | Module | Language / Tool | SDK / Client | Tests |
 |---|---|---|---:|
-| `sdk-test-java` | Java | oci-java-sdk (incl. OKE integration, Organizations child tenancies and invitations, governance rules and a JDBC connection to a PostgreSQL DB system and custom configurations) | 34 |
-| `sdk-test-python` | Python 3 | oci (incl. `UploadManager` streaming, Organizations invitations and governance rules, PostgreSQL custom configurations) | 31 |
+| `sdk-test-java` | Java | oci-java-sdk (incl. OKE integration, Organizations child tenancies and invitations, governance rules and a JDBC connection to a PostgreSQL DB system, custom configurations and an in-place restore) | 34 |
+| `sdk-test-python` | Python 3 | oci (incl. `UploadManager` streaming, Organizations invitations and governance rules, PostgreSQL custom configurations and backups) | 31 |
 | `sdk-test-go` | Go | oci-go-sdk (OKE container engine) | 1 |
 | `sdk-test-cli` | Bash / BATS | OCI CLI 3.89.3 (all 10 services, incl. error codes and PAR access) | 68 |
 | `compat-terraform` | Terraform | oracle/oci provider (14 resources, zero-drift plan) | 6 |
