@@ -79,8 +79,12 @@ public class OciException extends RuntimeException {
         return new OciException("ServiceUnavailable", message, 503);
     }
 
+    /**
+     * A feature floci-oci does not emulate. {@code MethodNotImplemented} is the only 501 in Oracle's
+     * error catalog, and the only 5xx the Go SDK does not retry by default.
+     */
     public static OciException notImplemented(String message) {
-        return new OciException("NotImplemented", message, 501);
+        return new OciException("MethodNotImplemented", message, 501);
     }
 
     // Object Storage specific codes
