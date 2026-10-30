@@ -1,5 +1,6 @@
 package io.floci.oci.services.psql.model;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import io.quarkus.runtime.annotations.RegisterForReflection;
 
 import java.util.ArrayList;
@@ -36,6 +37,7 @@ public class StoredDbSystem {
     private Map<String, Object> managementPolicy;
     private Map<String, Object> source;
     private String configId;
+    private String replacedConfigId;
     private String adminUsername;
     private Map<String, String> freeformTags;
     private Map<String, Map<String, Object>> definedTags;
@@ -52,6 +54,8 @@ public class StoredDbSystem {
     private String privateKeyPem;
     private String endpointHost;
     private int endpointPort;
+    /** The settings its configuration overrides, resolved when the configuration is set. */
+    private Map<String, String> configOverrides;
 
     /** The DbSystem body: every mandatory field, and each optional one that has a value. */
     public Map<String, Object> toWire() {
@@ -275,6 +279,20 @@ public class StoredDbSystem {
         this.configId = configId;
     }
 
+    /**
+     * The configuration a reload under way would go back to. Not stored: an emulator restart
+     * abandons the reload, so nothing can go back to it afterwards.
+     */
+    @JsonIgnore
+    public String getReplacedConfigId() {
+        return replacedConfigId;
+    }
+
+    @JsonIgnore
+    public void setReplacedConfigId(String replacedConfigId) {
+        this.replacedConfigId = replacedConfigId;
+    }
+
     public String getAdminUsername() {
         return adminUsername;
     }
@@ -393,5 +411,13 @@ public class StoredDbSystem {
 
     public void setEndpointPort(int endpointPort) {
         this.endpointPort = endpointPort;
+    }
+
+    public Map<String, String> getConfigOverrides() {
+        return configOverrides;
+    }
+
+    public void setConfigOverrides(Map<String, String> configOverrides) {
+        this.configOverrides = configOverrides;
     }
 }

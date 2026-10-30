@@ -15,6 +15,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -214,5 +215,18 @@ class PsqlContainerManagerTest {
     void theDataDirectoryFollowsTheImageLayout() {
         assertEquals("/var/lib/postgresql/data", PsqlContainerManager.dataPath("17"));
         assertEquals("/var/lib/postgresql", PsqlContainerManager.dataPath("18"));
+    }
+
+    @Test
+    void onlyRestartRequiredOverridesGoOnThePostgresCommandLine() {
+        StoredDbSystem system = new StoredDbSystem();
+        system.setConfigOverrides(Map.of("work_mem", "16MB", "max_connections", "300", "shared_buffers", "256MB"));
+
+        List<String> entrypoint = PsqlContainerManager.entrypoint(system);
+
+        assertEquals(List.of("sh", "-c"), entrypoint.subList(0, 2));
+        assertTrue(entrypoint.get(2).contains("\"$@\""));
+        assertEquals(List.of("sh", "-c", "max_connections=300", "-c", "shared_buffers=256MB"),
+                entrypoint.subList(3, entrypoint.size()));
     }
 }

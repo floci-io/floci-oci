@@ -23,6 +23,7 @@ import java.sql.Statement;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.TimeUnit;
@@ -151,6 +152,72 @@ class PsqlDockerTest {
 
     @Test
     @Order(5)
+    void aConfigurationReachesPostgresOnReloadAndRestart() throws Exception {
+        String configId = given().contentType("application/json")
+                .body(Map.of("displayName", "docker-tuned", "compartmentId", compartment, "dbVersion", "16",
+                        "isFlexible", true, "dbConfigurationOverrides", Map.of("items", List.of(
+                                Map.of("configKey", "work_mem", "overridenConfigValue", "16MB"),
+                                Map.of("configKey", "max_connections", "overridenConfigValue", "150")))))
+            .when().post("/20220915/configurations")
+            .then().statusCode(200).extract().path("id");
+
+        String reload = given().contentType("application/json")
+                .body(Map.of("dbConfigurationParams", Map.of("configId", configId, "applyConfig", "RELOAD")))
+            .when().put("/20220915/dbSystems/" + dbSystemId)
+            .then().statusCode(202).extract().header("opc-work-request-id");
+        awaitWorkRequest(reload);
+        awaitState("ACTIVE");
+        assertEquals("16MB", show("work_mem"));
+        assertEquals("100", show("max_connections"), "a restart-only setting waits for the next start");
+
+        String restart = given().contentType("application/json")
+                .body(Map.of("dbConfigurationParams", Map.of("configId", configId, "applyConfig", "RESTART")))
+            .when().put("/20220915/dbSystems/" + dbSystemId)
+            .then().statusCode(202).extract().header("opc-work-request-id");
+        awaitWorkRequest(restart);
+        awaitState("ACTIVE");
+        jdbcUrl = jdbcUrl();
+        assertEquals("150", show("max_connections"));
+        assertEquals("16MB", show("work_mem"));
+
+        // work_mem comes first in the catalog, so it has already changed when the next value fails.
+        String rejected = configuration("docker-rejected", Map.of("work_mem", "32MB", "maintenance_work_mem", "huge"));
+        awaitWorkRequest(applyConfiguration(rejected, "RELOAD"), "FAILED");
+        awaitState("ACTIVE");
+        assertEquals("16MB", show("work_mem"), "a rejected reload puts the previous settings back");
+        assertEquals(configId, given().when().get("/20220915/dbSystems/" + dbSystemId)
+            .then().statusCode(200).extract().path("configId"));
+
+        String unstartable = configuration("docker-unstartable", Map.of("shared_buffers", "huge"));
+        awaitWorkRequest(applyConfiguration(unstartable, "RESTART"), "FAILED");
+        awaitState("NEEDS_ATTENTION");
+
+        awaitWorkRequest(applyConfiguration(configId, "RELOAD"), "SUCCEEDED");
+        awaitState("ACTIVE");
+        jdbcUrl = jdbcUrl();
+        assertEquals("150", show("max_connections"), "a corrected configuration brings the system back");
+    }
+
+    private String configuration(String name, Map<String, String> settings) {
+        List<Map<String, String>> items = settings.entrySet().stream()
+                .map(setting -> Map.of("configKey", setting.getKey(), "overridenConfigValue", setting.getValue()))
+                .toList();
+        return given().contentType("application/json")
+                .body(Map.of("displayName", name, "compartmentId", compartment, "dbVersion", "16",
+                        "isFlexible", true, "dbConfigurationOverrides", Map.of("items", items)))
+            .when().post("/20220915/configurations")
+            .then().statusCode(200).extract().path("id");
+    }
+
+    private String applyConfiguration(String configId, String applyConfig) {
+        return given().contentType("application/json")
+                .body(Map.of("dbConfigurationParams", Map.of("configId", configId, "applyConfig", applyConfig)))
+            .when().put("/20220915/dbSystems/" + dbSystemId)
+            .then().statusCode(202).extract().header("opc-work-request-id");
+    }
+
+    @Test
+    @Order(6)
     void stopAndStartKeepTheData() throws Exception {
         given().when().post("/20220915/dbSystems/" + dbSystemId + "/actions/stop")
             .then().statusCode(202);
@@ -170,7 +237,7 @@ class PsqlDockerTest {
     }
 
     @Test
-    @Order(6)
+    @Order(7)
     void deleteRemovesTheContainer() throws Exception {
         given().when().delete("/20220915/dbSystems/" + dbSystemId)
             .then().statusCode(202);
@@ -196,6 +263,14 @@ class PsqlDockerTest {
         // verify-full also checks the host name against the certificate.
         return "jdbc:postgresql://" + host + ":" + port + "/postgres?sslmode=verify-full&sslrootcert="
                 + caCertificate.toAbsolutePath();
+    }
+
+    private String show(String setting) throws SQLException {
+        try (Connection connection = connect(NEW_PASSWORD); Statement statement = connection.createStatement();
+             ResultSet row = statement.executeQuery("SHOW " + setting)) {
+            assertTrue(row.next());
+            return row.getString(1);
+        }
     }
 
     private Connection connect(String password) throws SQLException {
@@ -224,6 +299,10 @@ class PsqlDockerTest {
     }
 
     private void awaitWorkRequest(String id) throws InterruptedException {
+        awaitWorkRequest(id, "SUCCEEDED");
+    }
+
+    private void awaitWorkRequest(String id, String expected) throws InterruptedException {
         Instant deadline = Instant.now().plus(READY_TIMEOUT);
         String status = null;
         while (Instant.now().isBefore(deadline)) {
@@ -234,7 +313,7 @@ class PsqlDockerTest {
             }
             Thread.sleep(500);
         }
-        assertEquals("SUCCEEDED", status);
+        assertEquals(expected, status);
     }
 
     public static class RealPsqlProfile implements QuarkusTestProfile {

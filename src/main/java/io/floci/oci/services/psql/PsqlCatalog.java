@@ -42,7 +42,64 @@ public final class PsqlCatalog {
     private static final String FIXED = "fixed";
     private static final String CATALOG_TIME = "2023-11-14T00:00:00.000Z";
 
+    /**
+     * The PostgreSQL settings a configuration may override. OCI publishes no list, so this is a
+     * small, emulator-chosen set of common settings. A setting that needs a restart is passed to
+     * {@code postgres} on the command line at start; the others are applied with
+     * {@code ALTER SYSTEM} and a reload, so a RELOAD can change them.
+     */
+    static final List<Parameter> PARAMETERS = List.of(
+            new Parameter("work_mem", "4MB", "64kB-2GB", "memory", false,
+                    "Memory used by internal sort operations and hash tables before writing to disk"),
+            new Parameter("maintenance_work_mem", "64MB", "1MB-2GB", "memory", false,
+                    "Memory used by maintenance operations such as VACUUM and CREATE INDEX"),
+            new Parameter("effective_io_concurrency", "1", "0-1000", "integer", false,
+                    "Number of concurrent disk I/O operations the planner expects"),
+            new Parameter("random_page_cost", "4", "0-10000", "real", false,
+                    "Planner's estimate of the cost of a nonsequentially fetched disk page"),
+            new Parameter("log_min_duration_statement", "-1", "-1-2147483647", "integer", false,
+                    "Logs statements that run at least this many milliseconds; -1 disables it"),
+            new Parameter("statement_timeout", "0", "0-2147483647", "integer", false,
+                    "Aborts any statement that takes more than this many milliseconds; 0 disables it"),
+            new Parameter("max_connections", "100", "10-5000", "integer", true,
+                    "Maximum number of concurrent connections"),
+            new Parameter("shared_buffers", "128MB", "16MB-64GB", "memory", true,
+                    "Memory the server uses for shared memory buffers"));
+
     private PsqlCatalog() {
+    }
+
+    /** A setting a configuration may override, with the values ConfigParams reports for it. */
+    public record Parameter(String key, String defaultValue, String allowedValues, String dataType,
+                            boolean restartRequired, String description) {
+    }
+
+    /** The overridable setting called {@code key}. */
+    public static Optional<Parameter> parameter(String key) {
+        return PARAMETERS.stream().filter(p -> p.key().equals(key)).findFirst();
+    }
+
+    /**
+     * The {@code ConfigurationDetails.items} for a configuration with {@code overrides}: every
+     * catalog setting, with {@code overridenConfigValue} where the configuration sets one.
+     */
+    public static List<Map<String, Object>> configParams(Map<String, String> overrides) {
+        List<Map<String, Object>> items = new ArrayList<>();
+        for (Parameter parameter : PARAMETERS) {
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("configKey", parameter.key());
+            item.put("defaultConfigValue", parameter.defaultValue());
+            if (overrides.containsKey(parameter.key())) {
+                item.put("overridenConfigValue", overrides.get(parameter.key()));
+            }
+            item.put("allowedValues", parameter.allowedValues());
+            item.put("isRestartRequired", parameter.restartRequired());
+            item.put("dataType", parameter.dataType());
+            item.put("isOverridable", true);
+            item.put("description", parameter.description());
+            items.add(item);
+        }
+        return items;
     }
 
     /** A requested shape, reduced to the compute shape OCI reports and the size it carried, if any. */
@@ -147,7 +204,7 @@ public final class PsqlCatalog {
         }
         Map<String, Object> wire = defaultConfiguration(key[1], shape, realm, regionCode);
         wire.put("description", "Default configuration for PostgreSQL " + key[1]);
-        wire.put("configurationDetails", Map.of("items", List.of()));
+        wire.put("configurationDetails", Map.of("items", configParams(Map.of())));
         return Optional.of(wire);
     }
 

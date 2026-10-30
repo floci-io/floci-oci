@@ -2,7 +2,6 @@ package io.floci.oci.services.psql;
 
 import io.floci.oci.core.common.OciContext;
 import io.floci.oci.core.common.OciException;
-import io.floci.oci.core.common.OciPage;
 import io.floci.oci.core.workrequest.StoredWorkRequest;
 import io.floci.oci.core.workrequest.WorkRequestService;
 import io.floci.oci.services.identity.CompartmentValidator;
@@ -63,7 +62,7 @@ public class PsqlController {
     @Path("/dbSystems")
     public Response createDbSystem(Map<String, Object> body) {
         Map<String, Object> details = body(body);
-        String compartmentId = PsqlService.string(details, "compartmentId");
+        String compartmentId = PsqlRequests.string(details, "compartmentId");
         try (CompartmentValidator.Use ignored = compartments.useInBody(compartmentId)) {
             PsqlService.Created created = service.createDbSystem(details);
             return Response.ok(created.system().toWire())
@@ -98,7 +97,7 @@ public class PsqlController {
                                   @QueryParam("sortOrder") String sortOrder,
                                   @QueryParam("sortBy") String sortBy) {
         compartments.requireInQuery(compartmentId);
-        return collection(service.listDbSystems(compartmentId, lifecycleState, displayName, id, sortBy, sortOrder)
+        return PsqlRequests.collection(service.listDbSystems(compartmentId, lifecycleState, displayName, id, sortBy, sortOrder)
                 .stream().map(StoredDbSystem::toSummaryWire).toList(), limit, page);
     }
 
@@ -122,7 +121,7 @@ public class PsqlController {
     public Response changeDbSystemCompartment(@PathParam("dbSystemId") String dbSystemId,
                                               @HeaderParam("if-match") String ifMatch,
                                               Map<String, Object> body) {
-        String compartmentId = PsqlService.requireString(body(body), "compartmentId");
+        String compartmentId = PsqlRequests.requireString(body(body), "compartmentId");
         try (CompartmentValidator.Use ignored = compartments.useInBody(compartmentId)) {
             return accepted(service.changeCompartment(dbSystemId, compartmentId, ifMatch));
         }
@@ -199,7 +198,7 @@ public class PsqlController {
                                @QueryParam("limit") Integer limit,
                                @QueryParam("page") String page) {
         compartments.requireInQuery(compartmentId);
-        return collection(PsqlCatalog.shapes().stream()
+        return PsqlRequests.collection(PsqlCatalog.shapes().stream()
                 .filter(shape -> id == null || id.equals(shape.get("shape")))
                 .toList(), limit, page);
     }
@@ -212,7 +211,7 @@ public class PsqlController {
                                               @QueryParam("lifecycleState") String lifecycleState,
                                               @QueryParam("limit") Integer limit,
                                               @QueryParam("page") String page) {
-        return collection(PsqlCatalog.defaultConfigurations(ociContext.realm(), ociContext.regionCode()).stream()
+        return PsqlRequests.collection(PsqlCatalog.defaultConfigurations(ociContext.realm(), ociContext.regionCode()).stream()
                 .filter(c -> dbVersion == null || dbVersion.equals(c.get("dbVersion")))
                 .filter(c -> displayName == null || displayName.equals(c.get("displayName")))
                 .filter(c -> configurationId == null || configurationId.equals(c.get("id")))
@@ -255,7 +254,7 @@ public class PsqlController {
         if (!"ASC".equals(sortOrder)) {
             order = order.reversed();
         }
-        return collection(workRequests.list(PsqlService.WR_SERVICE, compartmentId).stream()
+        return PsqlRequests.collection(workRequests.list(PsqlService.WR_SERVICE, compartmentId).stream()
                 .filter(wr -> workRequestId == null || workRequestId.equals(wr.getId()))
                 .filter(wr -> status == null || status.equals(wr.getStatus()))
                 .filter(wr -> resourceId == null || wr.getResources().stream()
@@ -280,7 +279,7 @@ public class PsqlController {
             wire.put("timestamp", workRequest.getTimeFinished());
             return wire;
         }).toList();
-        return collection(errors, limit, page);
+        return PsqlRequests.collection(errors, limit, page);
     }
 
     @GET
@@ -291,7 +290,7 @@ public class PsqlController {
                                         @QueryParam("sortOrder") String sortOrder) {
         requireSortOrder(sortOrder);
         workRequests.get(PsqlService.WR_SERVICE, workRequestId);
-        return collection(List.of(), limit, page);
+        return PsqlRequests.collection(List.of(), limit, page);
     }
 
     // ── Helpers ────────────────────────────────────────────────────────────────
@@ -315,14 +314,5 @@ public class PsqlController {
 
     private static Response accepted(String workRequestId) {
         return Response.accepted().header(WORK_REQUEST_ID, workRequestId).build();
-    }
-
-    private static Response collection(List<Map<String, Object>> items, Integer limit, String page) {
-        OciPage.Page<Map<String, Object>> result = OciPage.paginate(items, limit, page);
-        Response.ResponseBuilder builder = Response.ok(Map.of("items", result.items()));
-        if (result.hasNextPage()) {
-            builder.header(OciPage.OPC_NEXT_PAGE, result.nextPage());
-        }
-        return builder.build();
     }
 }

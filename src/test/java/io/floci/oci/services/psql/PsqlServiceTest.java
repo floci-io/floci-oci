@@ -26,6 +26,13 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
@@ -53,6 +60,7 @@ class PsqlServiceTest {
     private VaultSecretsService vaultSecrets;
     private MutableClock clock;
     private CertificateGenerator certificates;
+    private PsqlConfigurationsService configurations;
     private PsqlService mock;
     private PsqlService real;
 
@@ -83,6 +91,8 @@ class PsqlServiceTest {
         lenient().when(containers.serverVersion(any())).thenReturn(Optional.of("15.8"));
         lenient().when(containers.isRunning(any())).thenReturn(true);
 
+        configurations = new PsqlConfigurationsService(new InMemoryStorage<>(), OciContext.fromConfig(config), clock);
+
         // Mock mode has no manager at all; real mode runs its Docker work inline.
         mock = service(null);
         real = service(containers);
@@ -90,7 +100,7 @@ class PsqlServiceTest {
 
     private PsqlService service(PsqlContainerManager manager) {
         return new PsqlService(systems, config, null, workRequests, manager, OciContext.fromConfig(config),
-                certificates, vaultSecrets, clock, Runnable::run);
+                certificates, vaultSecrets, configurations, clock, Runnable::run);
     }
 
     private static Map<String, Object> createDetails() {
@@ -566,7 +576,7 @@ class PsqlServiceTest {
     /** Shares the store with {@link #real} but never runs its Docker work, as if it were cut off. */
     private PsqlService interrupted() {
         return new PsqlService(systems, config, null, workRequests, containers, OciContext.fromConfig(config),
-                certificates, vaultSecrets, clock, task -> { });
+                certificates, vaultSecrets, configurations, clock, task -> { });
     }
 
     @Test
@@ -665,5 +675,272 @@ class PsqlServiceTest {
         verify(certificates).generateSelfSignedCertificate(any(), names.capture(), any());
         assertTrue(names.getValue().contains("docker.example"), names.getValue().toString());
         assertTrue(names.getValue().contains("localhost"), names.getValue().toString());
+    }
+
+    // ── Custom configurations ──────────────────────────────────────────────────
+
+    private String customConfiguration(String dbVersion, String key, String value) {
+        return configurations.createConfiguration(Map.of("displayName", "tuned-" + key, "compartmentId", COMPARTMENT,
+                "dbVersion", dbVersion, "isFlexible", true, "dbConfigurationOverrides",
+                Map.of("items", List.of(Map.of("configKey", key, "overridenConfigValue", value))))).getId();
+    }
+
+    @Test
+    void aSystemCreatedWithACustomConfigurationCarriesItsOverrides() {
+        String configId = customConfiguration("15", "work_mem", "16MB");
+
+        StoredDbSystem system = mock.createDbSystem(with("configId", configId)).system();
+
+        assertEquals(configId, system.getConfigId());
+        assertEquals(Map.of("work_mem", "16MB"), system.getConfigOverrides());
+        assertTrue(mock.usesConfiguration(configId));
+    }
+
+    @Test
+    void aConfigurationMustBeActiveAndForTheSameMajor() {
+        String forSixteen = customConfiguration("16", "work_mem", "16MB");
+        assertEquals("InvalidParameter", assertThrows(OciException.class,
+                () -> mock.createDbSystem(with("configId", forSixteen))).getCode());
+
+        String deleted = customConfiguration("15", "work_mem", "16MB");
+        configurations.deleteConfiguration(deleted, null, id -> false);
+        OciException e = assertThrows(OciException.class, () -> mock.createDbSystem(with("configId", deleted)));
+        assertEquals(400, e.getHttpStatus());
+        assertEquals("RelatedResourceNotAuthorizedOrNotFound", e.getCode());
+    }
+
+    @Test
+    void readinessAppliesTheReloadableSettings() {
+        StoredDbSystem system = activeRealSystem();
+
+        verify(containers).applySettings(any());
+        assertEquals("ACTIVE", system.getLifecycleState());
+    }
+
+    @Test
+    void reloadAppliesANewConfigurationWithoutARestart() {
+        StoredDbSystem system = activeRealSystem();
+        String configId = customConfiguration("15", "work_mem", "16MB");
+
+        String workRequestId = real.updateDbSystem(system.getId(), Map.of("dbConfigurationParams",
+                Map.of("configId", configId, "applyConfig", "RELOAD")), null);
+
+        verify(containers, times(2)).applySettings(any());
+        verify(containers, times(1)).start(any(), any());
+        StoredDbSystem updated = real.getDbSystem(system.getId());
+        assertEquals("ACTIVE", updated.getLifecycleState());
+        assertEquals(Map.of("work_mem", "16MB"), updated.getConfigOverrides());
+        assertEquals("SUCCEEDED", workRequests.get(workRequestId).getStatus());
+    }
+
+    @Test
+    void restartRelaunchesTheContainerWithTheNewConfiguration() {
+        StoredDbSystem system = activeRealSystem();
+        String configId = customConfiguration("15", "max_connections", "300");
+
+        real.updateDbSystem(system.getId(), Map.of("dbConfigurationParams",
+                Map.of("configId", configId, "applyConfig", "RESTART")), null);
+
+        verify(containers, times(2)).start(any(), any());
+        assertEquals("UPDATING", real.getDbSystem(system.getId()).getLifecycleState());
+        real.pollReadiness();
+        assertEquals("ACTIVE", real.getDbSystem(system.getId()).getLifecycleState());
+        assertEquals("InvalidParameter", assertThrows(OciException.class, () -> real.updateDbSystem(system.getId(),
+                Map.of("dbConfigurationParams", Map.of("configId", configId, "applyConfig", "NOW")), null)).getCode());
+    }
+
+    @Test
+    void aSettingThePostgresServerRejectsFailsTheStart() {
+        doThrow(new IllegalStateException("invalid value")).when(containers).applySettings(any());
+        PsqlService.Created created = real.createDbSystem(with("configId", customConfiguration("15", "work_mem", "huge")));
+        when(containers.probeReady(any())).thenReturn(true);
+
+        real.pollReadiness();
+
+        StoredDbSystem system = real.getDbSystem(created.system().getId());
+        assertEquals("FAILED", system.getLifecycleState());
+        assertTrue(system.getLifecycleDetails().contains("configuration"));
+    }
+
+    @Test
+    void aReloadPostgresRejectsKeepsThePreviousConfigurationRunning() {
+        StoredDbSystem system = activeRealSystem();
+        String kept = customConfiguration("15", "work_mem", "16MB");
+        real.updateDbSystem(system.getId(), Map.of("dbConfigurationParams",
+                Map.of("configId", kept, "applyConfig", "RELOAD")), null);
+        String rejected = customConfiguration("15", "work_mem", "huge");
+        doAnswer(call -> {
+            assertTrue(real.usesConfiguration(kept), "the reload can still go back to it");
+            throw new IllegalStateException("invalid value");
+        }).doNothing().when(containers).applySettings(any());
+
+        String workRequestId = real.updateDbSystem(system.getId(), Map.of("dbConfigurationParams",
+                Map.of("configId", rejected, "applyConfig", "RELOAD")), null);
+
+        StoredDbSystem updated = real.getDbSystem(system.getId());
+        assertEquals("ACTIVE", updated.getLifecycleState());
+        assertEquals("ACTIVE", updated.getInstances().get(0).getLifecycleState());
+        assertEquals(kept, updated.getConfigId());
+        assertEquals(Map.of("work_mem", "16MB"), updated.getConfigOverrides());
+        assertEquals("FAILED", workRequests.get(workRequestId).getStatus());
+        // Create, the first reload, the rejected reload, and the previous settings put back.
+        verify(containers, times(4)).applySettings(any());
+        verify(containers, times(1)).stop(any());
+        assertFalse(real.usesConfiguration(rejected));
+    }
+
+    @Test
+    void aReloadThatCannotBeUndoneNeedsAttention() {
+        StoredDbSystem system = activeRealSystem();
+        String previous = system.getConfigId();
+        String rejected = customConfiguration("15", "work_mem", "huge");
+        doThrow(new IllegalStateException("server gone")).when(containers).applySettings(any());
+
+        String workRequestId = real.updateDbSystem(system.getId(), Map.of("dbConfigurationParams",
+                Map.of("configId", rejected, "applyConfig", "RELOAD")), null);
+
+        StoredDbSystem updated = real.getDbSystem(system.getId());
+        assertEquals("NEEDS_ATTENTION", updated.getLifecycleState());
+        assertEquals(previous, updated.getConfigId());
+        assertEquals("FAILED", workRequests.get(workRequestId).getStatus());
+    }
+
+    @Test
+    void aSystemThatNeedsAttentionRestartsWithACorrectedConfiguration() {
+        StoredDbSystem system = needingAttention();
+        String corrected = customConfiguration("15", "shared_buffers", "256MB");
+
+        String workRequestId = real.updateDbSystem(system.getId(), Map.of("dbConfigurationParams",
+                Map.of("configId", corrected, "applyConfig", "RELOAD")), null);
+
+        assertEquals("UPDATING", real.getDbSystem(system.getId()).getLifecycleState());
+        when(containers.isRunning(any())).thenReturn(true);
+        when(containers.probeReady(any())).thenReturn(true);
+        real.pollReadiness();
+        StoredDbSystem recovered = real.getDbSystem(system.getId());
+        assertEquals("ACTIVE", recovered.getLifecycleState());
+        assertNull(recovered.getLifecycleDetails());
+        assertEquals(Map.of("shared_buffers", "256MB"), recovered.getConfigOverrides());
+        assertEquals("SUCCEEDED", workRequests.get(workRequestId).getStatus());
+    }
+
+    @Test
+    void aSystemThatNeedsAttentionCanBeStartedAgain() {
+        StoredDbSystem system = needingAttention();
+
+        real.startDbSystem(system.getId(), null);
+
+        when(containers.isRunning(any())).thenReturn(true);
+        when(containers.probeReady(any())).thenReturn(true);
+        real.pollReadiness();
+        assertEquals("ACTIVE", real.getDbSystem(system.getId()).getLifecycleState());
+    }
+
+    @Test
+    void aContainerThatExitedIsNoticedEvenThoughItCannotBeProbed() {
+        StoredDbSystem system = activeRealSystem();
+        String unstartable = customConfiguration("15", "shared_buffers", "huge");
+        String workRequestId = real.updateDbSystem(system.getId(), Map.of("dbConfigurationParams",
+                Map.of("configId", unstartable, "applyConfig", "RESTART")), null);
+        when(containers.probeReady(any())).thenThrow(new IllegalStateException("container is not running"));
+        when(containers.isRunning(any())).thenReturn(false);
+
+        real.pollReadiness();
+
+        assertEquals("NEEDS_ATTENTION", real.getDbSystem(system.getId()).getLifecycleState());
+        assertEquals("FAILED", workRequests.get(workRequestId).getStatus());
+    }
+
+    @Test
+    void aProbeThatKeepsFailingStillTimesOut() {
+        StoredDbSystem system = activeRealSystem();
+        real.updateDbSystem(system.getId(), Map.of("dbConfigurationParams",
+                Map.of("configId", customConfiguration("15", "work_mem", "16MB"), "applyConfig", "RESTART")), null);
+        when(containers.probeReady(any())).thenThrow(new IllegalStateException("daemon busy"));
+        clock.advance(Duration.ofSeconds(121));
+
+        real.pollReadiness();
+
+        assertEquals("NEEDS_ATTENTION", real.getDbSystem(system.getId()).getLifecycleState());
+    }
+
+    /** Restarted with a setting that keeps Postgres from starting. */
+    private StoredDbSystem needingAttention() {
+        StoredDbSystem system = activeRealSystem();
+        String unstartable = customConfiguration("15", "shared_buffers", "huge");
+        real.updateDbSystem(system.getId(), Map.of("dbConfigurationParams",
+                Map.of("configId", unstartable, "applyConfig", "RESTART")), null);
+        when(containers.probeReady(any())).thenReturn(false);
+        when(containers.isRunning(any())).thenReturn(false);
+        real.pollReadiness();
+        StoredDbSystem stuck = real.getDbSystem(system.getId());
+        assertEquals("NEEDS_ATTENTION", stuck.getLifecycleState());
+        return stuck;
+    }
+
+    @Test
+    void anAttachWaitsForADeleteUnderWayAndThenSeesItsResult() throws Exception {
+        String configId = customConfiguration("15", "work_mem", "16MB");
+        CountDownLatch checking = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        ExecutorService threads = Executors.newFixedThreadPool(2);
+        try {
+            Future<?> delete = threads.submit(() -> configurations.deleteConfiguration(configId, null, id -> {
+                checking.countDown();
+                await(release);
+                return mock.usesConfiguration(id);
+            }));
+            assertTrue(checking.await(5, TimeUnit.SECONDS));
+
+            Future<PsqlService.Created> create = threads.submit(() -> mock.createDbSystem(with("configId", configId)));
+
+            assertThrows(TimeoutException.class, () -> create.get(300, TimeUnit.MILLISECONDS),
+                    "the create waits while the delete has checked and not yet finished");
+            release.countDown();
+            delete.get(5, TimeUnit.SECONDS);
+            ExecutionException failure = assertThrows(ExecutionException.class, () -> create.get(5, TimeUnit.SECONDS));
+            assertEquals("RelatedResourceNotAuthorizedOrNotFound", ((OciException) failure.getCause()).getCode());
+        } finally {
+            release.countDown();
+            threads.shutdownNow();
+        }
+    }
+
+    @Test
+    void aDeleteWaitsForAnAttachUnderWayAndThenSeesTheDbSystem() throws Exception {
+        String configId = customConfiguration("15", "work_mem", "16MB");
+        CountDownLatch attaching = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        ExecutorService threads = Executors.newFixedThreadPool(2);
+        try {
+            Future<StoredDbSystem> attach = threads.submit(() -> configurations.attachingConfiguration(() -> {
+                attaching.countDown();
+                await(release);
+                return mock.createDbSystem(with("configId", configId)).system();
+            }));
+            assertTrue(attaching.await(5, TimeUnit.SECONDS));
+
+            Future<?> delete = threads.submit(() ->
+                    configurations.deleteConfiguration(configId, null, mock::usesConfiguration));
+
+            assertThrows(TimeoutException.class, () -> delete.get(300, TimeUnit.MILLISECONDS),
+                    "the delete waits while the DB system is being recorded");
+            release.countDown();
+            assertEquals(configId, attach.get(5, TimeUnit.SECONDS).getConfigId());
+            ExecutionException failure = assertThrows(ExecutionException.class, () -> delete.get(5, TimeUnit.SECONDS));
+            assertEquals("Conflict", ((OciException) failure.getCause()).getCode());
+        } finally {
+            release.countDown();
+            threads.shutdownNow();
+        }
+    }
+
+    private static void await(CountDownLatch latch) {
+        try {
+            assertTrue(latch.await(5, TimeUnit.SECONDS));
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(e);
+        }
     }
 }

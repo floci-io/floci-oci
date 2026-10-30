@@ -26,6 +26,15 @@ class PsqlDisabledRestIntegrationTest {
                 .body("message", equalTo("Service psql is not enabled."));
     }
 
+    @Test
+    void disabledPsqlAlsoDisablesConfigurations() {
+        given()
+            .when().get("/20220915/configurations")
+            .then()
+                .statusCode(503)
+                .body("code", equalTo("ServiceUnavailable"));
+    }
+
     public static class DisabledPsqlProfile implements QuarkusTestProfile {
         @Override
         public Map<String, String> getConfigOverrides() {

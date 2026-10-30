@@ -20,6 +20,7 @@ import io.floci.oci.core.tls.KeyAlgorithm;
 import io.floci.oci.core.workrequest.StoredWorkRequest;
 import io.floci.oci.core.workrequest.WorkRequestService;
 import io.floci.oci.services.psql.model.StoredDbInstance;
+import io.floci.oci.services.psql.model.StoredConfiguration;
 import io.floci.oci.services.psql.model.StoredDbSystem;
 import io.floci.oci.services.vault.VaultSecretsService;
 import io.quarkus.runtime.StartupEvent;
@@ -68,6 +69,7 @@ public class PsqlService implements Resettable, CompartmentUsage {
 
     static final String WR_SERVICE = "psql";
     /** Terraform finds the DB system in a work request by an entity type containing "dbsystem". */
+    static final Set<String> APPLY_CONFIG = Set.of("RESTART", "RELOAD");
     static final String ENTITY_TYPE = "postgresqlDbSystem";
 
     private static final String BASE_PATH = "/20220915/dbSystems/";
@@ -97,6 +99,7 @@ public class PsqlService implements Resettable, CompartmentUsage {
     private final OciContext ociContext;
     private final CertificateGenerator certificates;
     private final VaultSecretsService vaultSecrets;
+    private final PsqlConfigurationsService configurations;
     private final Clock clock;
     private final Executor lifecycle;
     private final ExecutorService ownedLifecycle;
@@ -107,11 +110,12 @@ public class PsqlService implements Resettable, CompartmentUsage {
     public PsqlService(StorageFactory storageFactory, EmulatorConfig config,
                        ServiceRegistry serviceRegistry, WorkRequestService workRequests,
                        PsqlContainerManager containers, OciContext ociContext,
-                       CertificateGenerator certificates, VaultSecretsService vaultSecrets) {
+                       CertificateGenerator certificates, VaultSecretsService vaultSecrets,
+                       PsqlConfigurationsService configurations) {
         this(storageFactory.create("psql", "psql-dbsystems.json",
                         new TypeReference<Map<String, StoredDbSystem>>() {}),
                 config, serviceRegistry, workRequests, containers, ociContext, certificates,
-                vaultSecrets, Clock.systemUTC(), null);
+                vaultSecrets, configurations, Clock.systemUTC(), null);
     }
 
     /**
@@ -123,7 +127,7 @@ public class PsqlService implements Resettable, CompartmentUsage {
                 ServiceRegistry serviceRegistry, WorkRequestService workRequests,
                 PsqlContainerManager containers, OciContext ociContext,
                 CertificateGenerator certificates, VaultSecretsService vaultSecrets,
-                Clock clock, Executor lifecycle) {
+                PsqlConfigurationsService configurations, Clock clock, Executor lifecycle) {
         this.systems = systems;
         this.config = config;
         this.serviceRegistry = serviceRegistry;
@@ -132,6 +136,7 @@ public class PsqlService implements Resettable, CompartmentUsage {
         this.ociContext = ociContext;
         this.certificates = certificates;
         this.vaultSecrets = vaultSecrets;
+        this.configurations = configurations;
         this.clock = clock;
         // No thread starts until the first task is submitted, which only real mode does.
         this.ownedLifecycle = lifecycle != null ? null : Executors.newSingleThreadExecutor(daemon("psql-lifecycle"));
@@ -143,7 +148,7 @@ public class PsqlService implements Resettable, CompartmentUsage {
         serviceRegistry.register(ServiceDescriptor.builder("psql")
                 .enabled(config.services().psql().enabled())
                 .storageKey("psql")
-                .resourceClasses(PsqlController.class)
+                .resourceClasses(PsqlController.class, PsqlConfigurationsController.class)
                 .build());
         if (realMode() && config.services().psql().enabled()) {
             readinessPoller.scheduleWithFixedDelay(this::pollReadinessSafely,
@@ -203,28 +208,30 @@ public class PsqlService implements Resettable, CompartmentUsage {
     // ── DB systems ─────────────────────────────────────────────────────────────
 
     public Created createDbSystem(Map<String, Object> details) {
-        String displayName = requireString(details, "displayName");
-        String compartmentId = requireString(details, "compartmentId");
-        String major = PsqlCatalog.major(requireString(details, "dbVersion"));
-        PsqlCatalog.Shape shape = PsqlCatalog.parseShape(requireString(details, "shape"));
-        Map<String, Object> storage = storageDetails(requireMap(details, "storageDetails"));
-        Map<String, Object> network = networkDetails(requireMap(details, "networkDetails"));
-        Map<String, Object> source = sourceDetails(map(details, "source"));
-        Map<String, Object> credentials = requireMap(details, "credentials");
-        String adminUsername = requireString(credentials, "username");
-        String masterPassword = resolvePassword(requireMap(credentials, "passwordDetails"));
-        String systemType = string(details, "systemType");
+        return configurations.attachingConfiguration(() -> create(details));
+    }
+
+    private Created create(Map<String, Object> details) {
+        String displayName = PsqlRequests.requireString(details, "displayName");
+        String compartmentId = PsqlRequests.requireString(details, "compartmentId");
+        String major = PsqlCatalog.major(PsqlRequests.requireString(details, "dbVersion"));
+        PsqlCatalog.Shape shape = PsqlCatalog.parseShape(PsqlRequests.requireString(details, "shape"));
+        Map<String, Object> storage = storageDetails(PsqlRequests.requireMap(details, "storageDetails"));
+        Map<String, Object> network = networkDetails(PsqlRequests.requireMap(details, "networkDetails"));
+        Map<String, Object> source = sourceDetails(PsqlRequests.map(details, "source"));
+        Map<String, Object> credentials = PsqlRequests.requireMap(details, "credentials");
+        String adminUsername = PsqlRequests.requireString(credentials, "username");
+        String masterPassword = resolvePassword(PsqlRequests.requireMap(credentials, "passwordDetails"));
+        String systemType = PsqlRequests.string(details, "systemType");
         if (systemType != null && !PsqlCatalog.SYSTEM_TYPE.equals(systemType)) {
             throw OciException.invalidParameter("Unsupported systemType: " + systemType);
         }
-        String configId = string(details, "configId");
+        String configId = PsqlRequests.string(details, "configId");
         String defaultConfigId = PsqlCatalog.defaultConfigurationId(major, shape, ociContext.realm(),
                 ociContext.regionCode());
-        if (configId != null) {
-            requireConfiguration(configId, major);
-        }
-        int instanceCount = positive(details, "instanceCount", 1);
-        List<Map<String, Object>> instancesDetails = mapList(details, "instancesDetails");
+        Map<String, String> overrides = configId != null ? requireConfiguration(configId, major) : Map.of();
+        int instanceCount = PsqlRequests.positive(details, "instanceCount", 1);
+        List<Map<String, Object>> instancesDetails = PsqlRequests.mapList(details, "instancesDetails");
         if (!instancesDetails.isEmpty() && instancesDetails.size() != instanceCount) {
             throw OciException.invalidParameter("instancesDetails must have one entry per instance: expected "
                     + instanceCount + ", got " + instancesDetails.size());
@@ -234,26 +241,27 @@ public class PsqlService implements Resettable, CompartmentUsage {
         StoredDbSystem system = new StoredDbSystem();
         system.setId(Ocids.generate("postgresqldbsystem", ociContext.realm(), ociContext.regionCode()));
         system.setDisplayName(displayName);
-        system.setDescription(string(details, "description"));
+        system.setDescription(PsqlRequests.string(details, "description"));
         system.setCompartmentId(compartmentId);
         system.setTimeCreated(now);
         system.setSystemType(PsqlCatalog.SYSTEM_TYPE);
         system.setSystemRole("STANDALONE_DB_SYSTEM");
         system.setDbVersion(major);
         system.setShape(shape.name());
-        system.setInstanceOcpuCount(firstNonNull(shape.ocpuCount(), integer(details, "instanceOcpuCount"),
+        system.setInstanceOcpuCount(firstNonNull(shape.ocpuCount(), PsqlRequests.integer(details, "instanceOcpuCount"),
                 PsqlCatalog.DEFAULT_OCPU_COUNT));
         system.setInstanceMemorySizeInGBs(firstNonNull(shape.memorySizeInGBs(),
-                integer(details, "instanceMemorySizeInGBs"), PsqlCatalog.DEFAULT_MEMORY_GBS));
+                PsqlRequests.integer(details, "instanceMemorySizeInGBs"), PsqlCatalog.DEFAULT_MEMORY_GBS));
         system.setInstanceCount(instanceCount);
         system.setStorageDetails(storage);
         system.setNetworkDetails(network);
-        system.setManagementPolicy(managementPolicy(map(details, "managementPolicy"), null));
+        system.setManagementPolicy(managementPolicy(PsqlRequests.map(details, "managementPolicy"), null));
         system.setSource(source);
         system.setConfigId(configId != null ? configId : defaultConfigId);
+        system.setConfigOverrides(overrides);
         system.setAdminUsername(adminUsername);
-        system.setFreeformTags(stringMap(details, "freeformTags"));
-        system.setDefinedTags(definedTags(details));
+        system.setFreeformTags(PsqlRequests.stringMap(details, "freeformTags"));
+        system.setDefinedTags(PsqlRequests.definedTags(details));
         system.setInstances(newInstances(instanceCount, instancesDetails, storage, now));
         system.setEtag(Etags.newEtag());
         system.setTenancyId(ociContext.tenancyId());
@@ -327,31 +335,36 @@ public class PsqlService implements Resettable, CompartmentUsage {
      * and policy are management-plane facts here), so the work request is already finished.
      */
     public String updateDbSystem(String dbSystemId, Map<String, Object> details, String ifMatch) {
-        StoredDbSystem system = mutable(dbSystemId, ifMatch, "ACTIVE", "INACTIVE");
+        return configurations.attachingConfiguration(() -> update(dbSystemId, details, ifMatch));
+    }
+
+    private String update(String dbSystemId, Map<String, Object> details, String ifMatch) {
+        StoredDbSystem system = mutable(dbSystemId, ifMatch, "ACTIVE", "INACTIVE", "NEEDS_ATTENTION");
         // Everything that can be rejected is checked before anything changes: the store hands
         // out the stored object itself, so a half-applied update would stick.
-        PsqlCatalog.Shape shape = string(details, "shape") != null
-                ? PsqlCatalog.parseShape(string(details, "shape")) : null;
-        Integer ocpuCount = integer(details, "instanceOcpuCount") != null
-                ? positive(details, "instanceOcpuCount", 1) : null;
-        Integer memorySizeInGBs = integer(details, "instanceMemorySizeInGBs") != null
-                ? positive(details, "instanceMemorySizeInGBs", 1) : null;
-        Map<String, Object> storage = map(details, "storageDetails");
+        PsqlCatalog.Shape shape = PsqlRequests.string(details, "shape") != null
+                ? PsqlCatalog.parseShape(PsqlRequests.string(details, "shape")) : null;
+        Integer ocpuCount = PsqlRequests.integer(details, "instanceOcpuCount") != null
+                ? PsqlRequests.positive(details, "instanceOcpuCount", 1) : null;
+        Integer memorySizeInGBs = PsqlRequests.integer(details, "instanceMemorySizeInGBs") != null
+                ? PsqlRequests.positive(details, "instanceMemorySizeInGBs", 1) : null;
+        Map<String, Object> storage = PsqlRequests.map(details, "storageDetails");
         Object iops = storage != null ? storage.get("iops") : null;
         if (iops != null && !(iops instanceof Number)) {
             throw OciException.invalidParameter("storageDetails.iops must be a number: " + iops);
         }
-        Map<String, Object> configParams = map(details, "dbConfigurationParams");
-        String configId = configParams != null ? requireString(configParams, "configId") : null;
-        if (configId != null) {
-            requireConfiguration(configId, PsqlCatalog.major(system.getDbVersion()));
-        }
+        Map<String, Object> configParams = PsqlRequests.map(details, "dbConfigurationParams");
+        String configId = configParams != null ? PsqlRequests.requireString(configParams, "configId") : null;
+        String applyConfig = configParams != null ? PsqlRequests.string(configParams, "applyConfig") : null;
+        PsqlRequests.requireEnum(applyConfig, APPLY_CONFIG, "applyConfig");
+        Map<String, String> overrides = configId != null
+                ? requireConfiguration(configId, PsqlCatalog.major(system.getDbVersion())) : null;
 
-        if (string(details, "displayName") != null) {
-            system.setDisplayName(string(details, "displayName"));
+        if (PsqlRequests.string(details, "displayName") != null) {
+            system.setDisplayName(PsqlRequests.string(details, "displayName"));
         }
         if (details.containsKey("description")) {
-            system.setDescription(string(details, "description"));
+            system.setDescription(PsqlRequests.string(details, "description"));
         }
         if (shape != null) {
             system.setShape(shape.name());
@@ -366,15 +379,15 @@ public class PsqlService implements Resettable, CompartmentUsage {
         if (memorySizeInGBs != null) {
             system.setInstanceMemorySizeInGBs(memorySizeInGBs);
         }
-        if (map(details, "managementPolicy") != null) {
-            system.setManagementPolicy(managementPolicy(map(details, "managementPolicy"), system.getManagementPolicy()));
+        if (PsqlRequests.map(details, "managementPolicy") != null) {
+            system.setManagementPolicy(managementPolicy(PsqlRequests.map(details, "managementPolicy"), system.getManagementPolicy()));
         }
         if (iops instanceof Number number) {
             Map<String, Object> updated = new LinkedHashMap<>(system.getStorageDetails());
             updated.put("iops", number.longValue());
             system.setStorageDetails(updated);
         }
-        Map<String, Object> network = map(details, "networkDetails");
+        Map<String, Object> network = PsqlRequests.map(details, "networkDetails");
         if (network != null) {
             Map<String, Object> updated = new LinkedHashMap<>(system.getNetworkDetails());
             if (network.get("nsgIds") != null) {
@@ -385,19 +398,97 @@ public class PsqlService implements Resettable, CompartmentUsage {
             }
             system.setNetworkDetails(updated);
         }
+        String previousConfigId = system.getConfigId();
+        Map<String, String> previousOverrides = system.getConfigOverrides();
         if (configId != null) {
             system.setConfigId(configId);
+            system.setConfigOverrides(overrides);
         }
         if (details.containsKey("freeformTags")) {
-            system.setFreeformTags(stringMap(details, "freeformTags"));
+            system.setFreeformTags(PsqlRequests.stringMap(details, "freeformTags"));
         }
         if (details.containsKey("definedTags")) {
-            system.setDefinedTags(definedTags(details));
+            system.setDefinedTags(PsqlRequests.definedTags(details));
+        }
+        if (configId != null && realMode()) {
+            // A system that needs attention has no running server to reload: the new
+            // configuration is its way back.
+            if ("NEEDS_ATTENTION".equals(system.getLifecycleState())
+                    || ("ACTIVE".equals(system.getLifecycleState()) && "RESTART".equals(applyConfig))) {
+                return restartWithConfiguration(system);
+            }
+            if ("ACTIVE".equals(system.getLifecycleState())) {
+                return reloadConfiguration(system, previousConfigId, previousOverrides);
+            }
         }
         touch(system);
         systems.put(system.getId(), system);
         return workRequests.succeeded(WR_SERVICE, "UPDATE_POSTGRESQL_DB_SYSTEM",
                 system.getCompartmentId(), resources(system, "UPDATED"));
+    }
+
+    /** RESTART relaunches the container, which applies every setting. */
+    private String restartWithConfiguration(StoredDbSystem system) {
+        String workRequestId = begin(system, "UPDATING", "UPDATE_POSTGRESQL_DB_SYSTEM", "UPDATED");
+        setInstanceStates(system, "UPDATING");
+        systems.put(system.getId(), system);
+        launchStart(system, null, "ACTIVE", "NEEDS_ATTENTION");
+        return workRequestId;
+    }
+
+    /**
+     * RELOAD (Terraform's default) applies the settings that need no restart and leaves the others
+     * for the next start, as PostgreSQL itself does. The server keeps running either way: a value
+     * it rejects fails the work request and the previous configuration stays in effect.
+     */
+    private String reloadConfiguration(StoredDbSystem system, String previousConfigId,
+                                       Map<String, String> previousOverrides) {
+        String workRequestId = begin(system, "UPDATING", "UPDATE_POSTGRESQL_DB_SYSTEM", "UPDATED");
+        setInstanceStates(system, "UPDATING");
+        system.setReplacedConfigId(previousConfigId);
+        systems.put(system.getId(), system);
+        runAsync(system, current -> {
+            try {
+                containers.applySettings(current);
+            } catch (RuntimeException e) {
+                return restoreConfiguration(current, previousConfigId, previousOverrides,
+                        "The configuration could not be applied: " + e.getMessage());
+            }
+            return () -> {
+                current.setReplacedConfigId(null);
+                finishReload(current, "SUCCEEDED", null);
+            };
+        });
+        return workRequestId;
+    }
+
+    /**
+     * Puts the previous settings back. They are applied again, not just recorded: ALTER SYSTEM
+     * cannot run in a transaction, so the settings before the rejected one have already changed.
+     */
+    private Runnable restoreConfiguration(StoredDbSystem system, String previousConfigId,
+                                          Map<String, String> previousOverrides, String reason) {
+        system.setConfigId(previousConfigId);
+        system.setConfigOverrides(previousOverrides);
+        system.setReplacedConfigId(null);
+        try {
+            containers.applySettings(system);
+        } catch (RuntimeException e) {
+            return () -> fail(system, "NEEDS_ATTENTION",
+                    reason + "; restoring the previous one failed too: " + e.getMessage());
+        }
+        return () -> {
+            finishReload(system, "FAILED", reason + "; the previous one stays in effect");
+            LOG.warnv("DB system {0} keeps its previous configuration: {1}", system.getId(), reason);
+        };
+    }
+
+    private void finishReload(StoredDbSystem system, String status, String error) {
+        system.setLifecycleState("ACTIVE");
+        setInstanceStates(system, "ACTIVE");
+        touch(system);
+        saveIn(system);
+        finishWorkRequest(system, status, error);
     }
 
     public String changeCompartment(String dbSystemId, String compartmentId, String ifMatch) {
@@ -469,7 +560,7 @@ public class PsqlService implements Resettable, CompartmentUsage {
     }
 
     public String startDbSystem(String dbSystemId, String ifMatch) {
-        StoredDbSystem system = mutable(dbSystemId, ifMatch, "INACTIVE");
+        StoredDbSystem system = mutable(dbSystemId, ifMatch, "INACTIVE", "NEEDS_ATTENTION");
         if (!realMode()) {
             return finishAtOnce(system, "ACTIVE");
         }
@@ -479,8 +570,8 @@ public class PsqlService implements Resettable, CompartmentUsage {
     }
 
     public String restartDbInstance(String dbSystemId, Map<String, Object> details, String ifMatch) {
-        String dbInstanceId = requireString(details, "dbInstanceId");
-        String restartType = requireString(details, "restartType");
+        String dbInstanceId = PsqlRequests.requireString(details, "dbInstanceId");
+        String restartType = PsqlRequests.requireString(details, "restartType");
         if (!RESTART_TYPES.contains(restartType)) {
             throw OciException.invalidParameter("Invalid restartType: " + restartType);
         }
@@ -495,7 +586,7 @@ public class PsqlService implements Resettable, CompartmentUsage {
     }
 
     public String resetMasterUserPassword(String dbSystemId, Map<String, Object> details, String ifMatch) {
-        String newPassword = resolvePassword(requireMap(details, "passwordDetails"));
+        String newPassword = resolvePassword(PsqlRequests.requireMap(details, "passwordDetails"));
         StoredDbSystem system = mutable(dbSystemId, ifMatch, "ACTIVE");
         if (!realMode()) {
             return finishAtOnce(system, "ACTIVE");
@@ -524,11 +615,11 @@ public class PsqlService implements Resettable, CompartmentUsage {
                                    String ifMatch) {
         StoredDbSystem system = mutable(dbSystemId, ifMatch, "ACTIVE", "INACTIVE");
         StoredDbInstance instance = instance(system, dbInstanceId);
-        if (string(details, "displayName") != null) {
-            instance.setDisplayName(string(details, "displayName"));
+        if (PsqlRequests.string(details, "displayName") != null) {
+            instance.setDisplayName(PsqlRequests.string(details, "displayName"));
         }
         if (details.containsKey("description")) {
-            instance.setDescription(string(details, "description"));
+            instance.setDescription(PsqlRequests.string(details, "description"));
         }
         instance.setTimeUpdated(now());
         touch(system);
@@ -708,7 +799,14 @@ public class PsqlService implements Resettable, CompartmentUsage {
 
     private void pollOne(Pending waiting, StoredDbSystem system) {
         int timeout = config.services().psql().readyTimeoutSeconds();
-        if (containers.probeReady(system)) {
+        if (probeReady(system)) {
+            try {
+                containers.applySettings(system);
+            } catch (RuntimeException e) {
+                settle(system, () -> fail(system, waiting.failureState(),
+                        "The configuration could not be applied: " + e.getMessage()));
+                return;
+            }
             settle(system, () -> {
                 containers.serverVersion(system).ifPresent(system::setDbVersion);
                 EndpointInfo endpoint = containers.clientEndpoint(system);
@@ -728,6 +826,19 @@ public class PsqlService implements Resettable, CompartmentUsage {
         } else if (clock.instant().isAfter(waiting.since().plusSeconds(timeout))) {
             settle(system, () -> fail(system, waiting.failureState(),
                     "PostgreSQL did not accept connections after " + timeout + " seconds"));
+        }
+    }
+
+    /**
+     * A probe that throws means not ready yet. Docker refuses an exec in a container that has
+     * exited, and the checks after the probe are what notice that exit, or the timeout.
+     */
+    private boolean probeReady(StoredDbSystem system) {
+        try {
+            return containers.probeReady(system);
+        } catch (RuntimeException e) {
+            LOG.debugv("Could not probe DB system {0}: {1}", system.getId(), e.getMessage());
+            return false;
         }
     }
 
@@ -849,17 +960,35 @@ public class PsqlService implements Resettable, CompartmentUsage {
     }
 
     /** A configuration must be one of the catalog's defaults, for the DB system's own version. */
-    private void requireConfiguration(String configId, String major) {
-        Optional<String> configurationMajor = PsqlCatalog.defaultConfigurationMajor(
+    /**
+     * The settings {@code configId} overrides, once it is checked to be a default configuration
+     * or an ACTIVE custom one in this tenancy and region, for {@code major}.
+     */
+    private Map<String, String> requireConfiguration(String configId, String major) {
+        Optional<String> defaultMajor = PsqlCatalog.defaultConfigurationMajor(
                 configId, ociContext.realm(), ociContext.regionCode());
-        if (configurationMajor.isEmpty()) {
+        Optional<StoredConfiguration> custom = defaultMajor.isPresent() ? Optional.empty()
+                : configurations.find(configId).filter(c -> "ACTIVE".equals(c.getLifecycleState()));
+        if (defaultMajor.isEmpty() && custom.isEmpty()) {
             throw new OciException("RelatedResourceNotAuthorizedOrNotFound",
                     "Authorization failed or requested resource not found: configuration " + configId, 400);
         }
-        if (!configurationMajor.get().equals(major)) {
+        String configurationMajor = defaultMajor.orElseGet(() -> custom.get().getDbVersion());
+        if (!configurationMajor.equals(major)) {
             throw OciException.invalidParameter("Configuration " + configId + " is for PostgreSQL "
-                    + configurationMajor.get() + ", not " + major);
+                    + configurationMajor + ", not " + major);
         }
+        return custom.map(c -> Map.copyOf(c.getOverrides())).orElse(Map.of());
+    }
+
+    /**
+     * Whether a DB system that is not DELETED uses {@code configId}, in the caller's tenancy and
+     * region, or could go back to it because a reload that replaces it has not finished.
+     */
+    public boolean usesConfiguration(String configId) {
+        return systems.scan(k -> true).stream()
+                .filter(s -> !"DELETED".equals(s.getLifecycleState()))
+                .anyMatch(s -> configId.equals(s.getConfigId()) || configId.equals(s.getReplacedConfigId()));
     }
 
     private void markDeleted(StoredDbSystem system) {
@@ -888,8 +1017,8 @@ public class PsqlService implements Resettable, CompartmentUsage {
             StoredDbInstance instance = new StoredDbInstance();
             instance.setId(Ocids.generate("postgresqldbinstance", ociContext.realm(), ociContext.regionCode()));
             if (!details.isEmpty()) {
-                instance.setDisplayName(string(details.get(i), "displayName"));
-                instance.setDescription(string(details.get(i), "description"));
+                instance.setDisplayName(PsqlRequests.string(details.get(i), "displayName"));
+                instance.setDescription(PsqlRequests.string(details.get(i), "description"));
             }
             Object availabilityDomain = storage.get("availabilityDomain");
             instance.setAvailabilityDomain(availabilityDomain != null ? availabilityDomain.toString()
@@ -927,12 +1056,12 @@ public class PsqlService implements Resettable, CompartmentUsage {
     }
 
     private static Map<String, Object> storageDetails(Map<String, Object> requested) {
-        String systemType = requireString(requested, "systemType");
+        String systemType = PsqlRequests.requireString(requested, "systemType");
         if (!PsqlCatalog.SYSTEM_TYPE.equals(systemType)) {
             throw OciException.invalidParameter("Unsupported storageDetails.systemType: " + systemType);
         }
         boolean regionallyDurable = Boolean.TRUE.equals(requested.get("isRegionallyDurable"));
-        String availabilityDomain = string(requested, "availabilityDomain");
+        String availabilityDomain = PsqlRequests.string(requested, "availabilityDomain");
         if (regionallyDurable && availabilityDomain != null) {
             throw OciException.invalidParameter(
                     "availabilityDomain must not be specified when isRegionallyDurable is true");
@@ -947,8 +1076,8 @@ public class PsqlService implements Resettable, CompartmentUsage {
         if (availabilityDomain != null) {
             storage.put("availabilityDomain", availabilityDomain);
         }
-        if (string(requested, "kmsKeyId") != null) {
-            storage.put("kmsKeyId", string(requested, "kmsKeyId"));
+        if (PsqlRequests.string(requested, "kmsKeyId") != null) {
+            storage.put("kmsKeyId", PsqlRequests.string(requested, "kmsKeyId"));
         }
         Object iops = requested.get("iops");
         storage.put("iops", iops instanceof Number number ? number.longValue() : DEFAULT_IOPS);
@@ -957,9 +1086,9 @@ public class PsqlService implements Resettable, CompartmentUsage {
 
     private static Map<String, Object> networkDetails(Map<String, Object> requested) {
         Map<String, Object> network = new LinkedHashMap<>();
-        network.put("subnetId", requireString(requested, "subnetId"));
-        if (string(requested, "primaryDbEndpointPrivateIp") != null) {
-            network.put("primaryDbEndpointPrivateIp", string(requested, "primaryDbEndpointPrivateIp"));
+        network.put("subnetId", PsqlRequests.requireString(requested, "subnetId"));
+        if (PsqlRequests.string(requested, "primaryDbEndpointPrivateIp") != null) {
+            network.put("primaryDbEndpointPrivateIp", PsqlRequests.string(requested, "primaryDbEndpointPrivateIp"));
         }
         if (requested.get("nsgIds") != null) {
             network.put("nsgIds", requested.get("nsgIds"));
@@ -972,7 +1101,7 @@ public class PsqlService implements Resettable, CompartmentUsage {
 
     /** Only a fresh DB system is supported; creating from a backup or another system is not. */
     private static Map<String, Object> sourceDetails(Map<String, Object> requested) {
-        String sourceType = requested == null ? "NONE" : requireString(requested, "sourceType");
+        String sourceType = requested == null ? "NONE" : PsqlRequests.requireString(requested, "sourceType");
         if (!"NONE".equals(sourceType)) {
             throw OciException.notImplemented("Creating a DB system from source " + sourceType
                     + " is not supported by floci-oci");
@@ -1000,12 +1129,12 @@ public class PsqlService implements Resettable, CompartmentUsage {
 
     /** The master password: given in the request, or read from a secret in this emulator's Vault. */
     private String resolvePassword(Map<String, Object> passwordDetails) {
-        String passwordType = requireString(passwordDetails, "passwordType");
+        String passwordType = PsqlRequests.requireString(passwordDetails, "passwordType");
         return switch (passwordType) {
-            case "PLAIN_TEXT" -> requireString(passwordDetails, "password");
+            case "PLAIN_TEXT" -> PsqlRequests.requireString(passwordDetails, "password");
             case "VAULT_SECRET" -> {
-                String secretId = requireString(passwordDetails, "secretId");
-                String secretVersion = requireString(passwordDetails, "secretVersion");
+                String secretId = PsqlRequests.requireString(passwordDetails, "secretId");
+                String secretVersion = PsqlRequests.requireString(passwordDetails, "secretVersion");
                 try {
                     String content = vaultSecrets.getBundle(secretId, Long.valueOf(secretVersion), null)
                             .version().getContent();
@@ -1052,61 +1181,5 @@ public class PsqlService implements Resettable, CompartmentUsage {
             }
         }
         return null;
-    }
-
-    static String string(Map<String, Object> body, String key) {
-        Object value = body.get(key);
-        return value == null || value.toString().isBlank() ? null : value.toString();
-    }
-
-    static String requireString(Map<String, Object> body, String key) {
-        String value = string(body, key);
-        if (value == null) {
-            throw OciException.missingParameter("Missing required parameter: " + key);
-        }
-        return value;
-    }
-
-    @SuppressWarnings("unchecked")
-    static Map<String, Object> map(Map<String, Object> body, String key) {
-        return body.get(key) instanceof Map<?, ?> value ? (Map<String, Object>) value : null;
-    }
-
-    private static Map<String, Object> requireMap(Map<String, Object> body, String key) {
-        Map<String, Object> value = map(body, key);
-        if (value == null) {
-            throw OciException.missingParameter("Missing required parameter: " + key);
-        }
-        return value;
-    }
-
-    @SuppressWarnings("unchecked")
-    private static List<Map<String, Object>> mapList(Map<String, Object> body, String key) {
-        return body.get(key) instanceof List<?> value ? (List<Map<String, Object>>) value : List.of();
-    }
-
-    private static Integer integer(Map<String, Object> body, String key) {
-        return body.get(key) instanceof Number number ? number.intValue() : null;
-    }
-
-    private static int positive(Map<String, Object> body, String key, int fallback) {
-        Integer value = integer(body, key);
-        if (value == null) {
-            return fallback;
-        }
-        if (value < 1) {
-            throw OciException.invalidParameter(key + " must be at least 1");
-        }
-        return value;
-    }
-
-    @SuppressWarnings("unchecked")
-    private static Map<String, String> stringMap(Map<String, Object> body, String key) {
-        return body.get(key) instanceof Map<?, ?> value ? (Map<String, String>) value : null;
-    }
-
-    @SuppressWarnings("unchecked")
-    private static Map<String, Map<String, Object>> definedTags(Map<String, Object> body) {
-        return body.get("definedTags") instanceof Map<?, ?> value ? (Map<String, Map<String, Object>>) value : null;
     }
 }

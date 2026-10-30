@@ -97,3 +97,33 @@ def test_errors_carry_the_oci_shape(postgresql):
         postgresql.get_db_system("ocid1.postgresqldbsystem.oc1.iad.missing")
     assert missing.value.status == 404
     assert missing.value.code == "NotAuthorizedOrNotFound"
+
+
+def test_custom_configuration_lifecycle(postgresql):
+    models = oci.psql.models
+    created = postgresql.create_configuration(
+        models.CreateConfigurationDetails(
+            compartment_id=TENANCY,
+            display_name=f"py-config-{time.time_ns()}",
+            db_version="15",
+            shape="VM.Standard.E4.Flex",
+            is_flexible=True,
+            instance_ocpu_count=0,
+            instance_memory_size_in_gbs=0,
+            db_configuration_overrides=models.DbConfigurationOverrideCollection(
+                items=[models.ConfigOverrides(config_key="work_mem", overriden_config_value="16MB")]
+            ),
+        )
+    )
+    assert created.headers["etag"]
+    configuration = created.data
+    assert configuration.config_type == "CUSTOM"
+    overrides = {item.config_key: item.overriden_config_value for item in configuration.configuration_details.items}
+    assert overrides["work_mem"] == "16MB"
+
+    listed = postgresql.list_configurations(compartment_id=TENANCY, config_type="CUSTOM").data.items
+    assert configuration.id in [item.id for item in listed]
+
+    postgresql.delete_configuration(configuration.id)
+    assert postgresql.get_configuration(configuration.id).data.lifecycle_state == "DELETED"
+

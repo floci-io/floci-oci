@@ -253,3 +253,29 @@ output "db_system_port" {
 output "db_system_ca_certificate" {
   value = data.oci_psql_db_system_connection_detail.tf_db_connection.ca_certificate
 }
+
+resource "oci_psql_configuration" "tf_flexible_configuration" {
+  compartment_id = var.tenancy_ocid
+  display_name   = "tf-compat-flex-configuration"
+  db_version     = "15"
+  shape          = "VM.Standard.E4.Flex"
+
+  db_configuration_overrides {
+    items {
+      config_key             = "effective_io_concurrency"
+      overriden_config_value = "1"
+    }
+  }
+
+  instance_memory_size_in_gbs = "0"
+  instance_ocpu_count         = "0"
+  is_flexible                 = true
+}
+
+output "configuration_state" {
+  value = oci_psql_configuration.tf_flexible_configuration.state
+}
+
+output "configuration_shape" {
+  value = oci_psql_configuration.tf_flexible_configuration.shape
+}
