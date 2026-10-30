@@ -137,9 +137,13 @@ class TlsProxyServerTest {
 
         try (Socket sock = new Socket("127.0.0.1", publicPort)) {
             sock.setSoTimeout(5_000);
+            long start = System.nanoTime();
             sock.getOutputStream().write(new byte[]{TLS_HANDSHAKE});
             sock.getOutputStream().flush();
             assertEquals(-1, sock.getInputStream().read(), "the proxy closes once the wait runs out");
+            long waitedMillis = Duration.ofNanos(System.nanoTime() - start).toMillis();
+            assertTrue(waitedMillis >= 200, "the proxy waits for the backend before closing, closed after "
+                    + waitedMillis + " ms");
         }
     }
 
