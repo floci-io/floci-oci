@@ -11,6 +11,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
+import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import static io.restassured.RestAssured.given;
@@ -271,5 +273,69 @@ class OkeRestIntegrationTest {
             .when().post("/20180222/clusters")
             .then().statusCode(202)
             .extract().asString();
+    }
+
+    @Test
+    void clusterSettingsReadBackAndEndpointConfigActions() {
+        Map<String, Object> details = new HashMap<>();
+        details.put("compartmentId", compartment);
+        details.put("name", "rest-settings-cluster");
+        details.put("vcnId", VCN);
+        details.put("kubernetesVersion", "v1.30.1");
+        details.put("type", "ENHANCED_CLUSTER");
+        details.put("endpointConfig", Map.of("subnetId", "ocid1.subnet.oc1.iad.restapi", "isPublicIpEnabled", false));
+        details.put("clusterPodNetworkOptions", List.of(Map.of("cniType", "FLANNEL_OVERLAY")));
+        details.put("options", Map.of("kubernetesNetworkConfig",
+                Map.of("podsCidr", "10.244.0.0/16", "servicesCidr", "10.96.0.0/16"),
+                "serviceLbSubnetIds", List.of("ocid1.subnet.oc1.iad.restlb")));
+        details.put("imagePolicyConfig", Map.of("isPolicyEnabled", false));
+        String clusterId = given().contentType(ContentType.JSON).body(details)
+            .when().post("/20180222/clusters")
+            .then().statusCode(202).extract().path("id");
+
+        String etag = given().when().get("/20180222/clusters/{id}", clusterId)
+            .then()
+                .statusCode(200)
+                .header("etag", notNullValue())
+                .body("type", equalTo("ENHANCED_CLUSTER"))
+                .body("endpointConfig.subnetId", equalTo("ocid1.subnet.oc1.iad.restapi"))
+                .body("endpointConfig.isPublicIpEnabled", equalTo(false))
+                .body("clusterPodNetworkOptions[0].cniType", equalTo("FLANNEL_OVERLAY"))
+                .body("options.kubernetesNetworkConfig.podsCidr", equalTo("10.244.0.0/16"))
+                .body("options.serviceLbSubnetIds[0]", equalTo("ocid1.subnet.oc1.iad.restlb"))
+                .body("imagePolicyConfig.isPolicyEnabled", equalTo(false))
+                .body("availableKubernetesUpgrades.size()", equalTo(0))
+                .extract().header("etag");
+
+        given().contentType(ContentType.JSON).header("if-match", etag)
+                .body(Map.of("freeformTags", Map.of("team", "rest"), "type", "ENHANCED_CLUSTER"))
+            .when().put("/20180222/clusters/{id}", clusterId)
+            .then().statusCode(202).header("opc-work-request-id", notNullValue());
+        String workRequestId = given().contentType(ContentType.JSON).body(Map.of("isPublicIpEnabled", true))
+            .when().post("/20180222/clusters/{id}/actions/updateEndpointConfig", clusterId)
+            .then().statusCode(202).extract().header("opc-work-request-id");
+        given().when().get("/20180222/workRequests/{id}", workRequestId)
+            .then()
+                .statusCode(200)
+                .body("operationType", equalTo("CLUSTER_UPDATE"))
+                .body("resources[0].entityType", equalTo("cluster"))
+                .body("resources[0].actionType", equalTo("UPDATED"));
+        given().when().get("/20180222/clusters/{id}", clusterId)
+            .then()
+                .statusCode(200)
+                .body("freeformTags.team", equalTo("rest"))
+                .body("endpointConfig.isPublicIpEnabled", equalTo(true))
+                .body("endpointConfig.subnetId", equalTo("ocid1.subnet.oc1.iad.restapi"));
+        given().contentType(ContentType.JSON).body(Map.of("type", "HUGE_CLUSTER"))
+            .when().put("/20180222/clusters/{id}", clusterId)
+            .then()
+                .statusCode(400)
+                .header("opc-request-id", notNullValue())
+                .body("code", equalTo("InvalidParameter"));
+        given().contentType(ContentType.JSON).body(Map.of())
+            .when().post("/20180222/clusters/{id}/actions/migrateToNativeVcn", clusterId)
+            .then().statusCode(400).body("code", equalTo("MissingParameter"));
+
+        given().when().delete("/20180222/clusters/{id}", clusterId).then().statusCode(202);
     }
 }

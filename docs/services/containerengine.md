@@ -16,7 +16,7 @@ The **Oracle Cloud Infrastructure (OCI) Container Engine for Kubernetes (OKE)** 
 
 | Area | Operations |
 |---|---|
-| Clusters | `CreateCluster`, `GetCluster`, `ListClusters`, `UpdateCluster`, `DeleteCluster`, `CreateKubeconfig` |
+| Clusters | `CreateCluster`, `GetCluster`, `ListClusters`, `UpdateCluster`, `DeleteCluster`, `UpdateClusterEndpointConfig`, `ClusterMigrateToNativeVcn`, `CreateKubeconfig` |
 | Node Pools | `CreateNodePool`, `GetNodePool`, `ListNodePools`, `UpdateNodePool`, `DeleteNodePool` |
 | Options | `GetClusterOptions`, `GetNodePoolOptions` |
 | Work Requests | `GetWorkRequest`, `ListWorkRequests`, `ListWorkRequestErrors`, `ListWorkRequestLogs` |
@@ -39,6 +39,9 @@ When real mode is enabled (`FLOCI_OCI_SERVICES_OKE_MOCK=false`), OKE provisions 
 ## Wire & Behavior Notes
 
 - **Kubeconfig Generation**: `POST /20180222/clusters/{id}/kubeconfig/content` accepts the SDK's `CreateClusterKubeconfigContentDetails` (`tokenVersion`, `expiration`, `endpoint`). `expiration` is deprecated in the SDK and ignored. `endpoint` must be one of `LEGACY_KUBERNETES`, `PUBLIC_ENDPOINT`, `PRIVATE_ENDPOINT` or `VCN_HOSTNAME` (any case; otherwise `400 InvalidParameter`); floci-oci has one reachable API address, `https://127.0.0.1:{hostPort}`, so every value resolves to it. Before the cluster is `ACTIVE` (or in mock mode) there is no CA yet, and the kubeconfig falls back to `insecure-skip-tls-verify: true`.
+- **Cluster settings read back as sent**: `type`, `endpointConfig`, `options`, `imagePolicyConfig` and `clusterPodNetworkOptions` are stored from `CreateClusterDetails` and returned by `GetCluster` and `ListClusters` exactly as given, reduced to the fields of their SDK types. Nothing is filled in for a setting that was not sent, since the defaults real OKE applies are not documented in the SDKs. Enum values (`type`, `cniType`, `ipFamilies`) are checked (`400 InvalidParameter`). They are management-plane only: the k3s sidecar does not change with them. `availableKubernetesUpgrades` is always `[]` and `systemTags` `{}`.
+- **Cluster updates**: `UpdateCluster` changes the name, version, tags, `type`, `imagePolicyConfig`, and the options `UpdateClusterOptionsDetails` allows (`admissionControllerOptions`, `persistentVolumeConfig`, `serviceLbConfig`, OpenID Connect); the network options set on create stay. `UpdateClusterEndpointConfig` changes the NSGs, public IP and security attributes and keeps the subnet; `ClusterMigrateToNativeVcn` gives a cluster created without one its `endpointConfig` (what Terraform calls when `endpoint_config` is added later). Both answer `202` with a `CLUSTER_UPDATE` work request. `GetCluster` returns an `etag`, which `if-match` on these three operations checks.
+- **Public endpoint**: with `endpointConfig.isPublicIpEnabled` true, `endpoints.publicEndpoint` is the cluster's one reachable address, as host:port.
 - **Work Requests**: Asynchronous mutations (such as cluster and node pool creation or deletion) return `202 Accepted` with an `opc-work-request-id` header, pollable via `/20180222/workRequests/{id}`.
 - **Immutable Container Naming**: Sidecar containers are named using the immutable cluster OCID (`floci-oci-oke-ocid1.cluster.oc1.iad.xxx`), ensuring display name updates via `UpdateCluster` do not affect container lifecycle or teardown.
 

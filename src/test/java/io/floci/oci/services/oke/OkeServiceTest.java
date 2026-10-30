@@ -18,9 +18,15 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -111,6 +117,157 @@ class OkeServiceTest {
         assertThrows(OciException.class, () ->
             service.createNodePool(COMPARTMENT, "ocid1.cluster.oc1.iad.nonexistent", "pool-1", "v1.30.1", "VM.Standard.E4.Flex", 2, null, null)
         );
+    }
+
+    private static OkeService.ClusterSettings fullSettings() {
+        return new OkeService.ClusterSettings("ENHANCED_CLUSTER",
+                Map.of("subnetId", "ocid1.subnet.oc1.iad.api", "isPublicIpEnabled", true, "nsgIds", List.of()),
+                Map.of("kubernetesNetworkConfig", Map.of("podsCidr", "10.244.0.0/16", "servicesCidr", "10.96.0.0/16"),
+                        "serviceLbSubnetIds", List.of("ocid1.subnet.oc1.iad.lb"),
+                        "addOns", Map.of("isKubernetesDashboardEnabled", false, "isTillerEnabled", false),
+                        "notAnOption", true),
+                Map.of("isPolicyEnabled", false),
+                List.of(Map.of("cniType", "FLANNEL_OVERLAY")));
+    }
+
+    @Test
+    void createReadsBackTheSettingsAsSent() {
+        StoredOkeCluster cluster = service.createCluster(COMPARTMENT, "settings", VCN, "v1.30.1", null, null, null,
+                fullSettings()).cluster();
+
+        Map<String, Object> wire = service.getCluster(cluster.getId()).toWire();
+        assertEquals("ENHANCED_CLUSTER", wire.get("type"));
+        assertEquals(Map.of("subnetId", "ocid1.subnet.oc1.iad.api", "isPublicIpEnabled", true, "nsgIds", List.of()),
+                wire.get("endpointConfig"));
+        Map<?, ?> options = (Map<?, ?>) wire.get("options");
+        assertEquals(Map.of("podsCidr", "10.244.0.0/16", "servicesCidr", "10.96.0.0/16"),
+                options.get("kubernetesNetworkConfig"));
+        assertFalse(options.containsKey("notAnOption"), "only ClusterCreateOptions fields are kept");
+        assertEquals(Map.of("isPolicyEnabled", false), wire.get("imagePolicyConfig"));
+        assertEquals(List.of(Map.of("cniType", "FLANNEL_OVERLAY")), wire.get("clusterPodNetworkOptions"));
+        assertEquals(List.of(), wire.get("availableKubernetesUpgrades"));
+        assertEquals(Map.of(), wire.get("systemTags"));
+        assertEquals("127.0.0.1:6443", ((Map<?, ?>) wire.get("endpoints")).get("publicEndpoint"));
+        assertNotNull(cluster.getEtag());
+    }
+
+    @Test
+    void unsetSettingsStayAbsent() {
+        StoredOkeCluster cluster = service.createCluster(COMPARTMENT, "bare", VCN, "v1.30.1", null, null, null)
+                .cluster();
+
+        Map<String, Object> wire = cluster.toWire();
+        for (String key : List.of("type", "endpointConfig", "options", "imagePolicyConfig", "clusterPodNetworkOptions")) {
+            assertFalse(wire.containsKey(key), key + " is not invented");
+        }
+        assertNull(((Map<?, ?>) wire.get("endpoints")).get("publicEndpoint"));
+    }
+
+    @Test
+    void createRejectsUnknownEnumValues() {
+        assertEquals("InvalidParameter", assertThrows(OciException.class, () -> service.createCluster(COMPARTMENT,
+                "bad", VCN, "v1.30.1", null, null, null,
+                new OkeService.ClusterSettings("HUGE_CLUSTER", null, null, null, null))).getCode());
+        assertEquals("InvalidParameter", assertThrows(OciException.class, () -> service.createCluster(COMPARTMENT,
+                "bad", VCN, "v1.30.1", null, null, null,
+                new OkeService.ClusterSettings(null, null, null, null, List.of(Map.of("cniType", "CALICO")))))
+                .getCode());
+        assertEquals("InvalidParameter", assertThrows(OciException.class, () -> service.createCluster(COMPARTMENT,
+                "bad", VCN, "v1.30.1", null, null, null,
+                new OkeService.ClusterSettings(null, null, Map.of("ipFamilies", List.of("IPv5")), null, null)))
+                .getCode());
+    }
+
+    @Test
+    void updateChangesOnlyWhatUpdateClusterDetailsAllows() {
+        StoredOkeCluster cluster = service.createCluster(COMPARTMENT, "upd", VCN, "v1.30.1", null, null, null,
+                fullSettings()).cluster();
+        String etag = cluster.getEtag();
+
+        service.updateCluster(cluster.getId(), null, null, Map.of("team", "a"), null,
+                new OkeService.ClusterSettings(null, null,
+                        Map.of("admissionControllerOptions", Map.of("isPodSecurityPolicyEnabled", false),
+                                "kubernetesNetworkConfig", Map.of("podsCidr", "10.0.0.0/8")),
+                        Map.of("isPolicyEnabled", true), null), etag);
+
+        StoredOkeCluster updated = service.getCluster(cluster.getId());
+        assertEquals(Map.of("team", "a"), updated.getFreeformTags());
+        assertEquals(Map.of("isPolicyEnabled", true), updated.getImagePolicyConfig());
+        assertEquals(Map.of("isPodSecurityPolicyEnabled", false),
+                updated.getOptions().get("admissionControllerOptions"));
+        assertEquals(Map.of("podsCidr", "10.244.0.0/16", "servicesCidr", "10.96.0.0/16"),
+                updated.getOptions().get("kubernetesNetworkConfig"), "create-only options are kept");
+        assertNotEquals(etag, updated.getEtag());
+        assertEquals("NoEtagMatch", assertThrows(OciException.class, () -> service.updateCluster(cluster.getId(),
+                "x", null, null, null, OkeService.ClusterSettings.NONE, etag)).getCode());
+    }
+
+    @Test
+    void aClusterStoredWithoutAnEtagGetsOneAtStartup() {
+        StoredOkeCluster cluster = service.createCluster(COMPARTMENT, "old", VCN, "v1.30.1", null, null, null).cluster();
+        cluster.setEtag(null);
+        clusters.put(cluster.getId(), cluster);
+
+        service.reconstructClusterState();
+
+        String etag = service.getCluster(cluster.getId()).getEtag();
+        assertNotNull(etag);
+        service.updateCluster(cluster.getId(), "renamed", null, null, null, OkeService.ClusterSettings.NONE, etag);
+        assertEquals("renamed", service.getCluster(cluster.getId()).getName());
+    }
+
+    @Test
+    void concurrentUpdatesWithTheSameEtagLetOnlyOneThrough() throws Exception {
+        StoredOkeCluster cluster = service.createCluster(COMPARTMENT, "race", VCN, "v1.30.1", null, null, null)
+                .cluster();
+        String etag = cluster.getEtag();
+        int writers = 8;
+        CountDownLatch start = new CountDownLatch(1);
+        ExecutorService pool = Executors.newFixedThreadPool(writers);
+        List<Future<Boolean>> results = new ArrayList<>();
+        try {
+            for (int i = 0; i < writers; i++) {
+                String name = "writer-" + i;
+                results.add(pool.submit(() -> {
+                    start.await();
+                    try {
+                        service.updateCluster(cluster.getId(), name, null, null, null,
+                                OkeService.ClusterSettings.NONE, etag);
+                        return true;
+                    } catch (OciException e) {
+                        assertEquals("NoEtagMatch", e.getCode());
+                        return false;
+                    }
+                }));
+            }
+            start.countDown();
+            int succeeded = 0;
+            for (Future<Boolean> result : results) {
+                if (result.get(10, TimeUnit.SECONDS)) {
+                    succeeded++;
+                }
+            }
+            assertEquals(1, succeeded, "only the first write with the etag passes if-match");
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
+    void endpointConfigActionsKeepOrSetTheSubnet() {
+        StoredOkeCluster withConfig = service.createCluster(COMPARTMENT, "ep", VCN, "v1.30.1", null, null, null,
+                fullSettings()).cluster();
+        service.updateClusterEndpointConfig(withConfig.getId(),
+                Map.of("isPublicIpEnabled", false, "subnetId", "ocid1.subnet.oc1.iad.other"), null);
+        assertEquals(Map.of("subnetId", "ocid1.subnet.oc1.iad.api", "isPublicIpEnabled", false, "nsgIds", List.of()),
+                service.getCluster(withConfig.getId()).getEndpointConfig());
+
+        StoredOkeCluster bare = service.createCluster(COMPARTMENT, "ep2", VCN, "v1.30.1", null, null, null).cluster();
+        service.migrateClusterToNativeVcn(bare.getId(),
+                Map.of("endpointConfig", Map.of("subnetId", "ocid1.subnet.oc1.iad.api")), null);
+        assertEquals(Map.of("subnetId", "ocid1.subnet.oc1.iad.api"), service.getCluster(bare.getId()).getEndpointConfig());
+        assertEquals("MissingParameter", assertThrows(OciException.class,
+                () -> service.migrateClusterToNativeVcn(bare.getId(), Map.of(), null)).getCode());
     }
 
     @Test
