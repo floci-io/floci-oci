@@ -36,6 +36,7 @@ public class StoredDbSystem {
     private Map<String, Object> networkDetails;
     private Map<String, Object> managementPolicy;
     private Map<String, Object> source;
+    private Map<String, Object> replicationConfig;
     private String configId;
     private String replacedConfigId;
     private String adminUsername;
@@ -84,6 +85,7 @@ public class StoredDbSystem {
         wire.put("networkDetails", networkDetails);
         wire.put("managementPolicy", managementPolicy);
         putIfPresent(wire, "source", source);
+        putIfPresent(wire, "replicationConfig", replicationConfig);
         wire.put("freeformTags", freeformTags != null ? freeformTags : Map.of());
         wire.put("definedTags", definedTags != null ? definedTags : Map.of());
         // Always present: Terraform treats a missing systemTags as a value still to be computed.
@@ -429,5 +431,13 @@ public class StoredDbSystem {
 
     public void setRestoreBackupId(String restoreBackupId) {
         this.restoreBackupId = restoreBackupId;
+    }
+
+    public Map<String, Object> getReplicationConfig() {
+        return replicationConfig;
+    }
+
+    public void setReplicationConfig(Map<String, Object> replicationConfig) {
+        this.replicationConfig = replicationConfig;
     }
 }

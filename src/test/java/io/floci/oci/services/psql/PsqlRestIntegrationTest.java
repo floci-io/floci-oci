@@ -279,7 +279,7 @@ class PsqlRestIntegrationTest {
                 "primaryDbSystemId", "ocid1.postgresqldbsystem.oc1.iad.x"));
         given().contentType("application/json").body(fromDbSystem)
             .when().post("/20220915/dbSystems")
-            .then().statusCode(501);
+            .then().statusCode(400).body("code", equalTo("RelatedResourceNotAuthorizedOrNotFound"));
     }
 
     @Test
@@ -319,5 +319,63 @@ class PsqlRestIntegrationTest {
         given()
             .when().get("/20220915/defaultConfigurations/ocid1.postgresqldefaultconfiguration.oc1.iad.missing")
             .then().statusCode(404).body("code", equalTo("NotAuthorizedOrNotFound"));
+    }
+
+    @Test
+    void replicasAndInstancePatches() {
+        String primaryId = given().contentType("application/json").body(createDetails("it-primary"))
+            .when().post("/20220915/dbSystems")
+            .then().statusCode(200).extract().path("id");
+        Map<String, Object> replicaDetails = createDetails("it-replica");
+        replicaDetails.remove("credentials");
+        replicaDetails.put("source", Map.of("sourceType", "DB_SYSTEM", "primaryDbSystemId", primaryId));
+        String replicaId = given().contentType("application/json").body(replicaDetails)
+            .when().post("/20220915/dbSystems")
+            .then().statusCode(200)
+                .body("systemRole", equalTo("WARM_STANDBY_DB_SYSTEM"))
+                .body("source.sourceType", equalTo("DB_SYSTEM"))
+                .body("source.primaryDbSystemId", equalTo(primaryId))
+                .extract().path("id");
+
+        given().when().get("/20220915/dbSystems/" + primaryId)
+            .then().statusCode(200).body("systemRole", equalTo("PRIMARY_DB_SYSTEM"));
+        given().when().get("/20220915/dbSystems/" + primaryId + "/replicas")
+            .then()
+                .statusCode(200)
+                .header("opc-request-id", notNullValue())
+                .body("items.id", equalTo(List.of(replicaId)))
+                .body("items[0].region", notNullValue());
+
+        given().contentType("application/json")
+                .body(Map.of("items", List.of(Map.of("operation", "INSERT", "selection", "instances",
+                        "value", Map.of("displayName", "it-standby")))))
+            .when().patch("/20220915/dbSystems/" + primaryId)
+            .then()
+                .statusCode(202)
+                .header("opc-request-id", notNullValue())
+                .header("opc-work-request-id", notNullValue());
+        given().when().get("/20220915/dbSystems/" + primaryId)
+            .then().statusCode(200).body("instanceCount", equalTo(2)).body("instances.size()", equalTo(2));
+        given().contentType("application/json").body(Map.of())
+            .when().post("/20220915/dbSystems/" + primaryId + "/actions/failover")
+            .then().statusCode(202).header("opc-work-request-id", notNullValue());
+
+        given().contentType("application/json").body(Map.of("replicaDbSystemId", replicaId))
+            .when().post("/20220915/dbSystems/" + primaryId + "/actions/switchover")
+            .then().statusCode(202).header("opc-work-request-id", notNullValue());
+        given().when().get("/20220915/dbSystems/" + replicaId)
+            .then().statusCode(200).body("systemRole", equalTo("PRIMARY_DB_SYSTEM"));
+        given().contentType("application/json").body(Map.of("changeMode", "IMMEDIATELY"))
+            .when().post("/20220915/dbSystems/" + primaryId + "/actions/changeRoleToStandalone")
+            .then().statusCode(202);
+        given().contentType("application/json").body(Map.of("primaryDbSystemId", replicaId))
+            .when().post("/20220915/dbSystems/" + primaryId + "/actions/changeRoleToReplica")
+            .then().statusCode(202);
+        given().contentType("application/json").body(Map.of("primaryDbSystemId", replicaId))
+            .when().post("/20220915/dbSystems/" + primaryId + "/actions/changeRoleToReplica")
+            .then()
+                .statusCode(409)
+                .header("opc-request-id", notNullValue())
+                .body("code", equalTo("Conflict"));
     }
 }

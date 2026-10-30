@@ -12,6 +12,7 @@ import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.DELETE;
 import jakarta.ws.rs.GET;
 import jakarta.ws.rs.HeaderParam;
+import jakarta.ws.rs.PATCH;
 import jakarta.ws.rs.POST;
 import jakarta.ws.rs.PUT;
 import jakarta.ws.rs.Path;
@@ -95,9 +96,11 @@ public class PsqlController {
                                   @QueryParam("limit") Integer limit,
                                   @QueryParam("page") String page,
                                   @QueryParam("sortOrder") String sortOrder,
-                                  @QueryParam("sortBy") String sortBy) {
+                                  @QueryParam("sortBy") String sortBy,
+                                  @QueryParam("systemRole") String systemRole) {
         compartments.requireInQuery(compartmentId);
-        return PsqlRequests.collection(service.listDbSystems(compartmentId, lifecycleState, displayName, id, sortBy, sortOrder)
+        return PsqlRequests.collection(service.listDbSystems(compartmentId, lifecycleState, displayName, id, sortBy,
+                        sortOrder, systemRole)
                 .stream().map(StoredDbSystem::toSummaryWire).toList(), limit, page);
     }
 
@@ -153,6 +156,54 @@ public class PsqlController {
                                                 @HeaderParam("if-match") String ifMatch,
                                                 Map<String, Object> body) {
         return accepted(service.restartDbInstance(dbSystemId, body(body), ifMatch));
+    }
+
+    @PATCH
+    @Path("/dbSystems/{dbSystemId}")
+    public Response patchDbSystem(@PathParam("dbSystemId") String dbSystemId,
+                                  @HeaderParam("if-match") String ifMatch,
+                                  Map<String, Object> body) {
+        return accepted(service.patchDbSystem(dbSystemId, body(body), ifMatch));
+    }
+
+    @POST
+    @Path("/dbSystems/{dbSystemId}/actions/failover")
+    public Response failoverDbSystem(@PathParam("dbSystemId") String dbSystemId,
+                                     @HeaderParam("if-match") String ifMatch,
+                                     Map<String, Object> body) {
+        return accepted(service.failoverDbSystem(dbSystemId, body(body), ifMatch));
+    }
+
+    @POST
+    @Path("/dbSystems/{dbSystemId}/actions/switchover")
+    public Response switchOver(@PathParam("dbSystemId") String dbSystemId,
+                               @HeaderParam("if-match") String ifMatch,
+                               Map<String, Object> body) {
+        return accepted(service.switchOver(dbSystemId, body(body), ifMatch));
+    }
+
+    @POST
+    @Path("/dbSystems/{dbSystemId}/actions/changeRoleToReplica")
+    public Response changeRoleToReplica(@PathParam("dbSystemId") String dbSystemId,
+                                        @HeaderParam("if-match") String ifMatch,
+                                        Map<String, Object> body) {
+        return accepted(service.changeRoleToReplica(dbSystemId, body(body), ifMatch));
+    }
+
+    @POST
+    @Path("/dbSystems/{dbSystemId}/actions/changeRoleToStandalone")
+    public Response changeRoleToStandalone(@PathParam("dbSystemId") String dbSystemId,
+                                           @HeaderParam("if-match") String ifMatch,
+                                           Map<String, Object> body) {
+        return accepted(service.changeRoleToStandalone(dbSystemId, body(body), ifMatch));
+    }
+
+    @GET
+    @Path("/dbSystems/{dbSystemId}/replicas")
+    public Response listDbSystemReplicas(@PathParam("dbSystemId") String dbSystemId,
+                                         @QueryParam("limit") Integer limit,
+                                         @QueryParam("page") String page) {
+        return PsqlRequests.collection(service.listReplicas(dbSystemId), limit, page);
     }
 
     @POST
