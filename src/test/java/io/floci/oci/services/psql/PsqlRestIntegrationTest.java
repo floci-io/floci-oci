@@ -378,4 +378,32 @@ class PsqlRestIntegrationTest {
                 .header("opc-request-id", notNullValue())
                 .body("code", equalTo("Conflict"));
     }
+
+    @Test
+    void insightCapabilitiesListQueryInsight() {
+        given().when().get("/20220915/insightCapabilities")
+            .then()
+                .statusCode(200)
+                .header("opc-request-id", notNullValue())
+                .body("items.insightType", equalTo(List.of("QUERY_INSIGHT")))
+                .body("items[0].dataTypeCapabilities.insightDataType", equalTo(List.of("AAS_TIME_SERIES", "TOP_QUERIES")))
+                .body("items[0].dataTypeCapabilities[0].dataContract.kind", equalTo("TIME_SERIES"));
+    }
+
+    @Test
+    void insightDetailsReadBackAsSent() {
+        Map<String, Object> details = createDetails("it-insights");
+        details.put("odspInsightDetails", Map.of("kind", "ENABLED",
+                "odspInsightList", List.of(Map.of("insightType", "QUERY_INSIGHT", "retentionPeriodInDays", 7))));
+        String id = given().contentType("application/json").body(details)
+            .when().post("/20220915/dbSystems")
+            .then().statusCode(200).extract().path("id");
+
+        given().when().get("/20220915/dbSystems/" + id)
+            .then()
+                .statusCode(200)
+                .body("odspInsightDetails.kind", equalTo("ENABLED"))
+                .body("odspInsightDetails.odspInsightList[0].retentionPeriodInDays", equalTo(7))
+                .body("kerberosAuthDetails", nullValue());
+    }
 }

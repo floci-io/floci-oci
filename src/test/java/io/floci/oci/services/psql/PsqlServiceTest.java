@@ -1213,4 +1213,51 @@ class PsqlServiceTest {
             threads.shutdownNow();
         }
     }
+
+    // ── Kerberos and insights ──────────────────────────────────────────────────
+
+    @Test
+    void kerberosIsRecordedOnUpdateWithAnExistingKeytab() {
+        StoredDbSystem system = mock.createDbSystem(createDetails()).system();
+        Map<String, Object> credential = Map.of("realmName", "EXAMPLE.COM",
+                "keytabSecretId", "ocid1.vaultsecret.oc1.iad.keytab", "keytabSecretVersion", 1);
+
+        mock.updateDbSystem(system.getId(), Map.of("kerberosAuthDetails",
+                Map.of("kind", "ENABLED", "credentials", List.of(credential))), null);
+
+        assertEquals(Map.of("kind", "ENABLED", "credentials", List.of(Map.of("realmName", "EXAMPLE.COM",
+                        "keytabSecretId", "ocid1.vaultsecret.oc1.iad.keytab", "keytabSecretVersion", 1L))),
+                mock.getDbSystem(system.getId()).getKerberosAuthDetails());
+        assertEquals("MissingParameter", assertThrows(OciException.class, () -> mock.updateDbSystem(system.getId(),
+                Map.of("kerberosAuthDetails", Map.of("kind", "ENABLED")), null)).getCode());
+        assertEquals("InvalidParameter", assertThrows(OciException.class, () -> mock.updateDbSystem(system.getId(),
+                Map.of("kerberosAuthDetails", Map.of("kind", "ON")), null)).getCode());
+
+        when(vaultSecrets.getSecretVersion("ocid1.vaultsecret.oc1.iad.missing", 1L))
+                .thenThrow(OciException.notAuthorizedOrNotFound("no such secret"));
+        assertEquals("RelatedResourceNotAuthorizedOrNotFound", assertThrows(OciException.class,
+                () -> mock.updateDbSystem(system.getId(), Map.of("kerberosAuthDetails", Map.of("kind", "ENABLED",
+                        "credentials", List.of(Map.of("realmName", "EXAMPLE.COM",
+                                "keytabSecretId", "ocid1.vaultsecret.oc1.iad.missing", "keytabSecretVersion", 1)))),
+                        null)).getCode());
+
+        mock.updateDbSystem(system.getId(), Map.of("kerberosAuthDetails", Map.of("kind", "DISABLED")), null);
+        assertEquals(Map.of("kind", "DISABLED"), mock.getDbSystem(system.getId()).getKerberosAuthDetails());
+    }
+
+    @Test
+    void insightsAreRecordedOnCreateAndUpdate() {
+        StoredDbSystem system = mock.createDbSystem(with("odspInsightDetails", Map.of("kind", "ENABLED",
+                "odspInsightList", List.of(Map.of("insightType", "QUERY_INSIGHT", "retentionPeriodInDays", 7)))))
+                .system();
+        assertEquals(Map.of("kind", "ENABLED", "odspInsightList",
+                        List.of(Map.of("insightType", "QUERY_INSIGHT", "retentionPeriodInDays", 7))),
+                system.getOdspInsightDetails());
+
+        mock.updateDbSystem(system.getId(), Map.of("odspInsightDetails", Map.of("kind", "DISABLED")), null);
+        assertEquals(Map.of("kind", "DISABLED"), mock.getDbSystem(system.getId()).getOdspInsightDetails());
+        assertEquals("InvalidParameter", assertThrows(OciException.class, () -> mock.createDbSystem(
+                with("odspInsightDetails", Map.of("kind", "ENABLED",
+                        "odspInsightList", List.of(Map.of("insightType", "LOCK_INSIGHT")))))).getCode());
+    }
 }

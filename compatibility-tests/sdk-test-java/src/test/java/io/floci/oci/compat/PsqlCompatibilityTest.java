@@ -11,6 +11,7 @@ import com.oracle.bmc.psql.model.CreateDbSystemDetails;
 import com.oracle.bmc.psql.model.Credentials;
 import com.oracle.bmc.psql.model.DbConfigurationOverrideCollection;
 import com.oracle.bmc.psql.model.DbSystem;
+import com.oracle.bmc.psql.model.InsightCapabilitySummary;
 import com.oracle.bmc.psql.model.NetworkDetails;
 import com.oracle.bmc.psql.model.OciOptimizedStorageDetails;
 import com.oracle.bmc.psql.model.OperationStatus;
@@ -32,6 +33,7 @@ import com.oracle.bmc.psql.requests.GetWorkRequestRequest;
 import com.oracle.bmc.psql.requests.ListBackupsRequest;
 import com.oracle.bmc.psql.requests.ListDbSystemsRequest;
 import com.oracle.bmc.psql.requests.ListDefaultConfigurationsRequest;
+import com.oracle.bmc.psql.requests.ListInsightCapabilitiesRequest;
 import com.oracle.bmc.psql.requests.ListShapesRequest;
 import com.oracle.bmc.psql.requests.ResetMasterUserPasswordRequest;
 import com.oracle.bmc.psql.requests.RestoreDbSystemRequest;
@@ -82,6 +84,10 @@ class PsqlCompatibilityTest {
         assertThat(shapes.getOpcRequestId()).isNotBlank();
         assertThat(shapes.getShapeCollection().getItems())
                 .extracting(shape -> shape.getShape()).contains("VM.Standard.E4.Flex");
+        assertThat(postgresql.listInsightCapabilities(ListInsightCapabilitiesRequest.builder().build())
+                .getInsightCapabilityCollection().getItems())
+                .extracting(capability -> capability.getInsightType())
+                .containsExactly(InsightCapabilitySummary.InsightType.QueryInsight);
 
         var configurations = postgresql.listDefaultConfigurations(
                 ListDefaultConfigurationsRequest.builder().dbVersion("15").build());

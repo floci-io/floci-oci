@@ -76,6 +76,7 @@ public class PsqlService implements Resettable, CompartmentUsage {
     static final String WARM_STANDBY = "WARM_STANDBY_DB_SYSTEM";
     static final Set<String> CHANGE_MODES = Set.of("REPLAY_PENDING_UPDATES", "IMMEDIATELY");
     static final Set<String> SYSTEM_ROLES = Set.of(STANDALONE, PRIMARY, WARM_STANDBY, "PILOT_LIGHT_DB_SYSTEM");
+    static final Set<String> FEATURE_KINDS = Set.of("ENABLED", "DISABLED");
     /** The selection a REMOVE patch names one instance by, as Terraform and the SDK examples send it. */
     private static final Pattern INSTANCE_SELECTION = Pattern.compile("instances\\[\\?id == '([^']+)'\\]");
     /** Terraform finds the DB system in a work request by an entity type containing "dbsystem". */
@@ -248,6 +249,7 @@ public class PsqlService implements Resettable, CompartmentUsage {
                 ? resolvePassword(PsqlRequests.requireMap(credentials, "passwordDetails"))
                 : UUID.randomUUID() + "-Aa1";
         Map<String, Object> replicationConfig = replicationConfig(PsqlRequests.map(details, "replicationConfig"), null);
+        Map<String, Object> insights = odspInsightDetails(PsqlRequests.map(details, "odspInsightDetails"));
         String systemType = PsqlRequests.string(details, "systemType");
         if (systemType != null && !PsqlCatalog.SYSTEM_TYPE.equals(systemType)) {
             throw OciException.invalidParameter("Unsupported systemType: " + systemType);
@@ -273,6 +275,7 @@ public class PsqlService implements Resettable, CompartmentUsage {
         system.setSystemType(PsqlCatalog.SYSTEM_TYPE);
         system.setSystemRole(source.primary() != null ? WARM_STANDBY : STANDALONE);
         system.setReplicationConfig(replicationConfig);
+        system.setOdspInsightDetails(insights);
         system.setDbVersion(major);
         system.setShape(shape.name());
         system.setInstanceOcpuCount(firstNonNull(shape.ocpuCount(), PsqlRequests.integer(details, "instanceOcpuCount"),
@@ -394,6 +397,8 @@ public class PsqlService implements Resettable, CompartmentUsage {
                 ? requireConfiguration(configId, PsqlCatalog.major(system.getDbVersion())) : null;
         Map<String, Object> replicationConfig = PsqlRequests.map(details, "replicationConfig") != null
                 ? replicationConfig(PsqlRequests.map(details, "replicationConfig"), system.getReplicationConfig()) : null;
+        Map<String, Object> kerberos = kerberosAuthDetails(PsqlRequests.map(details, "kerberosAuthDetails"));
+        Map<String, Object> insights = odspInsightDetails(PsqlRequests.map(details, "odspInsightDetails"));
 
         if (PsqlRequests.string(details, "displayName") != null) {
             system.setDisplayName(PsqlRequests.string(details, "displayName"));
@@ -441,6 +446,12 @@ public class PsqlService implements Resettable, CompartmentUsage {
         }
         if (replicationConfig != null) {
             system.setReplicationConfig(replicationConfig);
+        }
+        if (kerberos != null) {
+            system.setKerberosAuthDetails(kerberos);
+        }
+        if (insights != null) {
+            system.setOdspInsightDetails(insights);
         }
         if (details.containsKey("freeformTags")) {
             system.setFreeformTags(PsqlRequests.stringMap(details, "freeformTags"));
@@ -864,6 +875,90 @@ public class PsqlService implements Resettable, CompartmentUsage {
         config.put("rpoInSeconds", rpo != null ? ((Number) rpo).longValue()
                 : current != null ? current.get("rpoInSeconds") : 0L);
         return config;
+    }
+
+    // ── Kerberos and insights ──────────────────────────────────────────────────
+
+    /**
+     * The KerberosAuthDetails an update sets, recorded and returned as sent. ENABLED needs at
+     * least one credential, and each keytab must be an existing Vault secret version; PostgreSQL
+     * itself is not configured for GSSAPI.
+     */
+    private Map<String, Object> kerberosAuthDetails(Map<String, Object> requested) {
+        if (requested == null) {
+            return null;
+        }
+        String kind = PsqlRequests.requireString(requested, "kind");
+        PsqlRequests.requireEnum(kind, FEATURE_KINDS, "kerberosAuthDetails.kind");
+        Map<String, Object> wire = new LinkedHashMap<>();
+        wire.put("kind", kind);
+        if ("ENABLED".equals(kind)) {
+            List<Map<String, Object>> credentials = kerberosCredentials(PsqlRequests.mapList(requested, "credentials"));
+            if (credentials.isEmpty()) {
+                throw OciException.missingParameter("Missing required parameter: kerberosAuthDetails.credentials");
+            }
+            wire.put("credentials", credentials);
+            if (requested.get("backupCredentials") != null) {
+                wire.put("backupCredentials", kerberosCredentials(PsqlRequests.mapList(requested, "backupCredentials")));
+            }
+        }
+        return wire;
+    }
+
+    private List<Map<String, Object>> kerberosCredentials(List<Map<String, Object>> requested) {
+        List<Map<String, Object>> credentials = new ArrayList<>();
+        for (Map<String, Object> credential : requested) {
+            String realmName = PsqlRequests.requireString(credential, "realmName");
+            String secretId = PsqlRequests.requireString(credential, "keytabSecretId");
+            if (!(credential.get("keytabSecretVersion") instanceof Number version)) {
+                throw OciException.missingParameter("Missing required parameter: keytabSecretVersion");
+            }
+            try {
+                vaultSecrets.getSecretVersion(secretId, version.longValue());
+            } catch (OciException e) {
+                throw new OciException("RelatedResourceNotAuthorizedOrNotFound",
+                        "Authorization failed or requested resource not found: secret " + secretId + " version "
+                                + version.longValue(), 400);
+            }
+            Map<String, Object> wire = new LinkedHashMap<>();
+            wire.put("realmName", realmName);
+            wire.put("keytabSecretId", secretId);
+            wire.put("keytabSecretVersion", version.longValue());
+            credentials.add(wire);
+        }
+        return credentials;
+    }
+
+    /**
+     * The OdspInsightDetails a create or update sets, recorded and returned as sent: no insight
+     * data is collected. QUERY_INSIGHT is the only insight type.
+     */
+    private static Map<String, Object> odspInsightDetails(Map<String, Object> requested) {
+        if (requested == null) {
+            return null;
+        }
+        String kind = PsqlRequests.requireString(requested, "kind");
+        PsqlRequests.requireEnum(kind, FEATURE_KINDS, "odspInsightDetails.kind");
+        Map<String, Object> wire = new LinkedHashMap<>();
+        wire.put("kind", kind);
+        if ("ENABLED".equals(kind)) {
+            if (requested.get("odspInsightList") == null) {
+                throw OciException.missingParameter("Missing required parameter: odspInsightDetails.odspInsightList");
+            }
+            List<Map<String, Object>> insights = new ArrayList<>();
+            for (Map<String, Object> insight : PsqlRequests.mapList(requested, "odspInsightList")) {
+                String insightType = PsqlRequests.requireString(insight, "insightType");
+                PsqlRequests.requireEnum(insightType, Set.of("QUERY_INSIGHT"), "insightType");
+                Map<String, Object> entry = new LinkedHashMap<>();
+                entry.put("insightType", insightType);
+                if (insight.get("retentionPeriodInDays") != null) {
+                    entry.put("retentionPeriodInDays", PsqlRequests.positive(insight, "retentionPeriodInDays", 1));
+                }
+                insights.add(entry);
+            }
+            wire.put("odspInsightList", insights);
+        }
+        return wire;
     }
 
     // ── Backups and restore ────────────────────────────────────────────────────

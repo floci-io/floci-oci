@@ -133,6 +133,26 @@ public final class PsqlCatalog {
         return new Shape(name, ocpuCount, memorySizeInGBs);
     }
 
+    /**
+     * The one insight type, as ListInsightCapabilities reports it. OCI documents the enum values,
+     * not what a capability holds beyond them, so the descriptions and units are floci-oci's.
+     */
+    public static List<Map<String, Object>> insightCapabilities() {
+        Map<String, Object> averageActiveSessions = new LinkedHashMap<>();
+        averageActiveSessions.put("insightDataType", "AAS_TIME_SERIES");
+        averageActiveSessions.put("dataContract", Map.of("kind", "TIME_SERIES", "unit", "sessions"));
+        averageActiveSessions.put("description", "Average active sessions over time");
+        Map<String, Object> topQueries = new LinkedHashMap<>();
+        topQueries.put("insightDataType", "TOP_QUERIES");
+        topQueries.put("dataContract", Map.of("kind", "TABLE"));
+        topQueries.put("description", "The queries that took the most database time");
+        Map<String, Object> queryInsight = new LinkedHashMap<>();
+        queryInsight.put("insightType", "QUERY_INSIGHT");
+        queryInsight.put("description", "Query performance of the DB system");
+        queryInsight.put("dataTypeCapabilities", List.of(averageActiveSessions, topQueries));
+        return List.of(queryInsight);
+    }
+
     public static List<Map<String, Object>> shapes() {
         return SHAPES.stream().map(shape -> {
             Map<String, Object> wire = new LinkedHashMap<>();

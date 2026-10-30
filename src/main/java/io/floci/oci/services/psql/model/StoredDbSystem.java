@@ -37,6 +37,8 @@ public class StoredDbSystem {
     private Map<String, Object> managementPolicy;
     private Map<String, Object> source;
     private Map<String, Object> replicationConfig;
+    private Map<String, Object> kerberosAuthDetails;
+    private Map<String, Object> odspInsightDetails;
     private String configId;
     private String replacedConfigId;
     private String adminUsername;
@@ -86,6 +88,8 @@ public class StoredDbSystem {
         wire.put("managementPolicy", managementPolicy);
         putIfPresent(wire, "source", source);
         putIfPresent(wire, "replicationConfig", replicationConfig);
+        putIfPresent(wire, "kerberosAuthDetails", kerberosAuthDetails);
+        putIfPresent(wire, "odspInsightDetails", odspInsightDetails);
         wire.put("freeformTags", freeformTags != null ? freeformTags : Map.of());
         wire.put("definedTags", definedTags != null ? definedTags : Map.of());
         // Always present: Terraform treats a missing systemTags as a value still to be computed.
@@ -439,5 +443,21 @@ public class StoredDbSystem {
 
     public void setReplicationConfig(Map<String, Object> replicationConfig) {
         this.replicationConfig = replicationConfig;
+    }
+
+    public Map<String, Object> getKerberosAuthDetails() {
+        return kerberosAuthDetails;
+    }
+
+    public void setKerberosAuthDetails(Map<String, Object> kerberosAuthDetails) {
+        this.kerberosAuthDetails = kerberosAuthDetails;
+    }
+
+    public Map<String, Object> getOdspInsightDetails() {
+        return odspInsightDetails;
+    }
+
+    public void setOdspInsightDetails(Map<String, Object> odspInsightDetails) {
+        this.odspInsightDetails = odspInsightDetails;
     }
 }

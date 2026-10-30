@@ -255,6 +255,13 @@ public class PsqlController {
     }
 
     @GET
+    @Path("/insightCapabilities")
+    public Response listInsightCapabilities(@QueryParam("limit") Integer limit,
+                                            @QueryParam("page") String page) {
+        return PsqlRequests.collection(PsqlCatalog.insightCapabilities(), limit, page);
+    }
+
+    @GET
     @Path("/defaultConfigurations")
     public Response listDefaultConfigurations(@QueryParam("dbVersion") String dbVersion,
                                               @QueryParam("displayName") String displayName,
