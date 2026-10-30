@@ -30,6 +30,20 @@ class FunctionsDisabledRestIntegrationTest {
             .then().statusCode(503);
     }
 
+    @Test
+    void disabledFunctionsAlsoDisablesTheNewApiVersion() {
+        given()
+            .queryParam("compartmentId", "ocid1.compartment.oc1..x")
+            .when().get("/20260325/workRequests")
+            .then()
+                .statusCode(503)
+                .body("code", equalTo("ServiceUnavailable"));
+        given()
+            .body("{}".getBytes())
+            .when().post("/20260325/functions/ocid1.fnfunc.oc1.iad.x/actions/invoke")
+            .then().statusCode(503);
+    }
+
     public static class DisabledFunctionsProfile implements QuarkusTestProfile {
         @Override
         public Map<String, String> getConfigOverrides() {

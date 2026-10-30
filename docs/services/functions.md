@@ -1,6 +1,7 @@
 # Functions
 
-OCI Functions — API version `20181201`. **This is floci-oci's Docker-sidecar reference
+OCI Functions, on API versions `20260325` (every current SDK and OCI CLI 3.94) and `20181201`
+(older SDKs, the `fn` CLI and `fn_go`). **This is floci-oci's Docker-sidecar reference
 service**: the management plane is emulated in-process, and real invocations run your
 function image through a shared [Fn Project](https://fnproject.io) server — the same
 open-source engine OCI Functions is built on.
@@ -12,10 +13,41 @@ open-source engine OCI Functions is built on.
 | Applications | Create, Get, List, Update, Delete, ChangeCompartment |
 | Functions | Create, Get, List, Update, Delete |
 | Invocation | InvokeFunction (sync, `detached`, `is-dry-run`) |
+| Work requests (`20260325`) | GetWorkRequest, ListWorkRequests, ListWorkRequestErrors, ListWorkRequestLogs, CancelWorkRequest |
+| Catalogs (`20260325`) | ListFunctionsRuntimes, GetFunctionsRuntime, ListFunctionsRuntimeVersions, GetFunctionsRuntimeVersion, ListPbfListings, GetPbfListing, ListPbfListingVersions, GetPbfListingVersion, ListTriggers |
+
+## Two API versions
+
+Both versions serve the same applications and functions, so a function created through one is
+visible through the other. They differ where the SDKs differ:
+
+| | `20181201` | `20260325` |
+|---|---|---|
+| Create | `200`, body, `etag` | `200`, body, `etag`, `opc-work-request-id` |
+| Update, Delete, ChangeCompartment | `200` with body (`204` for delete) | `202`, no body, `opc-work-request-id` |
+| A function's image | top-level `image`, `imageDigest` | `sourceDetails` `{sourceType: CONTAINER_IMAGE, image, imageDigest}` |
+
+- The SDKs declare no status codes; `202` for the operations that answer with only a work
+  request is floci-oci's choice, as in its other services.
+- Every mutation finishes before it returns, so its work request is `SUCCEEDED` with
+  `timeFinished` set, which is what Terraform's waiters poll for. Resources are reported as
+  `functionsApplication` and `functionsFunction`, which contain the substrings Terraform matches.
+  Errors and logs are always empty, and cancel is `409 Conflict`. A change-compartment reports
+  `UPDATE_APPLICATION`: the SDK has no operation type of its own for it.
+- `sourceDetails` must be `CONTAINER_IMAGE`: fnserver runs container images only, so `ARCHIVE`
+  and `PRE_BUILT_FUNCTIONS` are `501 MethodNotImplemented`. A digest sent with the image is
+  kept; otherwise one is derived.
+- The runtime catalog holds `java17.ol9` and `python312.ol9`, names taken from the OCI CLI's
+  tests; their other values are floci-oci's. No pre-built functions are listed.
+- The optional settings (an application's `networkSecurityGroupIds`, `syslogUrl`, `traceConfig`,
+  `logging`, `imagePolicyConfig`, `securityAttributes`; a function's
+  `provisionedConcurrencyConfig`, `detachedModeTimeoutInSeconds`, `failureDestination`,
+  `successDestination`, `traceConfig`) are accepted on both versions and returned as sent. They
+  do not change how a function runs.
 
 ## Wire notes
 
-- **No work requests anywhere** — Functions is synchronous with lifecycle-state polling.
+- On `20181201` there are no work requests: Functions is synchronous with lifecycle-state polling.
 - Lists are bare JSON arrays; `ListFunctions` requires `applicationId`.
 - Exact casing matters: **`memoryInMBs`**.
 - `imageDigest` is deterministic per image and **changes when the image changes** —
@@ -58,7 +90,8 @@ oci fn function invoke $E --function-id <fnId> --body '{"name":"floci"}' --file 
 
 - Your image must be a **current FDK build** (http-stream contract). Older
   `fnproject/hello` images predate it and fail to initialize.
-- Pre-built functions (PBF listings), provisioned concurrency, trace configs, and
-  detached-invocation result tracking are not implemented.
+- Pre-built functions and archive sources are not runnable (`501`), provisioned concurrency,
+  trace configs and destinations are recorded only, and detached-invocation results are not
+  tracked.
 - `fn-invoke-type: detached` returns `202` immediately and runs the function in the
   background; `is-dry-run: true` validates without executing.

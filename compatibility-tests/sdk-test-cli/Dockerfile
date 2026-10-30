@@ -2,7 +2,7 @@ FROM python:3.12-slim
 
 # Pinned to the version of the local/oracle/oci-cli reference clone; bump the
 # pin whenever `make refs` fast-forwards it.
-ARG OCI_CLI_VERSION=3.89.3
+ARG OCI_CLI_VERSION=3.94.1
 ARG BATS_VERSION=1.11.1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \

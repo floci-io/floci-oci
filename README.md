@@ -164,7 +164,7 @@ flowchart LR
         subgraph Services ["Services"]
             A["Identity /20160918\nObject Storage /n/…\nQueue /20210201\nStreaming /20180418"]
             B["Vault · KMS · Secrets\n/20180608 · /20190301\nreal AES/RSA/ECDSA"]
-            C["Functions /20181201"]
+            C["Functions /20260325"]
             D["OKE Container Engine\n/20180222"]
         end
 
@@ -192,7 +192,7 @@ flowchart LR
 | Storage | Object Storage: namespaces, buckets, objects, listing, rename, copy, batch delete, multipart uploads, pre-authenticated requests |
 | Messaging | Queue (visibility timeouts, dead-letter queues, channels), Streaming (partitioned log, cursors, consumer groups) |
 | Security | Vault + KMS (vaults, keys, key versions, **real** AES-GCM / RSA / ECDSA crypto), Secrets and secret bundles |
-| Serverless | Functions (applications, functions, real invocation through an Fn Project sidecar) |
+| Serverless | Functions on API versions `20260325` and `20181201` (applications, functions, work requests, runtime catalog, real invocation through an Fn Project sidecar) |
 | Kubernetes | Container Engine for Kubernetes (OKE): clusters with their settings read back as sent, endpoint config updates, node pools, options, kubeconfig generation, work requests, real-mode k3s sidecar |
 | Database | Database with PostgreSQL: DB systems, start/stop/restart, master password reset, connection details with a CA certificate, shapes, default configurations, work requests, real PostgreSQL sidecar |
 | Organizations | Child tenancies (each with its own home region and isolated storage), organizations, organization tenancies, links, invitations; Governance Rules (allowed regions enforced) |
