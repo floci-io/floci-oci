@@ -97,6 +97,18 @@ class FunctionsServiceTest {
     }
 
     @Test
+    void aSuppliedDigestPinsTheImageFnServerRuns() {
+        StoredFunction pinned = service.createFunction(app("pin-app").getId(), "pinned", "iad.ocir.io/t/fn:latest",
+                "sha256:abc", 128L, null, null, null, null, null);
+        StoredFunction derived = service.createFunction(app("pin-app-2").getId(), "derived", "iad.ocir.io/t/fn:1",
+                null, 128L, null, null, null, null, null);
+
+        assertEquals("iad.ocir.io/t/fn:latest@sha256:abc", FunctionsService.imageReference(pinned));
+        assertEquals("iad.ocir.io/t/fn:1", FunctionsService.imageReference(derived),
+                "the derived placeholder is not a registry digest");
+    }
+
+    @Test
     void settingsEnumsAreChecked() {
         assertEquals("InvalidParameter", assertThrows(OciException.class, () -> FunctionsRequests.settings(
                 Map.of("logging", Map.of("lineFormat", "XML")), FunctionsRequests.APPLICATION_SETTINGS)).getCode());

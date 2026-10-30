@@ -488,7 +488,7 @@ public class FunctionsService implements Resettable, CompartmentUsage {
             ObjectNode body = MAPPER.createObjectNode();
             body.put("name", sanitize(fn.getDisplayName()) + "-" + shortId(fn.getId()));
             body.put("app_id", app.getFnAppId());
-            body.put("image", fn.getImage());
+            body.put("image", imageReference(fn));
             body.put("memory", fn.getMemoryInMBs());
             body.put("timeout", fn.getTimeoutInSeconds());
             ObjectNode fnConfig = body.putObject("config");
@@ -517,6 +517,18 @@ public class FunctionsService implements Resettable, CompartmentUsage {
     // ── Helpers ────────────────────────────────────────────────────────────────
 
     /** Deterministic per-image digest that changes when the image changes (TF contract). */
+    /**
+     * The image fnserver runs. A digest the client supplied pins it ({@code image@digest}), so a tag
+     * that has moved since cannot run a different image than the API reports; the placeholder
+     * floci-oci derives when none was supplied is not a registry digest, so the tag alone is used.
+     */
+    static String imageReference(StoredFunction fn) {
+        String image = fn.getImage();
+        String digest = fn.getImageDigest();
+        boolean supplied = digest != null && !digest.equals(digestFor(image));
+        return supplied && !image.contains("@") ? image + "@" + digest : image;
+    }
+
     static String digestFor(String image) {
         if (image == null || image.isBlank()) {
             return null;
