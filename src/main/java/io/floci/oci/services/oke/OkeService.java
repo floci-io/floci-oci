@@ -206,6 +206,11 @@ public class OkeService implements Resettable, CompartmentUsage {
             cluster.setRegion(region);
             changed = true;
         }
+        // Clusters stored before GetCluster returned an etag, so their first update can use if-match.
+        if (cluster.getEtag() == null) {
+            cluster.setEtag(Etags.newEtag());
+            changed = true;
+        }
         return changed;
     }
 
@@ -439,9 +444,11 @@ public class OkeService implements Resettable, CompartmentUsage {
 
     /**
      * UpdateCluster: the name, version, tags, type, image policy and the options
-     * UpdateClusterOptionsDetails allows. Everything is checked before anything changes.
+     * UpdateClusterOptionsDetails allows. Everything is checked before anything changes. The
+     * cluster updates are synchronized, so two writes carrying the same etag cannot both pass
+     * {@code if-match}.
      */
-    public String updateCluster(String clusterId, String name, String kubernetesVersion,
+    public synchronized String updateCluster(String clusterId, String name, String kubernetesVersion,
                                 Map<String, String> freeformTags, Map<String, Map<String, Object>> definedTags,
                                 ClusterSettings settings, String ifMatch) {
         StoredOkeCluster cluster = getCluster(clusterId);
@@ -472,7 +479,8 @@ public class OkeService implements Resettable, CompartmentUsage {
     }
 
     /** UpdateClusterEndpointConfig: NSGs, public IP and security attributes; the subnet stays. */
-    public String updateClusterEndpointConfig(String clusterId, Map<String, Object> details, String ifMatch) {
+    public synchronized String updateClusterEndpointConfig(String clusterId, Map<String, Object> details,
+                                                           String ifMatch) {
         StoredOkeCluster cluster = getCluster(clusterId);
         Etags.checkIfMatch(ifMatch, cluster.getEtag());
         cluster.setEndpointConfig(OkeClusterSettings.updatedEndpointConfig(cluster.getEndpointConfig(),
@@ -485,7 +493,8 @@ public class OkeService implements Resettable, CompartmentUsage {
      * Terraform calls when {@code endpoint_config} is added to an existing cluster. There is no
      * VCN, so nothing else changes.
      */
-    public String migrateClusterToNativeVcn(String clusterId, Map<String, Object> details, String ifMatch) {
+    public synchronized String migrateClusterToNativeVcn(String clusterId, Map<String, Object> details,
+                                                         String ifMatch) {
         StoredOkeCluster cluster = getCluster(clusterId);
         Etags.checkIfMatch(ifMatch, cluster.getEtag());
         Object endpointConfig = details != null ? details.get("endpointConfig") : null;

@@ -18,9 +18,15 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -194,6 +200,57 @@ class OkeServiceTest {
         assertNotEquals(etag, updated.getEtag());
         assertEquals("NoEtagMatch", assertThrows(OciException.class, () -> service.updateCluster(cluster.getId(),
                 "x", null, null, null, OkeService.ClusterSettings.NONE, etag)).getCode());
+    }
+
+    @Test
+    void aClusterStoredWithoutAnEtagGetsOneAtStartup() {
+        StoredOkeCluster cluster = service.createCluster(COMPARTMENT, "old", VCN, "v1.30.1", null, null, null).cluster();
+        cluster.setEtag(null);
+        clusters.put(cluster.getId(), cluster);
+
+        service.reconstructClusterState();
+
+        String etag = service.getCluster(cluster.getId()).getEtag();
+        assertNotNull(etag);
+        service.updateCluster(cluster.getId(), "renamed", null, null, null, OkeService.ClusterSettings.NONE, etag);
+        assertEquals("renamed", service.getCluster(cluster.getId()).getName());
+    }
+
+    @Test
+    void concurrentUpdatesWithTheSameEtagLetOnlyOneThrough() throws Exception {
+        StoredOkeCluster cluster = service.createCluster(COMPARTMENT, "race", VCN, "v1.30.1", null, null, null)
+                .cluster();
+        String etag = cluster.getEtag();
+        int writers = 8;
+        CountDownLatch start = new CountDownLatch(1);
+        ExecutorService pool = Executors.newFixedThreadPool(writers);
+        List<Future<Boolean>> results = new ArrayList<>();
+        try {
+            for (int i = 0; i < writers; i++) {
+                String name = "writer-" + i;
+                results.add(pool.submit(() -> {
+                    start.await();
+                    try {
+                        service.updateCluster(cluster.getId(), name, null, null, null,
+                                OkeService.ClusterSettings.NONE, etag);
+                        return true;
+                    } catch (OciException e) {
+                        assertEquals("NoEtagMatch", e.getCode());
+                        return false;
+                    }
+                }));
+            }
+            start.countDown();
+            int succeeded = 0;
+            for (Future<Boolean> result : results) {
+                if (result.get(10, TimeUnit.SECONDS)) {
+                    succeeded++;
+                }
+            }
+            assertEquals(1, succeeded, "only the first write with the etag passes if-match");
+        } finally {
+            pool.shutdownNow();
+        }
     }
 
     @Test
