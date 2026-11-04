@@ -7,8 +7,10 @@ import org.junit.jupiter.api.Test;
 
 import java.util.Map;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
 import static org.mockito.Mockito.mock;
@@ -33,6 +35,21 @@ class OkeKubeconfigGeneratorTest {
         cluster.setApiToken("static-token");
         cluster.setCaCertificate("Q0FEQVRB");
         cluster.setEndpoints(Map.of("kubernetes", "https://127.0.0.1:6450"));
+    }
+
+    @Test
+    void validateAuthMode_acceptsBothModesIgnoringCase() {
+        assertDoesNotThrow(() -> OkeKubeconfigGenerator.validateAuthMode("exec"));
+        assertDoesNotThrow(() -> OkeKubeconfigGenerator.validateAuthMode("token"));
+        assertDoesNotThrow(() -> OkeKubeconfigGenerator.validateAuthMode("TOKEN"));
+    }
+
+    @Test
+    void validateAuthMode_unknownValueNamesTheAllowedValues() {
+        IllegalStateException thrown = assertThrows(IllegalStateException.class,
+                () -> OkeKubeconfigGenerator.validateAuthMode("tokn"));
+        assertEquals("Invalid floci-oci.services.oke.kubeconfig-auth value 'tokn': "
+                + "allowed values are exec and token", thrown.getMessage());
     }
 
     @Test

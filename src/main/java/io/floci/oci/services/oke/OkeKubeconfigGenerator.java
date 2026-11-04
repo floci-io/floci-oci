@@ -18,6 +18,7 @@ import org.jboss.logging.Logger;
 public class OkeKubeconfigGenerator {
 
     private static final Logger LOG = Logger.getLogger(OkeKubeconfigGenerator.class);
+    static final String AUTH_EXEC = "exec";
     static final String AUTH_TOKEN = "token";
 
     private final EmulatorConfig config;
@@ -25,6 +26,13 @@ public class OkeKubeconfigGenerator {
     @Inject
     public OkeKubeconfigGenerator(EmulatorConfig config) {
         this.config = config;
+    }
+
+    static void validateAuthMode(String mode) {
+        if (!AUTH_EXEC.equalsIgnoreCase(mode) && !AUTH_TOKEN.equalsIgnoreCase(mode)) {
+            throw new IllegalStateException("Invalid floci-oci.services.oke.kubeconfig-auth value '" + mode
+                    + "': allowed values are " + AUTH_EXEC + " and " + AUTH_TOKEN);
+        }
     }
 
     public String generateKubeconfig(StoredOkeCluster cluster) {
