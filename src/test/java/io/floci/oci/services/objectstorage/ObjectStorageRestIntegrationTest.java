@@ -1,9 +1,11 @@
 package io.floci.oci.services.objectstorage;
 
 import io.floci.oci.config.EmulatorConfig;
+import io.floci.oci.core.common.Resettable;
 import io.floci.oci.testing.TestCompartments;
 import io.floci.oci.testing.TestRegions;
 import io.quarkus.test.junit.QuarkusTest;
+import jakarta.enterprise.inject.Instance;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -23,6 +25,14 @@ class ObjectStorageRestIntegrationTest {
 
     @Inject
     EmulatorConfig config;
+
+    @Inject
+    Instance<Resettable> resettables;
+
+    @Test
+    void stateResetReachesTheService() {
+        assertTrue(resettables.stream().anyMatch(ObjectStorageService.class::isInstance));
+    }
 
     private static String uniqueBucket(String prefix) {
         return prefix + "-" + System.nanoTime();
