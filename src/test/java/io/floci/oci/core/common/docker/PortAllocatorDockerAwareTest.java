@@ -10,7 +10,6 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
-import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -27,7 +26,6 @@ class PortAllocatorDockerAwareTest {
         DockerClient dockerClient = mock(DockerClient.class);
         ListContainersCmd listCmd = mock(ListContainersCmd.class);
         when(dockerClient.listContainersCmd()).thenReturn(listCmd);
-        when(listCmd.withShowAll(anyBoolean())).thenReturn(listCmd);
         ContainerPort[] ports = new ContainerPort[publicPorts.length];
         for (int i = 0; i < publicPorts.length; i++) {
             ports[i] = new ContainerPort().withPublicPort(publicPorts[i]);
