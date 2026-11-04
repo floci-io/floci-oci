@@ -282,7 +282,7 @@ class ObjectStorageCompatibilityTest {
                 .contentLength((long) part2.length)
                 .build());
 
-        client.commitMultipartUpload(CommitMultipartUploadRequest.builder()
+        String committedMd5 = client.commitMultipartUpload(CommitMultipartUploadRequest.builder()
                 .namespaceName(namespace).bucketName(bucket).objectName("assembled.bin")
                 .uploadId(upload.getUploadId())
                 .commitMultipartUploadDetails(CommitMultipartUploadDetails.builder()
@@ -292,12 +292,19 @@ class ObjectStorageCompatibilityTest {
                                 CommitMultipartUploadPartDetails.builder()
                                         .partNum(2).etag(up2.getETag()).build()))
                         .build())
-                .build());
+                .build()).getOpcMultipartMd5();
+        assertThat(committedMd5).isEqualTo("aMNH1FXeMAO9uahcKdysYw==-2");
 
         GetObjectResponse assembled = client.getObject(GetObjectRequest.builder()
                 .namespaceName(namespace).bucketName(bucket).objectName("assembled.bin").build());
         assertThat(new String(assembled.getInputStream().readAllBytes(), StandardCharsets.UTF_8))
                 .isEqualTo("hello multipart");
+        assertThat(assembled.getOpcMultipartMd5()).isEqualTo(committedMd5);
+        assertThat(assembled.getContentMd5()).isNull();
+
+        assertThat(client.headObject(HeadObjectRequest.builder()
+                .namespaceName(namespace).bucketName(bucket).objectName("assembled.bin").build())
+                .getOpcMultipartMd5()).isEqualTo(committedMd5);
 
         client.deleteObject(DeleteObjectRequest.builder()
                 .namespaceName(namespace).bucketName(bucket).objectName("assembled.bin").build());

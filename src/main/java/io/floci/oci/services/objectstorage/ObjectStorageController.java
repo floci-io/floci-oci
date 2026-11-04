@@ -358,7 +358,7 @@ public class ObjectStorageController {
                 uploadId, partsToCommit(body));
         return Response.ok()
                 .header("etag", o.getEtag())
-                .header("opc-multipart-md5", o.getMd5())
+                .header("opc-multipart-md5", o.getMultipartMd5())
                 .header("last-modified", RFC_1123.format(Instant.parse(o.getTimeModified())))
                 .build();
     }
@@ -510,9 +510,13 @@ public class ObjectStorageController {
         }
         Response.ResponseBuilder builder = Response.status(status)
                 .header("etag", o.getEtag())
-                .header("content-md5", o.getMd5())
                 .header("last-modified", RFC_1123.format(Instant.parse(o.getTimeModified())))
                 .header("storage-tier", o.getStorageTier());
+        if (o.getMultipartMd5() != null) {
+            builder.header("opc-multipart-md5", o.getMultipartMd5());
+        } else {
+            builder.header("content-md5", o.getMd5());
+        }
         if (contentRange != null) {
             builder.header("content-range", contentRange);
         }

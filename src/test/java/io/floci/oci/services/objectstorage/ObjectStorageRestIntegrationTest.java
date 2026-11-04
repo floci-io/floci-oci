@@ -323,11 +323,30 @@ class ObjectStorageRestIntegrationTest {
             .when().post("/n/" + NS + "/b/" + bucket + "/u/assembled.bin")
             .then().statusCode(200)
                 .header("etag", notNullValue())
-                .header("opc-multipart-md5", notNullValue());
+                .header("opc-multipart-md5", equalTo("aMNH1FXeMAO9uahcKdysYw==-2"));
 
         given()
             .when().get("/n/" + NS + "/b/" + bucket + "/o/assembled.bin")
-            .then().statusCode(200).body(equalTo("hello multipart"));
+            .then().statusCode(200)
+                .body(equalTo("hello multipart"))
+                .header("opc-multipart-md5", equalTo("aMNH1FXeMAO9uahcKdysYw==-2"))
+                .header("content-md5", nullValue());
+
+        given()
+            .when().head("/n/" + NS + "/b/" + bucket + "/o/assembled.bin")
+            .then().statusCode(200)
+                .header("opc-multipart-md5", equalTo("aMNH1FXeMAO9uahcKdysYw==-2"))
+                .header("content-md5", nullValue());
+
+        given().contentType("text/plain").body("hello multipart")
+            .when().put("/n/" + NS + "/b/" + bucket + "/o/assembled.bin")
+            .then().statusCode(200);
+
+        given()
+            .when().head("/n/" + NS + "/b/" + bucket + "/o/assembled.bin")
+            .then().statusCode(200)
+                .header("content-md5", equalTo("b/2jdk+pb3Wctpm9JbEWlA=="))
+                .header("opc-multipart-md5", nullValue());
 
         given().when().delete("/n/" + NS + "/b/" + bucket + "/o/assembled.bin").then().statusCode(204);
         given().when().delete("/n/" + NS + "/b/" + bucket).then().statusCode(204);

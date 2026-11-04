@@ -127,7 +127,7 @@ def test_multipart_upload(object_storage, bucket):
         NAMESPACE, bucket, "assembled.bin", upload.upload_id, 2, b"python"
     )
 
-    object_storage.commit_multipart_upload(
+    committed = object_storage.commit_multipart_upload(
         NAMESPACE,
         bucket,
         "assembled.bin",
@@ -143,9 +143,17 @@ def test_multipart_upload(object_storage, bucket):
             ]
         ),
     )
+    expected_md5 = "js+3/kyPe8pLX46tqgCvCw==-2"
+    assert committed.headers["opc-multipart-md5"] == expected_md5
 
     assembled = object_storage.get_object(NAMESPACE, bucket, "assembled.bin")
     assert assembled.data.content == b"hello python"
+    assert assembled.headers["opc-multipart-md5"] == expected_md5
+    assert "content-md5" not in assembled.headers
+
+    head = object_storage.head_object(NAMESPACE, bucket, "assembled.bin")
+    assert head.headers["opc-multipart-md5"] == expected_md5
+    assert "content-md5" not in head.headers
 
 
 def test_upload_manager_streams_large_object(object_storage, bucket):

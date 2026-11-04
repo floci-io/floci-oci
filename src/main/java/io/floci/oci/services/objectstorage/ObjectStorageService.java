@@ -295,6 +295,14 @@ public class ObjectStorageService implements CompartmentUsage {
                                     byte[] data, String contentType, String contentMd5,
                                     Map<String, String> metadata,
                                     String ifMatch, String ifNoneMatch) {
+        return putObject(namespaceName, bucketName, objectName, data, contentType, contentMd5,
+                metadata, ifMatch, ifNoneMatch, null);
+    }
+
+    private StoredOsObject putObject(String namespaceName, String bucketName, String objectName,
+                                     byte[] data, String contentType, String contentMd5,
+                                     Map<String, String> metadata,
+                                     String ifMatch, String ifNoneMatch, String multipartMd5) {
         getBucket(namespaceName, bucketName);
         String key = objectKey(bucketName, objectName);
         StoredOsObject existing = objects.get(key).orElse(null);
@@ -311,6 +319,7 @@ public class ObjectStorageService implements CompartmentUsage {
         o.setName(objectName);
         o.setData(data);
         o.setMd5(md5);
+        o.setMultipartMd5(multipartMd5);
         o.setEtag(Etags.newEtag());
         o.setContentType(contentType != null ? contentType : "application/octet-stream");
         o.setStorageTier("Standard");
@@ -448,6 +457,7 @@ public class ObjectStorageService implements CompartmentUsage {
         copy.setName(destObjectName);
         copy.setData(source.getData());
         copy.setMd5(source.getMd5());
+        copy.setMultipartMd5(source.getMultipartMd5());
         copy.setEtag(Etags.newEtag());
         copy.setContentType(source.getContentType());
         copy.setStorageTier(source.getStorageTier());
@@ -509,6 +519,7 @@ public class ObjectStorageService implements CompartmentUsage {
             throw OciException.invalidParameter("partsToCommit must contain at least one part");
         }
         ByteArrayOutputStream assembled = new ByteArrayOutputStream();
+        List<byte[]> committedParts = new ArrayList<>();
         List<Map<String, Object>> ordered = partsToCommit.stream()
                 .sorted(Comparator.comparingInt(p -> ((Number) p.get("partNum")).intValue()))
                 .toList();
@@ -521,10 +532,11 @@ public class ObjectStorageService implements CompartmentUsage {
                         "Part " + partNum + " with etag " + etag + " was not uploaded.");
             }
             assembled.writeBytes(part.getData());
+            committedParts.add(part.getData());
         }
         byte[] data = assembled.toByteArray();
         StoredOsObject o = putObject(namespaceName, bucketName, u.getObject(), data,
-                u.getContentType(), null, u.getMetadata(), null, null);
+                u.getContentType(), null, u.getMetadata(), null, null, multipartMd5(committedParts));
         uploads.delete(uploadKey(bucketName, uploadId));
         return o;
     }
@@ -654,6 +666,18 @@ public class ObjectStorageService implements CompartmentUsage {
     static String md5Base64(byte[] data) {
         try {
             return Base64.getEncoder().encodeToString(MessageDigest.getInstance("MD5").digest(data));
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("MD5 unavailable", e);
+        }
+    }
+
+    static String multipartMd5(List<byte[]> partsInOrder) {
+        try {
+            MessageDigest objectDigest = MessageDigest.getInstance("MD5");
+            for (byte[] part : partsInOrder) {
+                objectDigest.update(MessageDigest.getInstance("MD5").digest(part));
+            }
+            return Base64.getEncoder().encodeToString(objectDigest.digest()) + "-" + partsInOrder.size();
         } catch (NoSuchAlgorithmException e) {
             throw new IllegalStateException("MD5 unavailable", e);
         }
