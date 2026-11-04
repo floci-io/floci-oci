@@ -11,6 +11,7 @@ public class StoredOsObject {
     private String name;
     private byte[] data;
     private String md5;
+    private String multipartMd5;
     private String etag;
     private String contentType;
     private String storageTier;
@@ -43,6 +44,14 @@ public class StoredOsObject {
 
     public void setMd5(String md5) {
         this.md5 = md5;
+    }
+
+    public String getMultipartMd5() {
+        return multipartMd5;
+    }
+
+    public void setMultipartMd5(String multipartMd5) {
+        this.multipartMd5 = multipartMd5;
     }
 
     public String getEtag() {

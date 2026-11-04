@@ -238,6 +238,65 @@ class ObjectStorageServiceTest {
         assertTrue(service.listMultipartUploads(NS, "mp").isEmpty());
     }
 
+    private StoredOsObject commitHelloMultipart(String bucket, String objectName) {
+        StoredMultipartUpload u = service.createMultipartUpload(NS, bucket, objectName, null, null);
+        String etag2 = service.uploadPart(NS, bucket, objectName, u.getUploadId(), 2, "multipart".getBytes()).etag();
+        String etag1 = service.uploadPart(NS, bucket, objectName, u.getUploadId(), 1, "hello ".getBytes()).etag();
+        return service.commitMultipartUpload(NS, bucket, objectName, u.getUploadId(),
+                List.of(Map.of("partNum", 2, "etag", etag2), Map.of("partNum", 1, "etag", etag1)));
+    }
+
+    @Test
+    void multipartCommitComputesCompositeMd5InPartOrder() {
+        bucket("mp-md5");
+        StoredOsObject o = commitHelloMultipart("mp-md5", "x");
+        assertEquals("aMNH1FXeMAO9uahcKdysYw==-2", o.getMultipartMd5());
+        assertEquals("b/2jdk+pb3Wctpm9JbEWlA==", o.getMd5());
+        assertEquals("aMNH1FXeMAO9uahcKdysYw==-2",
+                service.getObject(NS, "mp-md5", "x").getMultipartMd5());
+    }
+
+    @Test
+    void multipartMd5ForSinglePartHasCountOfOne() {
+        bucket("mp-one");
+        StoredMultipartUpload u = service.createMultipartUpload(NS, "mp-one", "x", null, null);
+        String etag = service.uploadPart(NS, "mp-one", "x", u.getUploadId(), 1, "hello ".getBytes()).etag();
+        StoredOsObject o = service.commitMultipartUpload(NS, "mp-one", "x", u.getUploadId(),
+                List.of(Map.of("partNum", 1, "etag", etag)));
+        assertEquals("h13er7duykBB6UN5iMV8xg==-1", o.getMultipartMd5());
+    }
+
+    @Test
+    void multipartMd5CountsOnlyCommittedParts() {
+        bucket("mp-subset");
+        StoredMultipartUpload u = service.createMultipartUpload(NS, "mp-subset", "x", null, null);
+        String etag1 = service.uploadPart(NS, "mp-subset", "x", u.getUploadId(), 1, "hello ".getBytes()).etag();
+        service.uploadPart(NS, "mp-subset", "x", u.getUploadId(), 2, "skipped".getBytes());
+        String etag3 = service.uploadPart(NS, "mp-subset", "x", u.getUploadId(), 3, "multipart".getBytes()).etag();
+        StoredOsObject o = service.commitMultipartUpload(NS, "mp-subset", "x", u.getUploadId(),
+                List.of(Map.of("partNum", 1, "etag", etag1), Map.of("partNum", 3, "etag", etag3)));
+        assertEquals("aMNH1FXeMAO9uahcKdysYw==-2", o.getMultipartMd5());
+    }
+
+    @Test
+    void plainPutClearsMultipartMd5() {
+        bucket("mp-over");
+        commitHelloMultipart("mp-over", "x");
+        assertNull(put("mp-over", "x", "plain").getMultipartMd5());
+        assertNull(service.getObject(NS, "mp-over", "x").getMultipartMd5());
+    }
+
+    @Test
+    void renameAndCopyKeepMultipartMd5() {
+        bucket("mp-src");
+        bucket("mp-dst");
+        commitHelloMultipart("mp-src", "x");
+        service.renameObject(NS, "mp-src", "x", "y", null, null, null);
+        assertEquals("aMNH1FXeMAO9uahcKdysYw==-2", service.getObject(NS, "mp-src", "y").getMultipartMd5());
+        service.copyObject(NS, "mp-src", "y", "us-ashburn-1", NS, "mp-dst", "z", null);
+        assertEquals("aMNH1FXeMAO9uahcKdysYw==-2", service.getObject(NS, "mp-dst", "z").getMultipartMd5());
+    }
+
     @Test
     void commitWithWrongEtagFails() {
         bucket("mp2");
