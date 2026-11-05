@@ -15,6 +15,8 @@ serves it on port 4599 with the other services.
 | Links | ListLinks, GetLink, GetLinkWithTenancyNames, DeleteLink, ListLinkFeatures |
 | Invitations | CreateSenderInvitation, GetSenderInvitation, ListSenderInvitations, UpdateSenderInvitation, CancelSenderInvitation, GetRecipientInvitation, ListRecipientInvitations, UpdateRecipientInvitation, AcceptRecipientInvitation, IgnoreRecipientInvitation |
 | Governance | AddGovernance, RemoveGovernance |
+| Domains | CreateDomain, GetDomain, ListDomains, UpdateDomain, DeleteDomain |
+| Domain governance | CreateDomainGovernance, GetDomainGovernance, ListDomainGovernances, UpdateDomainGovernance, DeleteDomainGovernance |
 | Work requests | Get, List, errors, logs (`/20230401/workRequests`) |
 
 ## How isolation works
@@ -134,9 +136,32 @@ The SDKs give the shapes but not the flow, so floci-oci picks:
 - An invitation without `displayName` uses its own OCID as the name, because the summary
   shape requires one.
 
+### Domains
+
+The SDKs give the shapes and the status enum, but not the verification flow, so floci-oci picks:
+
+- **A claim is verified at once.** floci-oci cannot see DNS, so `CreateDomain` returns the
+  domain `ACTIVE` with status `ACTIVE`. It still issues a `txtRecord`
+  (`oci-domain-verification=…`) of the kind the owner would add to their DNS. The work request
+  is `REGISTER_DOMAIN`. Domain names are stored lower-cased.
+- A domain name can be claimed by one tenancy at a time: another claim of an `ACTIVE` domain is
+  `409 Conflict`, whichever tenancy holds it.
+- `DeleteDomain` releases the domain: it answers `204` (the SDK returns no work request), and the
+  record stays readable with `lifecycleState` `DELETED` and status `RELEASED`, which is what the
+  OCI CLI polls for. The name can then be claimed again, and the domain's governance becomes
+  `INACTIVE`. `UpdateDomain` changes only the tags, as in the SDK.
+- A domain has at most one `ACTIVE` governance (`409 Conflict` otherwise). Its ONS topic and
+  subscription OCIDs are stored as given, unchecked (floci-oci has no Notifications service), and
+  `isGovernanceEnabled` starts `true`. `DeleteDomainGovernance` answers `204` and leaves the record
+  `INACTIVE`. Governance is recorded, not enforced.
+- `isGovernanceEnabled` and `subscriptionEmail` on `CreateDomain` are accepted; the `Domain`
+  shape returns neither.
+- Domains and their governance are visible only to the tenancy that claimed them. Changing a
+  released domain or an inactive governance is `409 Conflict`.
+
 ## Not implemented yet
 
-Domains, subscriptions and orders.
+Subscriptions and orders.
 
 ## Quickstart
 

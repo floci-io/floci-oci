@@ -1,7 +1,5 @@
 package io.floci.oci.services.organizations;
 
-import io.floci.oci.core.common.OciException;
-import io.floci.oci.core.common.OciPage;
 import io.floci.oci.services.organizations.model.StoredRecipientInvitation;
 import io.floci.oci.services.organizations.model.StoredSenderInvitation;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -18,7 +16,6 @@ import jakarta.ws.rs.QueryParam;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -46,10 +43,11 @@ public class InvitationsController {
     @Path("/senderInvitations")
     public Response createSenderInvitation(Map<String, Object> body) {
         Map<String, Object> details = body != null ? body : Map.of();
-        InvitationsService.Created created = service.createSenderInvitation(str(details, "compartmentId"),
-                str(details, "recipientTenancyId"), str(details, "recipientEmailAddress"),
-                str(details, "displayName"), stringList(details, "subjects"), stringList(details, "features"),
-                freeformTags(details), definedTags(details));
+        InvitationsService.Created created = service.createSenderInvitation(
+                Bodies.str(details, "compartmentId"), Bodies.str(details, "recipientTenancyId"),
+                Bodies.str(details, "recipientEmailAddress"), Bodies.str(details, "displayName"),
+                Bodies.stringList(details, "subjects"), Bodies.stringList(details, "features"),
+                Bodies.freeformTags(details), Bodies.definedTags(details));
         return Response.ok(created.invitation().toWire())
                 .header("etag", created.invitation().getEtag())
                 .header("opc-work-request-id", created.workRequestId())
@@ -73,7 +71,7 @@ public class InvitationsController {
                                           @QueryParam("sortOrder") String sortOrder,
                                           @QueryParam("limit") Integer limit,
                                           @QueryParam("page") String page) {
-        return collection(service.listSenderInvitations(compartmentId, recipientTenancyId, lifecycleState,
+        return Bodies.collection(service.listSenderInvitations(compartmentId, recipientTenancyId, lifecycleState,
                 status, displayName, sortBy, sortOrder).stream().map(StoredSenderInvitation::toWire).toList(),
                 limit, page);
     }
@@ -84,8 +82,8 @@ public class InvitationsController {
                                            @HeaderParam("if-match") String ifMatch,
                                            Map<String, Object> body) {
         Map<String, Object> details = body != null ? body : Map.of();
-        return withEtag(service.updateSenderInvitation(id, str(details, "displayName"),
-                freeformTags(details), definedTags(details), ifMatch));
+        return withEtag(service.updateSenderInvitation(id, Bodies.str(details, "displayName"),
+                Bodies.freeformTags(details), Bodies.definedTags(details), ifMatch));
     }
 
     @POST
@@ -111,8 +109,8 @@ public class InvitationsController {
                                              @QueryParam("lifecycleState") String lifecycleState,
                                              @QueryParam("status") String status,
                                              @QueryParam("page") String page) {
-        return collection(service.listRecipientInvitations(compartmentId, senderTenancyId, lifecycleState, status)
-                .stream().map(StoredRecipientInvitation::toWire).toList(), null, page);
+        return Bodies.collection(service.listRecipientInvitations(compartmentId, senderTenancyId, lifecycleState,
+                status).stream().map(StoredRecipientInvitation::toWire).toList(), null, page);
     }
 
     @PUT
@@ -121,8 +119,8 @@ public class InvitationsController {
                                               @HeaderParam("if-match") String ifMatch,
                                               Map<String, Object> body) {
         Map<String, Object> details = body != null ? body : Map.of();
-        return withEtag(service.updateRecipientInvitation(id, str(details, "displayName"),
-                freeformTags(details), definedTags(details), ifMatch));
+        return withEtag(service.updateRecipientInvitation(id, Bodies.str(details, "displayName"),
+                Bodies.freeformTags(details), Bodies.definedTags(details), ifMatch));
     }
 
     @POST
@@ -153,76 +151,5 @@ public class InvitationsController {
 
     private static Response accepted(String workRequestId) {
         return Response.accepted().header("opc-work-request-id", workRequestId).build();
-    }
-
-    private static Response collection(List<Map<String, Object>> items, Integer limit, String page) {
-        OciPage.Page<Map<String, Object>> result = OciPage.paginate(items, limit, page);
-        Response.ResponseBuilder builder = Response.ok(Map.of("items", result.items()));
-        if (result.hasNextPage()) {
-            builder.header(OciPage.OPC_NEXT_PAGE, result.nextPage());
-        }
-        return builder.build();
-    }
-
-    private static String str(Map<String, Object> body, String key) {
-        Object value = body.get(key);
-        if (value == null) {
-            return null;
-        }
-        if (value instanceof String s) {
-            return s;
-        }
-        throw OciException.invalidParameter("Invalid " + key + ": expected a string");
-    }
-
-    private static List<String> stringList(Map<String, Object> body, String key) {
-        Object value = body.get(key);
-        if (value == null) {
-            return null;
-        }
-        if (value instanceof List<?> list && list.stream().allMatch(item -> item instanceof String)) {
-            return list.stream().map(String.class::cast).toList();
-        }
-        throw OciException.invalidParameter("Invalid " + key + ": expected a list of strings");
-    }
-
-    /** {@code freeformTags} as the SDK types it, {@code map[string]string}. */
-    private static Map<String, String> freeformTags(Map<String, Object> body) {
-        Object value = body.get("freeformTags");
-        if (value == null) {
-            return null;
-        }
-        if (!(value instanceof Map<?, ?> map)) {
-            throw OciException.invalidParameter("Invalid freeformTags: expected an object");
-        }
-        Map<String, String> tags = new LinkedHashMap<>();
-        for (Map.Entry<?, ?> entry : map.entrySet()) {
-            if (!(entry.getValue() instanceof String tag)) {
-                throw OciException.invalidParameter("Invalid freeformTags." + entry.getKey() + ": expected a string");
-            }
-            tags.put((String) entry.getKey(), tag);
-        }
-        return tags;
-    }
-
-    /** {@code definedTags} as the SDK types it, {@code map[string]map[string]interface{}}. */
-    private static Map<String, Map<String, Object>> definedTags(Map<String, Object> body) {
-        Object value = body.get("definedTags");
-        if (value == null) {
-            return null;
-        }
-        if (!(value instanceof Map<?, ?> map)) {
-            throw OciException.invalidParameter("Invalid definedTags: expected an object");
-        }
-        Map<String, Map<String, Object>> tags = new LinkedHashMap<>();
-        for (Map.Entry<?, ?> entry : map.entrySet()) {
-            if (!(entry.getValue() instanceof Map<?, ?> namespace)) {
-                throw OciException.invalidParameter("Invalid definedTags." + entry.getKey() + ": expected an object");
-            }
-            Map<String, Object> keys = new LinkedHashMap<>();
-            namespace.forEach((key, tag) -> keys.put((String) key, tag));
-            tags.put((String) entry.getKey(), keys);
-        }
-        return tags;
     }
 }

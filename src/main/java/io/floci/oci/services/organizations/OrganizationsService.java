@@ -112,7 +112,7 @@ public class OrganizationsService {
         serviceRegistry.register(ServiceDescriptor.builder("organizations")
                 .enabled(config.services().organizations().enabled())
                 .storageKey("organizations")
-                .resourceClasses(OrganizationsController.class, InvitationsController.class)
+                .resourceClasses(OrganizationsController.class, InvitationsController.class, DomainsController.class)
                 .global(true)
                 .build());
     }

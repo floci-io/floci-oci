@@ -1,7 +1,6 @@
 package io.floci.oci.services.organizations;
 
 import io.floci.oci.core.common.OciException;
-import io.floci.oci.core.common.OciPage;
 import io.floci.oci.core.workrequest.StoredWorkRequest;
 import io.floci.oci.core.workrequest.WorkRequestService;
 import io.floci.oci.services.organizations.model.StoredLink;
@@ -53,10 +52,11 @@ public class OrganizationsController {
     @Path("/childTenancies")
     public Response createChildTenancy(Map<String, Object> body) {
         Map<String, Object> details = body != null ? body : Map.of();
-        String workRequestId = service.createChildTenancy(str(details, "compartmentId"),
-                str(details, "tenancyName"), str(details, "homeRegion"), str(details, "adminEmail"),
-                str(details, "policyName"), str(details, "governanceStatus"),
-                str(details, "subscriptionId"), stringList(details, "features"));
+        String workRequestId = service.createChildTenancy(Bodies.str(details, "compartmentId"),
+                Bodies.str(details, "tenancyName"), Bodies.str(details, "homeRegion"),
+                Bodies.str(details, "adminEmail"),
+                Bodies.str(details, "policyName"), Bodies.str(details, "governanceStatus"),
+                Bodies.str(details, "subscriptionId"), Bodies.stringList(details, "features"));
         return accepted(workRequestId);
     }
 
@@ -67,7 +67,7 @@ public class OrganizationsController {
     public Response listOrganizations(@QueryParam("compartmentId") String compartmentId,
                                       @QueryParam("limit") Integer limit,
                                       @QueryParam("page") String page) {
-        return collection(service.listOrganizations(compartmentId).stream()
+        return Bodies.collection(service.listOrganizations(compartmentId).stream()
                 .map(StoredOrganization::toWire).toList(), limit, page);
     }
 
@@ -85,7 +85,7 @@ public class OrganizationsController {
                                        Map<String, Object> body) {
         Map<String, Object> details = body != null ? body : Map.of();
         return accepted(service.updateOrganization(organizationId,
-                str(details, "defaultUcmSubscriptionId"), ifMatch));
+                Bodies.str(details, "defaultUcmSubscriptionId"), ifMatch));
     }
 
     @GET
@@ -93,7 +93,7 @@ public class OrganizationsController {
     public Response listOrganizationTenancies(@PathParam("organizationId") String organizationId,
                                               @QueryParam("limit") Integer limit,
                                               @QueryParam("page") String page) {
-        return collection(service.listOrganizationTenancies(organizationId).stream()
+        return Bodies.collection(service.listOrganizationTenancies(organizationId).stream()
                 .map(StoredOrganizationTenancy::toWire).toList(), limit, page);
     }
 
@@ -176,7 +176,7 @@ public class OrganizationsController {
                               @QueryParam("sortOrder") String sortOrder,
                               @QueryParam("limit") Integer limit,
                               @QueryParam("page") String page) {
-        return collection(service.listLinks(parentTenancyId, childTenancyId, feature, lifecycleState,
+        return Bodies.collection(service.listLinks(parentTenancyId, childTenancyId, feature, lifecycleState,
                 sortOrder).stream().map(StoredLink::toWire).toList(), limit, page);
     }
 
@@ -221,7 +221,7 @@ public class OrganizationsController {
         if ("DESC".equals(sortOrder)) {
             order = order.reversed();
         }
-        return collection(workRequests.list(OrganizationsService.WR_SERVICE, compartmentId).stream()
+        return Bodies.collection(workRequests.list(OrganizationsService.WR_SERVICE, compartmentId).stream()
                 .sorted(order).map(StoredWorkRequest::toWire).toList(), limit, page);
     }
 
@@ -239,7 +239,7 @@ public class OrganizationsController {
                                           @QueryParam("sortOrder") String sortOrder) {
         requireSortOrder(sortOrder);
         workRequests.get(OrganizationsService.WR_SERVICE, workRequestId);
-        return collection(List.of(), limit, page);
+        return Bodies.collection(List.of(), limit, page);
     }
 
     @GET
@@ -250,7 +250,7 @@ public class OrganizationsController {
                                         @QueryParam("sortOrder") String sortOrder) {
         requireSortOrder(sortOrder);
         workRequests.get(OrganizationsService.WR_SERVICE, workRequestId);
-        return collection(List.of(), limit, page);
+        return Bodies.collection(List.of(), limit, page);
     }
 
     // ── Helpers ────────────────────────────────────────────────────────────────
@@ -263,36 +263,5 @@ public class OrganizationsController {
 
     private static Response accepted(String workRequestId) {
         return Response.accepted().header("opc-work-request-id", workRequestId).build();
-    }
-
-    private static Response collection(List<Map<String, Object>> items, Integer limit, String page) {
-        OciPage.Page<Map<String, Object>> result = OciPage.paginate(items, limit, page);
-        Response.ResponseBuilder builder = Response.ok(Map.of("items", result.items()));
-        if (result.hasNextPage()) {
-            builder.header(OciPage.OPC_NEXT_PAGE, result.nextPage());
-        }
-        return builder.build();
-    }
-
-    private static String str(Map<String, Object> body, String key) {
-        Object value = body.get(key);
-        if (value == null) {
-            return null;
-        }
-        if (value instanceof String s) {
-            return s;
-        }
-        throw OciException.invalidParameter("Invalid " + key + ": expected a string");
-    }
-
-    private static List<String> stringList(Map<String, Object> body, String key) {
-        Object value = body.get(key);
-        if (value == null) {
-            return null;
-        }
-        if (value instanceof List<?> list && list.stream().allMatch(item -> item instanceof String)) {
-            return list.stream().map(String.class::cast).toList();
-        }
-        throw OciException.invalidParameter("Invalid " + key + ": expected a list of strings");
     }
 }

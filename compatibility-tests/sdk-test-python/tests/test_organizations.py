@@ -136,3 +136,33 @@ def test_transfer_approval_and_link_features(sdk_config, organizations, work_req
     assert listed[0].feature == "CORE"
     assert all(item.display_name and item.description for item in listed)
 
+
+def test_claim_govern_and_release_a_domain(sdk_config):
+    owner = f"ocid1.tenancy.oc1..pydomain{time.time_ns()}"
+    config = dict(sdk_config, tenancy=owner)
+    domains = oci.tenant_manager_control_plane.DomainClient(config, service_endpoint=ENDPOINT)
+    governances = oci.tenant_manager_control_plane.DomainGovernanceClient(config, service_endpoint=ENDPOINT)
+    models = oci.tenant_manager_control_plane.models
+
+    created = domains.create_domain(
+        models.CreateDomainDetails(compartment_id=owner, domain_name=f"py{time.time_ns()}.example.com")
+    )
+    assert created.headers["opc-work-request-id"]
+    domain = created.data
+    assert domain.status == "ACTIVE"
+
+    governance = governances.create_domain_governance(
+        models.CreateDomainGovernanceDetails(
+            compartment_id=owner,
+            domain_id=domain.id,
+            subscription_email="ops@example.com",
+            ons_topic_id="ocid1.onstopic.oc1.iad.t",
+            ons_subscription_id="ocid1.onssubscription.oc1.iad.s",
+        )
+    ).data
+    assert governance.lifecycle_state == "ACTIVE"
+    assert [g.id for g in governances.list_domain_governances(compartment_id=owner).data.items] == [governance.id]
+
+    domains.delete_domain(domain.id)
+    assert domains.get_domain(domain.id).data.lifecycle_state == "DELETED"
+
