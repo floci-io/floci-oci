@@ -21,6 +21,7 @@ import jakarta.ws.rs.QueryParam;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -69,9 +70,9 @@ public class OkeController {
                         req.clusterPodNetworkOptions)
             );
 
+            // CreateCluster has no response body: clients find the cluster through the work request.
             return Response.status(Response.Status.ACCEPTED)
                     .header("opc-work-request-id", result.workRequestId())
-                    .entity(result.cluster().toWire())
                     .build();
         }
     }
@@ -173,9 +174,9 @@ public class OkeController {
                 req.definedTags
             );
 
+            // CreateNodePool has no response body either.
             return Response.status(Response.Status.ACCEPTED)
                     .header("opc-work-request-id", result.workRequestId())
-                    .entity(result.nodePool())
                     .build();
         }
     }
@@ -246,7 +247,7 @@ public class OkeController {
     @Path("/workRequests/{workRequestId}")
     public Response getWorkRequest(@PathParam("workRequestId") String workRequestId) {
         StoredWorkRequest wr = workRequests.get("oke", workRequestId);
-        return Response.ok(wr.toWire()).build();
+        return Response.ok(workRequestWire(wr)).build();
     }
 
     @GET
@@ -257,7 +258,7 @@ public class OkeController {
         compartments.requireInQuery(compartmentId);
         OciPage.Page<Map<String, Object>> result = OciPage.paginate(
                 workRequests.list("oke", compartmentId).stream()
-                        .map(StoredWorkRequest::toWire).toList(), limit, page);
+                        .map(OkeController::workRequestWire).toList(), limit, page);
         Response.ResponseBuilder builder = Response.ok(result.items());
         if (result.hasNextPage()) {
             builder.header(OciPage.OPC_NEXT_PAGE, result.nextPage());
@@ -268,8 +269,22 @@ public class OkeController {
     @GET
     @Path("/workRequests/{workRequestId}/errors")
     public Response listWorkRequestErrors(@PathParam("workRequestId") String workRequestId) {
-        workRequests.get("oke", workRequestId);
-        return Response.ok(List.of()).build();
+        StoredWorkRequest workRequest = workRequests.get("oke", workRequestId);
+        List<Map<String, Object>> errors = workRequest.getErrors().stream().map(error -> {
+            Map<String, Object> wire = new LinkedHashMap<>();
+            wire.put("code", error.getCode());
+            wire.put("message", error.getMessage());
+            wire.put("timestamp", workRequest.getTimeFinished());
+            return wire;
+        }).toList();
+        return Response.ok(errors).build();
+    }
+
+    /** The OKE WorkRequest has no errors field: they are served by the errors operation. */
+    private static Map<String, Object> workRequestWire(StoredWorkRequest workRequest) {
+        Map<String, Object> wire = workRequest.toWire();
+        wire.remove("errors");
+        return wire;
     }
 
     @GET

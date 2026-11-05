@@ -115,12 +115,16 @@ class OkeDockerTest {
             .then()
                 .statusCode(202)
                 .header("opc-work-request-id", notNullValue())
-                .body("name", equalTo("docker-oke-cluster"))
-                .body("lifecycleState", equalTo("CREATING"))
                 .extract().response();
-        clusterId = created.path("id");
         workRequestId = created.header("opc-work-request-id");
+        clusterId = OkeWorkRequests.createdId(workRequestId);
         assertNotNull(clusterId);
+        given()
+            .when().get("/20180222/clusters/{id}", clusterId)
+            .then()
+                .statusCode(200)
+                .body("name", equalTo("docker-oke-cluster"))
+                .body("lifecycleState", equalTo("CREATING"));
 
         given()
             .when().get("/20180222/workRequests/{id}", workRequestId)

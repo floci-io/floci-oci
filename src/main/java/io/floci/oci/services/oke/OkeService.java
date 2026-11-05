@@ -287,8 +287,12 @@ public class OkeService implements Resettable, CompartmentUsage {
             cluster.setLifecycleDetails(details);
             putCluster(owner, cluster);
             if (cluster.getCreateWorkRequestId() != null) {
+                // Terraform builds its failure message from the work request's errors.
+                List<StoredWorkRequest.ErrorEntry> errors = "FAILED".equals(workRequestStatus) && details != null
+                        ? List.of(new StoredWorkRequest.ErrorEntry("InternalServerError", details))
+                        : List.of();
                 workRequests.finish(owner, cluster.getRegion(),
-                        cluster.getCreateWorkRequestId(), workRequestStatus);
+                        cluster.getCreateWorkRequestId(), workRequestStatus, errors);
             }
             recorded.set(true);
             return null;
@@ -430,6 +434,23 @@ public class OkeService implements Resettable, CompartmentUsage {
         return new CreateClusterResult(workRequestId, cluster);
     }
 
+    /**
+     * OCI does not say what a node pool on a cluster that is not ACTIVE gets, so this is
+     * floci-oci's choice: a CREATING cluster is 409 IncorrectState, which SDKs retry until the
+     * cluster is ready, and a cluster that failed or is going away is 409 Conflict.
+     */
+    private static void requireClusterTakesNodePools(StoredOkeCluster cluster) {
+        String state = cluster.getLifecycleState();
+        if ("CREATING".equals(state)) {
+            throw new OciException("IncorrectState", "Cluster " + cluster.getId()
+                    + " is CREATING; node pools can be created once it is ACTIVE", 409);
+        }
+        if ("FAILED".equals(state) || "DELETING".equals(state) || "DELETED".equals(state)) {
+            throw OciException.conflict("Cluster " + cluster.getId() + " is " + state
+                    + " and cannot take node pools");
+        }
+    }
+
     public StoredOkeCluster getCluster(String clusterId) {
         return clusters.get(clusterId)
                 .orElseThrow(() -> OciException.notAuthorizedOrNotFound("Cluster not found: " + clusterId));
@@ -555,7 +576,7 @@ public class OkeService implements Resettable, CompartmentUsage {
         if (clusterId == null || clusterId.isBlank()) {
             throw OciException.missingParameter("Missing required parameter: clusterId");
         }
-        getCluster(clusterId);
+        requireClusterTakesNodePools(getCluster(clusterId));
         if (name == null || name.isBlank()) {
             throw OciException.missingParameter("Missing required parameter: name");
         }
