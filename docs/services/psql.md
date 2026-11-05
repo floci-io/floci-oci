@@ -14,6 +14,7 @@ port 4599 with the other services.
 | Runtime | `StartDbSystem`, `StopDbSystem`, `RestartDbInstanceInDbSystem`, `ResetMasterUserPassword` |
 | Connection | `GetConnectionDetails`, `GetPrimaryDbInstance`, `UpdateDbSystemDbInstance` |
 | Catalog | `ListShapes`, `ListDefaultConfigurations`, `GetDefaultConfiguration` |
+| Configurations | `CreateConfiguration`, `GetConfiguration`, `ListConfigurations`, `UpdateConfiguration`, `DeleteConfiguration`, `ChangeConfigurationCompartment` |
 | Work requests | `GetWorkRequest`, `ListWorkRequests`, `ListWorkRequestErrors`, `ListWorkRequestLogs` |
 
 ## How a DB system runs
@@ -96,13 +97,51 @@ OCI's SDKs leave these open, so floci-oci picks:
   backup policy `NONE`, and the default configuration for the version.
 - **Network.** `subnetId` and `nsgIds` are stored unchecked, since there is no networking
   service.
-- **Update is metadata only.** Shape, sizes, IOPS and management policy change what the API
-  reports, not the running container.
+- **Update is metadata only, except the configuration.** Shape, sizes, IOPS and management policy
+  change what the API reports, not the running container. A new `configId` does reach PostgreSQL
+  (see Custom configurations).
+
+## Custom configurations
+
+A configuration overrides PostgreSQL settings for one major version and shape. As in the SDK,
+every configuration call is synchronous: create, get and update return the `Configuration` with
+an `etag`; delete and change-compartment answer `204` with no work request.
+
+- **Settings.** OCI publishes no list of the settings a configuration may override, so floci-oci
+  serves a small one: `work_mem`, `maintenance_work_mem`, `effective_io_concurrency`,
+  `random_page_cost`, `log_min_duration_statement`, `statement_timeout` (applied with a reload),
+  and `max_connections` and `shared_buffers` (need a restart). Any other key in
+  `dbConfigurationOverrides` is `400 InvalidParameter`. Both default and custom configurations
+  report these as `configurationDetails.items`, with defaults, allowed values and
+  `isRestartRequired`.
+- **Shape.** A configuration with no shape (or shape `PostgreSQL`) fits every shape and reports
+  shape `PostgreSQL` and sizes `0`, the SDK's multi-shape case. A flexible one for a named shape
+  keeps that shape with sizes `0`, which is what Terraform reads back. A fixed one takes its size
+  from a sized shape (`VM.Standard.E4.Flex.4.64GB`) or from `instanceOcpuCount` and
+  `instanceMemorySizeInGBs`. Custom OCIDs are
+  `ocid1.postgresqlconfiguration…`: they never contain `defaultconfiguration`, the substring
+  Terraform uses to tell a default configuration from a custom one.
+- **Applying it.** A DB system created with a `configId` starts with its settings: the
+  restart-only ones on the `postgres` command line, the others with `ALTER SYSTEM` once the server
+  accepts connections. `UpdateDbSystem` with `dbConfigurationParams` puts a new configuration into
+  effect: `applyConfig` `RESTART` restarts the container (`UPDATING`, then `ACTIVE`), and `RELOAD`
+  (Terraform's default) reloads the settings that allow it and leaves the restart-only ones for the
+  next start, as PostgreSQL does. A value PostgreSQL rejects on `RELOAD` fails the work request; the
+  system stays `ACTIVE` with its previous configuration. A value that keeps PostgreSQL from starting
+  leaves the system `NEEDS_ATTENTION`: `UpdateDbSystem` with another configuration restarts it with
+  that one, and `StartDbSystem` tries the same one again. OCI documents neither path, so both are
+  floci-oci's choice. In mock mode the configuration is only recorded.
+- **Lifecycle.** A configuration is `ACTIVE` at once (the SDK has no `CREATING` state). Deleting it
+  leaves it readable as `DELETED`; deleting one a DB system that is not `DELETED` still uses is
+  `409 Conflict`. Only the names, description, compatible shapes and tags can be updated.
+- **Listing.** `ListConfigurations` lists custom configurations only: `configType` `DEFAULT` or
+  `COPIED` gives an empty list. Default configurations are served by `ListDefaultConfigurations`.
+- **Limit.** 20 configurations that are not `DELETED` per tenancy per region, Oracle's service
+  limit; the 21st is `400 LimitExceeded`.
 
 ## Not implemented yet
 
-Backups, restore and point-in-time recovery; custom configurations (`configId` must be a default
-configuration); replicas, failover, switchover, role changes and `PatchDbSystem`; Kerberos and
+Backups, restore and point-in-time recovery; replicas, failover, switchover, role changes and `PatchDbSystem`; Kerberos and
 insights; creating a DB system from a backup or another DB system (`501`). The DB system service
 limit is not enforced.
 

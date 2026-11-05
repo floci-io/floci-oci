@@ -306,7 +306,9 @@ class PsqlRestIntegrationTest {
             .then().statusCode(200)
                 .body("id", equalTo(configurationId))
                 .body("dbVersion", equalTo("15"))
-                .body("configurationDetails.items.size()", equalTo(0));
+                .body("configurationDetails.items.size()", equalTo(8))
+                .body("configurationDetails.items[0].configKey", equalTo("work_mem"))
+                .body("configurationDetails.items[0].isOverridable", equalTo(true));
         given()
             .when().get("/20220915/defaultConfigurations/ocid1.postgresqldefaultconfiguration.oc1.iad.missing")
             .then().statusCode(404).body("code", equalTo("NotAuthorizedOrNotFound"));

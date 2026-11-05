@@ -15,7 +15,10 @@ import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -36,7 +39,9 @@ public class PsqlContainerManager {
 
     /**
      * Writes the certificate and key the container received in its environment where Postgres
-     * can read them, then hands over to the image's own entrypoint with TLS switched on.
+     * can read them, then hands over to the image's own entrypoint with TLS switched on. The
+     * script's own arguments ({@code "$@"}) are further {@code -c key=value} settings: passing
+     * them as arguments, not text, needs no shell quoting.
      */
     private static final String ENTRYPOINT = String.join("\n",
             "set -e",
@@ -48,7 +53,7 @@ public class PsqlContainerManager {
             "unset FLOCI_TLS_CERT FLOCI_TLS_KEY",
             "exec docker-entrypoint.sh postgres -c ssl=on"
                     + " -c ssl_cert_file=" + TLS_DIR + "/server.crt"
-                    + " -c ssl_key_file=" + TLS_DIR + "/server.key");
+                    + " -c ssl_key_file=" + TLS_DIR + "/server.key \"$@\"");
 
     /** Reads the statement from stdin, where psql substitutes its variables; {@code -c} does not. */
     private static final String RESET_PASSWORD = "printf '%s\\n' 'ALTER ROLE :\"role\" WITH PASSWORD :'\"'\"'password'\"'\"';'"
@@ -121,7 +126,7 @@ public class PsqlContainerManager {
                     .withEnv("POSTGRES_DB", "postgres")
                     .withEnv("FLOCI_TLS_CERT", system.getCertificatePem())
                     .withEnv("FLOCI_TLS_KEY", system.getPrivateKeyPem())
-                    .withEntrypoint(List.of("sh", "-c", ENTRYPOINT))
+                    .withEntrypoint(entrypoint(system))
                     .withPortBinding(POSTGRES_PORT, hostPort)
                     .withNamedVolume(system.getVolumeName(), dataPath(major))
                     .withDockerNetwork(Optional.empty())
@@ -136,6 +141,69 @@ public class PsqlContainerManager {
             lifecycleManager.removeIfExists(name);
             portAllocator.release(hostPort);
             throw e;
+        }
+    }
+
+    /**
+     * The container's command: the TLS script, then a {@code -c} for each overridden setting
+     * that needs a restart. The others are applied by {@link #applySettings} once the server is
+     * up, since a setting given on the command line cannot be changed by a reload.
+     */
+    static List<String> entrypoint(StoredDbSystem system) {
+        List<String> command = new ArrayList<>(List.of("sh", "-c", ENTRYPOINT, "sh"));
+        Map<String, String> overrides = system.getConfigOverrides() != null ? system.getConfigOverrides() : Map.of();
+        for (PsqlCatalog.Parameter parameter : PsqlCatalog.PARAMETERS) {
+            if (parameter.restartRequired() && overrides.containsKey(parameter.key())) {
+                command.add("-c");
+                command.add(parameter.key() + "=" + overrides.get(parameter.key()));
+            }
+        }
+        return command;
+    }
+
+    /**
+     * Applies the overridden settings that need no restart, and resets the others to their
+     * defaults, with {@code ALTER SYSTEM}, then reloads the configuration. Values travel as
+     * psql variables, never as SQL text; the setting names come from the catalog.
+     *
+     * @throws IllegalStateException when Postgres rejects a value
+     */
+    public void applySettings(StoredDbSystem system) {
+        Map<String, String> overrides = system.getConfigOverrides() != null ? system.getConfigOverrides() : Map.of();
+        List<String> env = new ArrayList<>();
+        StringBuilder script = new StringBuilder();
+        List<String> variables = new ArrayList<>();
+        int index = 0;
+        for (PsqlCatalog.Parameter parameter : PsqlCatalog.PARAMETERS) {
+            if (parameter.restartRequired()) {
+                continue;
+            }
+            if (overrides.containsKey(parameter.key())) {
+                String variable = "v" + index++;
+                env.add("FLOCI_" + variable.toUpperCase(Locale.ROOT) + "=" + overrides.get(parameter.key()));
+                variables.add(variable);
+                script.append("ALTER SYSTEM SET ").append(parameter.key()).append(" = :'").append(variable)
+                        .append("';\n");
+            } else {
+                script.append("ALTER SYSTEM RESET ").append(parameter.key()).append(";\n");
+            }
+        }
+        script.append("SELECT pg_reload_conf();\n");
+        // The script travels in an env var like the values: inline in the shell command, the
+        // quotes of :'v0' would close the shell's own quoting and reach psql as :v0, unquoted.
+        env.add("FLOCI_SCRIPT=" + script);
+        StringBuilder command = new StringBuilder("printf '%s' \"$FLOCI_SCRIPT\" | psql -v ON_ERROR_STOP=1");
+        for (String variable : variables) {
+            command.append(" -v ").append(variable).append("=\"$FLOCI_").append(variable.toUpperCase(Locale.ROOT))
+                    .append('"');
+        }
+        command.append(" -U \"$FLOCI_ROLE\" -d postgres");
+        env.add("FLOCI_ROLE=" + system.getAdminUsername());
+        ExecResult result = lifecycleManager.exec(system.getContainerName(), env,
+                List.of("sh", "-c", command.toString()), EXEC_TIMEOUT);
+        if (!result.succeeded()) {
+            throw new IllegalStateException("PostgreSQL rejected the configuration (exit " + result.exitCode() + "): "
+                    + result.stderr().strip());
         }
     }
 

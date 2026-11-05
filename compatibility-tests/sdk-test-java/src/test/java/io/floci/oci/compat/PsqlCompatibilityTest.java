@@ -1,9 +1,13 @@
 package io.floci.oci.compat;
 
 import com.oracle.bmc.psql.PostgresqlClient;
+import com.oracle.bmc.psql.model.ConfigOverrides;
+import com.oracle.bmc.psql.model.Configuration;
 import com.oracle.bmc.psql.model.ConnectionDetails;
+import com.oracle.bmc.psql.model.CreateConfigurationDetails;
 import com.oracle.bmc.psql.model.CreateDbSystemDetails;
 import com.oracle.bmc.psql.model.Credentials;
+import com.oracle.bmc.psql.model.DbConfigurationOverrideCollection;
 import com.oracle.bmc.psql.model.DbSystem;
 import com.oracle.bmc.psql.model.NetworkDetails;
 import com.oracle.bmc.psql.model.OciOptimizedStorageDetails;
@@ -11,8 +15,11 @@ import com.oracle.bmc.psql.model.OperationStatus;
 import com.oracle.bmc.psql.model.PlainTextPasswordDetails;
 import com.oracle.bmc.psql.model.ResetMasterUserPasswordDetails;
 import com.oracle.bmc.psql.model.WorkRequest;
+import com.oracle.bmc.psql.requests.CreateConfigurationRequest;
 import com.oracle.bmc.psql.requests.CreateDbSystemRequest;
+import com.oracle.bmc.psql.requests.DeleteConfigurationRequest;
 import com.oracle.bmc.psql.requests.DeleteDbSystemRequest;
+import com.oracle.bmc.psql.requests.GetConfigurationRequest;
 import com.oracle.bmc.psql.requests.GetConnectionDetailsRequest;
 import com.oracle.bmc.psql.requests.GetDbSystemRequest;
 import com.oracle.bmc.psql.requests.GetWorkRequestRequest;
@@ -32,6 +39,7 @@ import java.sql.ResultSet;
 import java.sql.Statement;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.Properties;
 
 import static io.floci.oci.compat.EmulatorFixture.TENANCY;
@@ -168,5 +176,39 @@ class PsqlCompatibilityTest {
         properties.setProperty("password", password);
         properties.setProperty("connectTimeout", "10");
         return DriverManager.getConnection(url, properties);
+    }
+
+    @Test
+    void customConfigurationLifecycle() {
+        var created = postgresql.createConfiguration(CreateConfigurationRequest.builder()
+                .createConfigurationDetails(CreateConfigurationDetails.builder()
+                        .compartmentId(TENANCY)
+                        .displayName("compat-config-" + System.nanoTime())
+                        .dbVersion("15")
+                        .shape("VM.Standard.E4.Flex")
+                        .isFlexible(true)
+                        .instanceOcpuCount(0)
+                        .instanceMemorySizeInGBs(0)
+                        .dbConfigurationOverrides(DbConfigurationOverrideCollection.builder()
+                                .items(List.of(ConfigOverrides.builder()
+                                        .configKey("work_mem").overridenConfigValue("16MB").build()))
+                                .build())
+                        .build())
+                .build());
+        assertThat(created.getEtag()).isNotBlank();
+        Configuration configuration = created.getConfiguration();
+        assertThat(configuration.getConfigType()).isEqualTo(Configuration.ConfigType.Custom);
+        assertThat(configuration.getShape()).isEqualTo("VM.Standard.E4.Flex");
+        assertThat(configuration.getConfigurationDetails().getItems())
+                .anySatisfy(item -> {
+                    assertThat(item.getConfigKey()).isEqualTo("work_mem");
+                    assertThat(item.getOverridenConfigValue()).isEqualTo("16MB");
+                });
+
+        postgresql.deleteConfiguration(DeleteConfigurationRequest.builder()
+                .configurationId(configuration.getId()).build());
+        assertThat(postgresql.getConfiguration(GetConfigurationRequest.builder()
+                .configurationId(configuration.getId()).build()).getConfiguration().getLifecycleState())
+                .isEqualTo(Configuration.LifecycleState.Deleted);
     }
 }
