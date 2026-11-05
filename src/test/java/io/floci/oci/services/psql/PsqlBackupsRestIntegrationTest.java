@@ -2,6 +2,7 @@ package io.floci.oci.services.psql;
 
 import io.floci.oci.testing.TestCompartments;
 import io.quarkus.test.junit.QuarkusTest;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -25,6 +26,11 @@ class PsqlBackupsRestIntegrationTest {
         if (compartment == null) {
             compartment = TestCompartments.create("itpsqlbackupcompartment");
         }
+    }
+
+    @AfterEach
+    void deleteDbSystems() {
+        PsqlTestSystems.deleteAll(compartment);
     }
 
     private static Map<String, Object> dbSystem(String displayName) {

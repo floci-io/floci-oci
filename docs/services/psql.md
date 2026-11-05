@@ -226,9 +226,11 @@ Both are recorded and returned exactly as sent; neither changes the running Post
   `TOP_QUERIES` data types. OCI documents the enum values only, so the descriptions and units are
   floci-oci's.
 
-## Not implemented yet
+## Service limits
 
-The DB system service limit is not enforced.
+Oracle's limits for the service, per tenancy per region, are enforced: 8 DB systems, 10 backups
+and 20 configurations, counting each that is not `DELETED`. The one past the limit is
+`400 LimitExceeded`.
 
 ## Quickstart
 
