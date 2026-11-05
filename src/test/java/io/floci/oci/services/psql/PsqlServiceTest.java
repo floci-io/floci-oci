@@ -270,9 +270,11 @@ class PsqlServiceTest {
         assertEquals(400, fromUnknownBackup.getHttpStatus());
         assertEquals("RelatedResourceNotAuthorizedOrNotFound", fromUnknownBackup.getCode());
 
-        OciException fromDbSystem = assertThrows(OciException.class, () -> mock.createDbSystem(
+        OciException fromUnknownDbSystem = assertThrows(OciException.class, () -> mock.createDbSystem(
                 with("source", Map.of("sourceType", "DB_SYSTEM", "primaryDbSystemId", "ocid1.postgresqldbsystem.oc1.iad.x"))));
-        assertEquals(501, fromDbSystem.getHttpStatus());
+        assertEquals("RelatedResourceNotAuthorizedOrNotFound", fromUnknownDbSystem.getCode());
+        assertEquals("InvalidParameter", assertThrows(OciException.class, () -> mock.createDbSystem(
+                with("source", Map.of("sourceType", "SNAPSHOT")))).getCode());
 
         OciException unknownConfig = assertThrows(OciException.class, () -> mock.createDbSystem(
                 with("configId", "ocid1.postgresqlconfiguration.oc1.iad.custom")));
@@ -555,17 +557,17 @@ class PsqlServiceTest {
         StoredDbSystem second = mock.createDbSystem(with("displayName", "a-second")).system();
 
         assertEquals(List.of(second.getId(), first.getId()),
-                mock.listDbSystems(COMPARTMENT, null, null, null, null, null).stream()
+                mock.listDbSystems(COMPARTMENT, null, null, null, null, null, null).stream()
                         .map(StoredDbSystem::getId).toList());
         assertEquals(List.of(second.getId(), first.getId()),
-                mock.listDbSystems(COMPARTMENT, null, null, null, "displayName", null).stream()
+                mock.listDbSystems(COMPARTMENT, null, null, null, "displayName", null, null).stream()
                         .map(StoredDbSystem::getId).toList());
         assertEquals(List.of(first.getId()),
-                mock.listDbSystems(COMPARTMENT, "ACTIVE", "b-first", null, null, null).stream()
+                mock.listDbSystems(COMPARTMENT, "ACTIVE", "b-first", null, null, null, null).stream()
                         .map(StoredDbSystem::getId).toList());
-        assertTrue(mock.listDbSystems("ocid1.compartment.oc1..empty", null, null, null, null, null).isEmpty());
+        assertTrue(mock.listDbSystems("ocid1.compartment.oc1..empty", null, null, null, null, null, null).isEmpty());
         assertEquals("InvalidParameter", assertThrows(OciException.class,
-                () -> mock.listDbSystems(COMPARTMENT, "SLEEPING", null, null, null, null)).getCode());
+                () -> mock.listDbSystems(COMPARTMENT, "SLEEPING", null, null, null, null, null)).getCode());
     }
 
     @Test
@@ -1027,5 +1029,188 @@ class PsqlServiceTest {
         Map<String, Object> details = createDetails();
         details.putAll(overrides);
         return details;
+    }
+
+    // ── Instances and replicas ─────────────────────────────────────────────────
+
+    private StoredDbSystem replicaOf(StoredDbSystem primary) {
+        Map<String, Object> details = createDetails();
+        details.remove("credentials");
+        details.put("source", Map.of("sourceType", "DB_SYSTEM", "primaryDbSystemId", primary.getId()));
+        return mock.createDbSystem(details).system();
+    }
+
+    @Test
+    void patchInsertsAndRemovesInstances() {
+        StoredDbSystem system = mock.createDbSystem(createDetails()).system();
+
+        mock.patchDbSystem(system.getId(), Map.of("items", List.of(Map.of("operation", "INSERT",
+                "selection", "instances", "value", Map.of("displayName", "standby")))), null);
+        StoredDbSystem patched = mock.getDbSystem(system.getId());
+        assertEquals(2, patched.getInstanceCount());
+        assertEquals("standby", patched.getInstances().get(1).getDisplayName());
+        assertEquals("ACTIVE", patched.getInstances().get(1).getLifecycleState());
+
+        String standbyId = patched.getInstances().get(1).getId();
+        mock.patchDbSystem(system.getId(), Map.of("items", List.of(Map.of("operation", "REMOVE",
+                "selection", "instances[?id == '" + standbyId + "']"))), null);
+        assertEquals(1, mock.getDbSystem(system.getId()).getInstanceCount());
+
+        String onlyId = mock.getDbSystem(system.getId()).getInstances().getFirst().getId();
+        assertEquals("InvalidParameter", assertThrows(OciException.class, () -> mock.patchDbSystem(system.getId(),
+                Map.of("items", List.of(Map.of("operation", "REMOVE",
+                        "selection", "instances[?id == '" + onlyId + "']"))), null)).getCode());
+        assertEquals("InvalidParameter", assertThrows(OciException.class, () -> mock.patchDbSystem(system.getId(),
+                Map.of("items", List.of(Map.of("operation", "MERGE", "selection", "instances"))), null)).getCode());
+        assertEquals("SUCCEEDED", workRequests.get(mock.patchDbSystem(system.getId(), Map.of(), null)).getStatus());
+    }
+
+    @Test
+    void failoverMakesAStandbyThePrimaryInstance() {
+        StoredDbSystem system = mock.createDbSystem(with("instanceCount", 3)).system();
+        String third = system.getInstances().get(2).getId();
+
+        mock.failoverDbSystem(system.getId(), Map.of("dbInstanceId", third), null);
+        assertEquals(third, mock.primaryDbInstance(system.getId()).get("dbInstanceId"));
+
+        mock.failoverDbSystem(system.getId(), Map.of(), null);
+        assertNotEquals(third, mock.primaryDbInstance(system.getId()).get("dbInstanceId"));
+
+        StoredDbSystem single = mock.createDbSystem(createDetails()).system();
+        assertEquals("Conflict", assertThrows(OciException.class,
+                () -> mock.failoverDbSystem(single.getId(), Map.of(), null)).getCode());
+    }
+
+    @Test
+    void aReplicaMakesItsSourceAPrimary() {
+        StoredDbSystem primary = mock.createDbSystem(createDetails()).system();
+
+        StoredDbSystem replica = replicaOf(primary);
+
+        assertEquals("WARM_STANDBY_DB_SYSTEM", replica.getSystemRole());
+        assertEquals(primary.getAdminUsername(), replica.getAdminUsername());
+        assertEquals(Map.of("sourceType", "DB_SYSTEM", "primaryDbSystemId", primary.getId()), replica.getSource());
+        assertEquals("PRIMARY_DB_SYSTEM", mock.getDbSystem(primary.getId()).getSystemRole());
+        assertEquals(List.of(Map.of("id", replica.getId(), "region", "us-ashburn-1")),
+                mock.listReplicas(primary.getId()));
+        assertEquals(List.of(replica.getId()), mock.listDbSystems(null, null, null, null, null, null,
+                "WARM_STANDBY_DB_SYSTEM").stream().map(StoredDbSystem::getId).toList());
+        assertEquals("InvalidParameter", assertThrows(OciException.class, () -> mock.listDbSystems(null, null, null,
+                null, null, null, "REPLICA")).getCode());
+        assertEquals("InvalidParameter", assertThrows(OciException.class, () -> replicaOf(replica)).getCode(),
+                "a replica cannot be a primary");
+        assertEquals("Conflict", assertThrows(OciException.class,
+                () -> mock.deleteDbSystem(primary.getId(), null)).getCode());
+
+        mock.deleteDbSystem(replica.getId(), null);
+        assertEquals("STANDALONE_DB_SYSTEM", mock.getDbSystem(primary.getId()).getSystemRole());
+        assertEquals(List.of(), mock.listReplicas(primary.getId()));
+    }
+
+    @Test
+    void switchoverSwapsThePrimaryAndItsReplica() {
+        StoredDbSystem primary = mock.createDbSystem(createDetails()).system();
+        StoredDbSystem replica = replicaOf(primary);
+        StoredDbSystem other = replicaOf(primary);
+
+        mock.switchOver(primary.getId(), Map.of("replicaDbSystemId", replica.getId()), null);
+
+        assertEquals("PRIMARY_DB_SYSTEM", mock.getDbSystem(replica.getId()).getSystemRole());
+        assertEquals("WARM_STANDBY_DB_SYSTEM", mock.getDbSystem(primary.getId()).getSystemRole());
+        assertEquals(replica.getId(), mock.getDbSystem(primary.getId()).getSource().get("primaryDbSystemId"));
+        assertEquals(replica.getId(), mock.getDbSystem(other.getId()).getSource().get("primaryDbSystemId"));
+        assertEquals(2, mock.listReplicas(replica.getId()).size());
+        assertEquals("Conflict", assertThrows(OciException.class, () -> mock.switchOver(primary.getId(),
+                Map.of("replicaDbSystemId", replica.getId()), null)).getCode());
+    }
+
+    @Test
+    void rolesChangeBetweenStandaloneAndReplica() {
+        StoredDbSystem primary = mock.createDbSystem(createDetails()).system();
+        StoredDbSystem standalone = mock.createDbSystem(createDetails()).system();
+
+        mock.changeRoleToReplica(standalone.getId(), Map.of("primaryDbSystemId", primary.getId()), null);
+        assertEquals("WARM_STANDBY_DB_SYSTEM", mock.getDbSystem(standalone.getId()).getSystemRole());
+        assertEquals("PRIMARY_DB_SYSTEM", mock.getDbSystem(primary.getId()).getSystemRole());
+
+        assertEquals("InvalidParameter", assertThrows(OciException.class, () -> mock.changeRoleToStandalone(
+                standalone.getId(), Map.of("changeMode", "LATER"), null)).getCode());
+        mock.changeRoleToStandalone(standalone.getId(), Map.of("changeMode", "IMMEDIATELY"), null);
+        assertEquals("STANDALONE_DB_SYSTEM", mock.getDbSystem(standalone.getId()).getSystemRole());
+        assertEquals(Map.of("sourceType", "NONE"), mock.getDbSystem(standalone.getId()).getSource());
+        assertEquals("STANDALONE_DB_SYSTEM", mock.getDbSystem(primary.getId()).getSystemRole());
+        assertEquals("Conflict", assertThrows(OciException.class, () -> mock.changeRoleToStandalone(
+                standalone.getId(), Map.of("changeMode", "IMMEDIATELY"), null)).getCode());
+        assertEquals("InvalidParameter", assertThrows(OciException.class, () -> mock.changeRoleToReplica(
+                standalone.getId(), Map.of("primaryDbSystemId", standalone.getId()), null)).getCode());
+    }
+
+    @Test
+    void replicationConfigDefaultsItsMandatoryFields() {
+        StoredDbSystem system = mock.createDbSystem(with("replicationConfig", Map.of("isRpoEnforced", true)))
+                .system();
+        assertEquals(Map.of("isRpoEnforced", true, "rpoInSeconds", 0L), system.getReplicationConfig());
+
+        mock.updateDbSystem(system.getId(), Map.of("replicationConfig", Map.of("rpoInSeconds", 60)), null);
+        assertEquals(Map.of("isRpoEnforced", true, "rpoInSeconds", 60L),
+                mock.getDbSystem(system.getId()).getReplicationConfig());
+    }
+
+    @Test
+    void aDeleteWaitsForAReplicaBeingAttachedAndThenSeesIt() throws Exception {
+        StoredDbSystem primary = mock.createDbSystem(createDetails()).system();
+        CountDownLatch attaching = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        ExecutorService threads = Executors.newFixedThreadPool(2);
+        try {
+            Future<StoredDbSystem> attach = threads.submit(() -> configurations.attachingConfiguration(() -> {
+                attaching.countDown();
+                await(release);
+                return replicaOf(primary);
+            }));
+            assertTrue(attaching.await(5, TimeUnit.SECONDS));
+
+            Future<String> delete = threads.submit(() -> mock.deleteDbSystem(primary.getId(), null));
+
+            assertThrows(TimeoutException.class, () -> delete.get(300, TimeUnit.MILLISECONDS),
+                    "the delete waits while the replica is being recorded");
+            release.countDown();
+            assertEquals(primary.getId(), attach.get(5, TimeUnit.SECONDS).getSource().get("primaryDbSystemId"));
+            ExecutionException failure = assertThrows(ExecutionException.class, () -> delete.get(5, TimeUnit.SECONDS));
+            assertEquals("Conflict", ((OciException) failure.getCause()).getCode());
+            assertEquals("ACTIVE", mock.getDbSystem(primary.getId()).getLifecycleState());
+        } finally {
+            release.countDown();
+            threads.shutdownNow();
+        }
+    }
+
+    @Test
+    void aRoleChangeToReplicaTakesTheLockADeleteHolds() throws Exception {
+        StoredDbSystem primary = mock.createDbSystem(createDetails()).system();
+        StoredDbSystem standalone = mock.createDbSystem(createDetails()).system();
+        CountDownLatch holding = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        ExecutorService threads = Executors.newFixedThreadPool(2);
+        try {
+            Future<?> holder = threads.submit(() -> configurations.attachingConfiguration(() -> {
+                holding.countDown();
+                await(release);
+                return null;
+            }));
+            assertTrue(holding.await(5, TimeUnit.SECONDS));
+
+            Future<String> change = threads.submit(() -> mock.changeRoleToReplica(standalone.getId(),
+                    Map.of("primaryDbSystemId", primary.getId()), null));
+
+            assertThrows(TimeoutException.class, () -> change.get(300, TimeUnit.MILLISECONDS));
+            release.countDown();
+            holder.get(5, TimeUnit.SECONDS);
+            change.get(5, TimeUnit.SECONDS);
+            assertEquals("WARM_STANDBY_DB_SYSTEM", mock.getDbSystem(standalone.getId()).getSystemRole());
+        } finally {
+            release.countDown();
+            threads.shutdownNow();
+        }
     }
 }

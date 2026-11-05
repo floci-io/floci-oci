@@ -17,6 +17,7 @@ port 4599 with the other services.
 | Configurations | `CreateConfiguration`, `GetConfiguration`, `ListConfigurations`, `UpdateConfiguration`, `DeleteConfiguration`, `ChangeConfigurationCompartment` |
 | Backups | `CreateBackup`, `GetBackup`, `ListBackups`, `UpdateBackup`, `DeleteBackup`, `ChangeBackupCompartment`, `BackupCopy` |
 | Recovery | `RestoreDbSystem`, `GetPitrDetails`, `CreateDbSystem` from a `BACKUP` or `POINT_IN_TIME_DB_SYSTEM` source |
+| Instances and replicas | `PatchDbSystem`, `FailoverDbSystem`, `SwitchOver`, `ChangeRoleToReplica`, `ChangeRoleToStandalone`, `ListDbSystemReplicas`, `CreateDbSystem` from a `DB_SYSTEM` source |
 | Work requests | `GetWorkRequest`, `ListWorkRequests`, `ListWorkRequestErrors`, `ListWorkRequestLogs` |
 
 ## How a DB system runs
@@ -96,7 +97,7 @@ OCI's SDKs leave these open, so floci-oci picks:
   `CREATE_POSTGRESQL_DB_SYSTEM_BACKUP` and a restore `UPDATE_POSTGRESQL_DB_SYSTEM`.
 - **`credentials` is required** on create, because only a fresh DB system can be created.
 - **Several instances are one database.** `instanceCount` above 1 gives that many instance
-  records, all served by the one container; there are no replicas.
+  records, all served by the one container (see Instances and replicas).
 - **Defaults.** When omitted: 2 OCPUs and 32 GB, 75000 IOPS, maintenance window `SUN 00:00`,
   backup policy `NONE`, and the default configuration for the version.
 - **Network.** `subnetId` and `nsgIds` are stored unchecked, since there is no networking
@@ -182,11 +183,38 @@ afterwards. The temporary directory is removed when the emulator stops.
 - **Limit.** 10 backups that are not `DELETED` per tenancy per region, Oracle's service limit; the
   11th is `400 LimitExceeded`.
 
+## Instances and replicas
+
+Instances and replicas are tracked by the management plane only: every instance of a DB system
+is served by its one PostgreSQL container, and a replica is a DB system with its own container
+and no replication from its primary. Every operation here finishes at once, with a
+`SUCCEEDED` `UPDATE_POSTGRESQL_DB_SYSTEM` work request.
+
+- **`PatchDbSystem`** takes `INSERT` at selection `instances` with a `CreateDbInstanceDetails`
+  value, and `REMOVE` at `instances[?id == '<id>']`, the selections Terraform sends, and updates
+  `instanceCount`. Any other operation or selection is `400 InvalidParameter`, removing the last
+  instance too. An empty patch succeeds.
+- **`FailoverDbSystem`** makes another instance the primary one, the one `GetPrimaryDbInstance`
+  returns: `dbInstanceId` if given, else the first standby in `ad`, else the first standby. A DB
+  system with one instance is `409 Conflict`.
+- **Replicas.** A DB system created with source `DB_SYSTEM` is a `WARM_STANDBY_DB_SYSTEM` and
+  its primary becomes `PRIMARY_DB_SYSTEM`. The primary must be `ACTIVE`, in the same tenancy (any
+  region), not itself a replica, and of the same major version. A replica may leave out
+  `credentials`: it takes the primary's admin username and a password nobody knows, since
+  floci-oci keeps no password; set one with `ResetMasterUserPassword`. `ListDbSystemReplicas`
+  lists the replicas that are not being deleted.
+- **Roles.** `SwitchOver`, called on the primary, swaps it with the named replica; the other
+  replicas follow the new primary. `ChangeRoleToReplica` makes a standalone DB system a replica,
+  and `ChangeRoleToStandalone` detaches one (both change modes do the same). A primary with no
+  replica left, after a role change or a delete, is standalone again. Deleting a primary that
+  still has replicas is `409 Conflict`. A role change on a DB system in the wrong role is
+  `409 Conflict`.
+- **`replicationConfig`** is stored and returned. Both fields are mandatory in the response, so
+  one never set reads as `isRpoEnforced` `false` and `rpoInSeconds` `0`.
+
 ## Not implemented yet
 
-Replicas, failover, switchover, role changes and `PatchDbSystem`; Kerberos and insights;
-creating a DB system from another DB system (`501`). The DB system service limit is not
-enforced.
+Kerberos and insights. The DB system service limit is not enforced.
 
 ## Quickstart
 

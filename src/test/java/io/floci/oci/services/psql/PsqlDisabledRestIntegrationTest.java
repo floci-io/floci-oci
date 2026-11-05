@@ -27,6 +27,17 @@ class PsqlDisabledRestIntegrationTest {
     }
 
     @Test
+    void disabledPsqlRejectsAPatch() {
+        given()
+            .contentType("application/json")
+            .body("{}")
+            .when().patch("/20220915/dbSystems/ocid1.postgresqldbsystem.oc1.iad.x")
+            .then()
+                .statusCode(503)
+                .body("code", equalTo("ServiceUnavailable"));
+    }
+
+    @Test
     void disabledPsqlAlsoDisablesBackups() {
         given()
             .when().get("/20220915/backups")

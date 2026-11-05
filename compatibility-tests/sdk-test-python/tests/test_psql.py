@@ -86,6 +86,15 @@ def test_db_system_lifecycle(postgresql):
         assert wait_for_work_request(postgresql, started.headers["opc-work-request-id"]).status == "SUCCEEDED"
         assert postgresql.get_db_system(db_system_id).data.lifecycle_state == "ACTIVE"
 
+        patched = postgresql.patch_db_system(db_system_id, oci.psql.models.PatchDbSystemDetails(items=[
+            oci.psql.models.PatchInsertInstruction(selection="instances", value={"displayName": "python-standby"})]))
+        assert wait_for_work_request(postgresql, patched.headers["opc-work-request-id"]).status == "SUCCEEDED"
+        assert postgresql.get_db_system(db_system_id).data.instance_count == 2
+        failed_over = postgresql.failover_db_system(db_system_id, oci.psql.models.FailoverDbSystemDetails())
+        assert wait_for_work_request(postgresql, failed_over.headers["opc-work-request-id"]).status == "SUCCEEDED"
+        assert postgresql.get_primary_db_instance(db_system_id).data.db_instance_id != primary
+        assert postgresql.list_db_system_replicas(db_system_id).data.items == []
+
         backed_up = postgresql.create_backup(oci.psql.models.CreateBackupDetails(
             compartment_id=TENANCY, display_name="python-sdk-backup", db_system_id=db_system_id))
         backup_request = wait_for_work_request(postgresql, backed_up.headers["opc-work-request-id"])
