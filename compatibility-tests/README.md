@@ -5,13 +5,15 @@ protocol adherence.
 
 | Suite | Tooling | Coverage |
 |---|---|---|
-| `sdk-test-java` | oci-java-sdk (default suite) | Identity + Object Storage, incl. multipart and work requests |
-| `sdk-test-python` | oci (Python SDK) | Identity + Object Storage, incl. `UploadManager` streaming |
-| `sdk-test-cli` | oci-cli 3.89.3 (official CLI) + bats | Smoke CRUD across all 10 services, incl. error codes and PAR access |
-| `compat-terraform` | Terraform + oracle/oci provider + bats | Full apply → no-drift plan → destroy cycle |
+| `sdk-test-java` | oci-java-sdk (default suite) | Identity, Object Storage (incl. multipart and work requests), Queue, Streaming, KMS and Vault, OKE, PostgreSQL, Organizations, Governance Rules |
+| `sdk-test-python` | oci (Python SDK) | Identity, Object Storage (incl. `UploadManager` streaming), Queue, Streaming, KMS, Vault and Secrets, the Functions management plane, PostgreSQL, Organizations, Governance Rules |
+| `sdk-test-cli` | oci-cli (official CLI) + bats | Smoke CRUD across Identity, Object Storage, Queue, Streaming, KMS, Vault and Secrets, Functions, OKE, PostgreSQL and Organizations, incl. error codes and PAR access |
+| `compat-terraform` | Terraform + oracle/oci provider + bats | Full apply → no-drift plan → destroy cycle over Identity, Object Storage, Queue, Streaming, KMS, Vault, OKE and PostgreSQL resources, plus an Organizations data source. No Functions: see the note in `main.tf` |
 | `compat-opentofu` | OpenTofu + oracle/oci provider + bats | Same cycle as Terraform |
+| `sdk-test-go` | oci-go-sdk | OKE cluster lifecycle. Has no Dockerfile and is not in CI or `make compat-docker`: run it with `make test-go-compat` |
 
-Planned: `sdk-test-go` (oci-go-sdk).
+The Java, Python and CLI suites pin their client versions in `sdk-test-java/pom.xml`,
+`sdk-test-python/requirements.txt` and `sdk-test-cli/Dockerfile`.
 
 ## How the IaC suites reach the emulator
 
