@@ -1295,4 +1295,19 @@ class PsqlServiceTest {
                 with("odspInsightDetails", Map.of("kind", "ENABLED",
                         "odspInsightList", List.of(Map.of("insightType", "LOCK_INSIGHT")))))).getCode());
     }
+
+    @Test
+    void onlyEightDbSystemsPerTenancyAndRegion() {
+        List<StoredDbSystem> created = new ArrayList<>();
+        for (int i = 0; i < PsqlService.LIMIT; i++) {
+            created.add(mock.createDbSystem(createDetails()).system());
+        }
+
+        OciException e = assertThrows(OciException.class, () -> mock.createDbSystem(createDetails()));
+        assertEquals("LimitExceeded", e.getCode());
+        assertEquals(400, e.getHttpStatus());
+
+        mock.deleteDbSystem(created.getFirst().getId(), null);
+        mock.createDbSystem(createDetails());
+    }
 }

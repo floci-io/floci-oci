@@ -71,6 +71,8 @@ public class PsqlService implements Resettable, CompartmentUsage {
     private static final Logger LOG = Logger.getLogger(PsqlService.class);
 
     static final String WR_SERVICE = "psql";
+    /** Oracle's service limit: DB systems per tenancy per region. */
+    static final int LIMIT = 8;
     static final String STANDALONE = "STANDALONE_DB_SYSTEM";
     static final String PRIMARY = "PRIMARY_DB_SYSTEM";
     static final String WARM_STANDBY = "WARM_STANDBY_DB_SYSTEM";
@@ -232,6 +234,13 @@ public class PsqlService implements Resettable, CompartmentUsage {
     }
 
     private Created create(Map<String, Object> details) {
+        long live = systems.scan(k -> true).stream()
+                .filter(system -> !"DELETED".equals(system.getLifecycleState()))
+                .count();
+        if (live >= LIMIT) {
+            throw OciException.limitExceeded("The tenancy already has " + LIMIT
+                    + " PostgreSQL DB systems in this region, the service limit");
+        }
         String displayName = PsqlRequests.requireString(details, "displayName");
         String compartmentId = PsqlRequests.requireString(details, "compartmentId");
         String major = PsqlCatalog.major(PsqlRequests.requireString(details, "dbVersion"));
