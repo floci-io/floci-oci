@@ -7,6 +7,14 @@ import com.oracle.bmc.tenantmanagercontrolplane.LinkClient;
 import com.oracle.bmc.tenantmanagercontrolplane.OrganizationClient;
 import com.oracle.bmc.tenantmanagercontrolplane.WorkRequestClient;
 import com.oracle.bmc.tenantmanagercontrolplane.model.CreateChildTenancyDetails;
+import com.oracle.bmc.tenantmanagercontrolplane.model.CreateDomainDetails;
+import com.oracle.bmc.tenantmanagercontrolplane.model.CreateDomainGovernanceDetails;
+import com.oracle.bmc.tenantmanagercontrolplane.requests.CreateDomainGovernanceRequest;
+import com.oracle.bmc.tenantmanagercontrolplane.requests.CreateDomainRequest;
+import com.oracle.bmc.tenantmanagercontrolplane.requests.DeleteDomainRequest;
+import com.oracle.bmc.tenantmanagercontrolplane.requests.GetDomainGovernanceRequest;
+import com.oracle.bmc.tenantmanagercontrolplane.requests.GetDomainRequest;
+import com.oracle.bmc.tenantmanagercontrolplane.requests.ListDomainsRequest;
 import com.oracle.bmc.tenantmanagercontrolplane.model.CreateSenderInvitationDetails;
 import com.oracle.bmc.tenantmanagercontrolplane.model.LinkSummary;
 import com.oracle.bmc.tenantmanagercontrolplane.model.OrganizationTenancySummary;
@@ -189,6 +197,42 @@ class OrganizationsCompatibilityTest {
             var sent = senders.getSenderInvitation(GetSenderInvitationRequest.builder()
                     .senderInvitationId(created.getSenderInvitation().getId()).build()).getSenderInvitation();
             assertThat(sent.getStatus().getValue()).isEqualTo("ACCEPTED");
+        }
+    }
+
+    @Test
+    void claimGovernAndReleaseADomain() {
+        String owner = "ocid1.tenancy.oc1..compatdomain" + System.nanoTime();
+        String domainName = "compat" + System.nanoTime() + ".example.com";
+        try (var domains = EmulatorFixture.domainsAs(owner);
+             var governances = EmulatorFixture.domainGovernancesAs(owner)) {
+            var created = domains.createDomain(CreateDomainRequest.builder()
+                    .createDomainDetails(CreateDomainDetails.builder()
+                            .compartmentId(owner).domainName(domainName).build())
+                    .build());
+            assertThat(created.getEtag()).isNotBlank();
+            assertThat(created.getOpcWorkRequestId()).isNotBlank();
+            String domainId = created.getDomain().getId();
+            assertThat(created.getDomain().getStatus().getValue()).isEqualTo("ACTIVE");
+            assertThat(created.getDomain().getTxtRecord()).isNotBlank();
+
+            assertThat(domains.listDomains(ListDomainsRequest.builder().compartmentId(owner).build())
+                    .getDomainCollection().getItems()).hasSize(1);
+
+            var governance = governances.createDomainGovernance(CreateDomainGovernanceRequest.builder()
+                    .createDomainGovernanceDetails(CreateDomainGovernanceDetails.builder()
+                            .compartmentId(owner).domainId(domainId).subscriptionEmail("ops@example.com")
+                            .onsTopicId("ocid1.onstopic.oc1.iad.t").onsSubscriptionId("ocid1.onssubscription.oc1.iad.s")
+                            .build())
+                    .build()).getDomainGovernance();
+            assertThat(governance.getIsGovernanceEnabled()).isTrue();
+
+            domains.deleteDomain(DeleteDomainRequest.builder().domainId(domainId).build());
+            assertThat(domains.getDomain(GetDomainRequest.builder().domainId(domainId).build())
+                    .getDomain().getLifecycleState().getValue()).isEqualTo("DELETED");
+            assertThat(governances.getDomainGovernance(GetDomainGovernanceRequest.builder()
+                    .domainGovernanceId(governance.getId()).build())
+                    .getDomainGovernance().getLifecycleState().getValue()).isEqualTo("INACTIVE");
         }
     }
 }

@@ -33,6 +33,15 @@ class OrganizationsDisabledRestIntegrationTest {
                 .body("code", equalTo("ServiceUnavailable"));
     }
 
+    @Test
+    void disabledOrganizationsAlsoDisablesDomains() {
+        given().queryParam("compartmentId", "ocid1.tenancy.oc1..any")
+            .when().get("/20230401/domains")
+            .then()
+                .statusCode(503)
+                .body("code", equalTo("ServiceUnavailable"));
+    }
+
     public static class DisabledOrganizationsProfile implements QuarkusTestProfile {
         @Override
         public Map<String, String> getConfigOverrides() {
