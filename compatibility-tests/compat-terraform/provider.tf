@@ -1,8 +1,10 @@
 terraform {
   required_providers {
     oci = {
-      source  = "oracle/oci"
-      version = ">= 6.0.0"
+      source = "oracle/oci"
+      # Pinned to the version of the local/oracle/terraform-provider-oci reference
+      # clone; bump the pin whenever `make refs` fast-forwards it.
+      version = "9.8.0"
     }
   }
 }
