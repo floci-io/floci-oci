@@ -100,16 +100,17 @@ public class PortAllocator {
     }
 
     /**
-     * Every host port a Docker container publishes, running or not: a created container that has
-     * not started yet already holds its binding. Empty without a Docker client, and when Docker
-     * cannot be asked, so a failed lookup never blocks an allocation.
+     * Every host port a running Docker container publishes. Docker lists no ports for a created or
+     * exited container, so another instance's sidecar between create and start is not seen here;
+     * within one process the {@code reserved} set covers that window. Empty without a Docker
+     * client, and when Docker cannot be asked, so a failed lookup never blocks an allocation.
      */
     Set<Integer> publishedHostPorts() {
         if (dockerClient == null) {
             return Set.of();
         }
         try {
-            List<Container> containers = dockerClient.listContainersCmd().withShowAll(true).exec();
+            List<Container> containers = dockerClient.listContainersCmd().exec();
             Set<Integer> published = new HashSet<>();
             for (Container container : containers) {
                 ContainerPort[] ports = container.getPorts();
