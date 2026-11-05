@@ -7,7 +7,14 @@ import com.oracle.bmc.tenantmanagercontrolplane.LinkClient;
 import com.oracle.bmc.tenantmanagercontrolplane.OrganizationClient;
 import com.oracle.bmc.tenantmanagercontrolplane.WorkRequestClient;
 import com.oracle.bmc.tenantmanagercontrolplane.model.CreateChildTenancyDetails;
+import com.oracle.bmc.tenantmanagercontrolplane.model.CloudSubscription;
+import com.oracle.bmc.tenantmanagercontrolplane.model.CloudSubscriptionSummary;
 import com.oracle.bmc.tenantmanagercontrolplane.model.CreateDomainDetails;
+import com.oracle.bmc.tenantmanagercontrolplane.model.CreateSubscriptionMappingDetails;
+import com.oracle.bmc.tenantmanagercontrolplane.requests.CreateSubscriptionMappingRequest;
+import com.oracle.bmc.tenantmanagercontrolplane.requests.DeleteSubscriptionMappingRequest;
+import com.oracle.bmc.tenantmanagercontrolplane.requests.GetSubscriptionRequest;
+import com.oracle.bmc.tenantmanagercontrolplane.requests.ListSubscriptionsRequest;
 import com.oracle.bmc.tenantmanagercontrolplane.model.CreateDomainGovernanceDetails;
 import com.oracle.bmc.tenantmanagercontrolplane.requests.CreateDomainGovernanceRequest;
 import com.oracle.bmc.tenantmanagercontrolplane.requests.CreateDomainRequest;
@@ -233,6 +240,31 @@ class OrganizationsCompatibilityTest {
             assertThat(governances.getDomainGovernance(GetDomainGovernanceRequest.builder()
                     .domainGovernanceId(governance.getId()).build())
                     .getDomainGovernance().getLifecycleState().getValue()).isEqualTo("INACTIVE");
+        }
+    }
+
+    @Test
+    void subscriptionsDeserializeAsCloudSubscriptionsAndCanBeMapped() {
+        String child = createChild("compat-sub-" + System.nanoTime());
+        try (var subscriptions = EmulatorFixture.subscriptionsAs(TENANCY)) {
+            var owned = subscriptions.listSubscriptions(ListSubscriptionsRequest.builder().build())
+                    .getSubscriptionCollection().getItems();
+            assertThat(owned).hasSize(1);
+            assertThat(owned.get(0)).isInstanceOf(CloudSubscriptionSummary.class);
+            String subscriptionId = owned.get(0).getId();
+
+            var subscription = subscriptions.getSubscription(GetSubscriptionRequest.builder()
+                    .subscriptionId(subscriptionId).build()).getSubscription();
+            assertThat(subscription).isInstanceOf(CloudSubscription.class);
+            assertThat(((CloudSubscription) subscription).getLifecycleState().getValue()).isEqualTo("ACTIVE");
+
+            var mapping = subscriptions.createSubscriptionMapping(CreateSubscriptionMappingRequest.builder()
+                    .createSubscriptionMappingDetails(CreateSubscriptionMappingDetails.builder()
+                            .compartmentId(child).subscriptionId(subscriptionId).build())
+                    .build()).getSubscriptionMapping();
+            assertThat(mapping.getIsExplicitlyAssigned()).isTrue();
+            subscriptions.deleteSubscriptionMapping(DeleteSubscriptionMappingRequest.builder()
+                    .subscriptionMappingId(mapping.getId()).build());
         }
     }
 }

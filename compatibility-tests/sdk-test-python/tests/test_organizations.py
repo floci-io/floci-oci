@@ -166,3 +166,22 @@ def test_claim_govern_and_release_a_domain(sdk_config):
     domains.delete_domain(domain.id)
     assert domains.get_domain(domain.id).data.lifecycle_state == "DELETED"
 
+
+def test_subscriptions_are_cloud_subscriptions_and_can_be_mapped(sdk_config, organizations, work_requests):
+    child = create_child(organizations, work_requests, f"py-sub-{time.time_ns()}")
+    subscriptions = oci.tenant_manager_control_plane.SubscriptionClient(sdk_config, service_endpoint=ENDPOINT)
+    models = oci.tenant_manager_control_plane.models
+
+    owned = subscriptions.list_subscriptions().data.items
+    assert len(owned) == 1
+    assert isinstance(owned[0], models.CloudSubscriptionSummary)
+    subscription = subscriptions.get_subscription(owned[0].id).data
+    assert isinstance(subscription, models.CloudSubscription)
+
+    mapping = subscriptions.create_subscription_mapping(
+        models.CreateSubscriptionMappingDetails(compartment_id=child, subscription_id=subscription.id)
+    ).data
+    assert mapping.is_explicitly_assigned is True
+    subscriptions.delete_subscription_mapping(mapping.id)
+    assert subscriptions.get_subscription_mapping(mapping.id).data.lifecycle_state == "DELETED"
+

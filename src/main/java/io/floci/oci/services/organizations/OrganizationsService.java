@@ -112,7 +112,8 @@ public class OrganizationsService {
         serviceRegistry.register(ServiceDescriptor.builder("organizations")
                 .enabled(config.services().organizations().enabled())
                 .storageKey("organizations")
-                .resourceClasses(OrganizationsController.class, InvitationsController.class, DomainsController.class)
+                .resourceClasses(OrganizationsController.class, InvitationsController.class, DomainsController.class,
+                        SubscriptionsController.class)
                 .global(true)
                 .build());
     }
@@ -369,6 +370,13 @@ public class OrganizationsService {
                 List.of(WorkRequestService.resource("tenancy", "UPDATED", tenancyId, null)));
     }
 
+    /** The default subscription of the organization {@code parentId} owns, if it owns one. */
+    public Optional<String> defaultSubscriptionOf(String parentId) {
+        return TenancyAwareStorageBackend.scanTenancy(organizations, parentId).stream()
+                .findFirst()
+                .map(StoredOrganization::getDefaultUcmSubscriptionId);
+    }
+
     /** The ACTIVE child members of the organization {@code parentId} owns. */
     public List<StoredOrganizationTenancy> activeChildren(String parentId) {
         return TenancyAwareStorageBackend.scanTenancy(organizationTenancies, parentId).stream()
@@ -516,7 +524,7 @@ public class OrganizationsService {
         organization.setId(Ocids.generateGlobal("organization", realm));
         organization.setCompartmentId(parent.getId());
         organization.setDefaultUcmSubscriptionId(subscriptionId != null ? subscriptionId
-                : Ocids.generate("organizationssubscription", realm, Regions.code(parent.getHomeRegion())));
+                : SubscriptionsService.ownSubscriptionId(parent.getId(), parent.getHomeRegion(), realm));
         organization.setLifecycleState("ACTIVE");
         organization.setTimeCreated(Instant.now().toString());
         organization.setDisplayName(parent.getName());
