@@ -4,6 +4,8 @@ import io.floci.oci.core.common.OciException;
 import io.floci.oci.core.common.OciPage;
 import jakarta.ws.rs.core.Response;
 
+import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -40,9 +42,38 @@ final class PsqlRequests {
         return value;
     }
 
+    /** A list of JSON objects; an entry that is not one is {@code 400 InvalidParameter}. */
     @SuppressWarnings("unchecked")
     static List<Map<String, Object>> mapList(Map<String, Object> body, String key) {
-        return body.get(key) instanceof List<?> value ? (List<Map<String, Object>>) value : List.of();
+        if (!(body.get(key) instanceof List<?> value)) {
+            return List.of();
+        }
+        for (Object entry : value) {
+            if (!(entry instanceof Map<?, ?>)) {
+                throw OciException.invalidParameter("Every entry of " + key + " must be an object");
+            }
+        }
+        return (List<Map<String, Object>>) value;
+    }
+
+    /**
+     * A JSON number that is a whole number fitting a long, as an int64 field needs; anything
+     * else is {@code 400 InvalidParameter}, rather than truncated.
+     */
+    static long wholeNumber(Number value, String key) {
+        try {
+            return switch (value) {
+                case Integer i -> i;
+                case Long l -> l;
+                case Short sh -> sh;
+                case Byte b -> b;
+                case BigInteger big -> big.longValueExact();
+                case BigDecimal decimal -> decimal.longValueExact();
+                default -> new BigDecimal(value.toString()).longValueExact();
+            };
+        } catch (ArithmeticException | NumberFormatException e) {
+            throw OciException.invalidParameter(key + " must be a whole number: " + value);
+        }
     }
 
     static Integer integer(Map<String, Object> body, String key) {

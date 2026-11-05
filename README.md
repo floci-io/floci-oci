@@ -194,7 +194,7 @@ flowchart LR
 | Security | Vault + KMS (vaults, keys, key versions, **real** AES-GCM / RSA / ECDSA crypto), Secrets and secret bundles |
 | Serverless | Functions on API versions `20260325` and `20181201` (applications, functions, work requests, runtime catalog, real invocation through an Fn Project sidecar) |
 | Kubernetes | Container Engine for Kubernetes (OKE): clusters with their settings read back as sent, endpoint config updates, node pools, options, kubeconfig generation, work requests, real-mode k3s sidecar |
-| Database | Database with PostgreSQL: DB systems, start/stop/restart, master password reset, connection details with a CA certificate, shapes, default and custom configurations, backups, restore and point-in-time recovery, instance patches, failover and replicas, work requests, real PostgreSQL sidecar |
+| Database | Database with PostgreSQL: DB systems, start/stop/restart, master password reset, connection details with a CA certificate, shapes, default and custom configurations, backups, restore and point-in-time recovery, instance patches, failover and replicas, Kerberos and insight settings, work requests, real PostgreSQL sidecar |
 | Organizations | Child tenancies (each with its own home region and isolated storage), organizations, organization tenancies, links, invitations, domains, subscriptions and mappings, orders; Governance Rules (allowed regions enforced) |
 | Async operations | Work requests, partitioned per service (Identity/Queue/Streaming use `SUCCEEDED`, Object Storage/OKE use `COMPLETED`) |
 

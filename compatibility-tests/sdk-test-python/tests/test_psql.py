@@ -32,6 +32,9 @@ def test_catalog_lists_shapes_and_default_configurations(postgresql):
     assert "defaultconfiguration" in configurations[0].id
     assert postgresql.get_default_configuration(configurations[0].id).data.db_version == "15"
 
+    capabilities = postgresql.list_insight_capabilities().data.items
+    assert [capability.insight_type for capability in capabilities] == ["QUERY_INSIGHT"]
+
 
 def test_db_system_lifecycle(postgresql):
     created = postgresql.create_db_system(

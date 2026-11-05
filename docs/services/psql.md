@@ -13,7 +13,7 @@ port 4599 with the other services.
 | DB systems | `CreateDbSystem`, `GetDbSystem`, `ListDbSystems`, `UpdateDbSystem`, `DeleteDbSystem`, `ChangeDbSystemCompartment` |
 | Runtime | `StartDbSystem`, `StopDbSystem`, `RestartDbInstanceInDbSystem`, `ResetMasterUserPassword` |
 | Connection | `GetConnectionDetails`, `GetPrimaryDbInstance`, `UpdateDbSystemDbInstance` |
-| Catalog | `ListShapes`, `ListDefaultConfigurations`, `GetDefaultConfiguration` |
+| Catalog | `ListShapes`, `ListDefaultConfigurations`, `GetDefaultConfiguration`, `ListInsightCapabilities` |
 | Configurations | `CreateConfiguration`, `GetConfiguration`, `ListConfigurations`, `UpdateConfiguration`, `DeleteConfiguration`, `ChangeConfigurationCompartment` |
 | Backups | `CreateBackup`, `GetBackup`, `ListBackups`, `UpdateBackup`, `DeleteBackup`, `ChangeBackupCompartment`, `BackupCopy` |
 | Recovery | `RestoreDbSystem`, `GetPitrDetails`, `CreateDbSystem` from a `BACKUP` or `POINT_IN_TIME_DB_SYSTEM` source |
@@ -212,9 +212,23 @@ and no replication from its primary. Every operation here finishes at once, with
 - **`replicationConfig`** is stored and returned. Both fields are mandatory in the response, so
   one never set reads as `isRpoEnforced` `false` and `rpoInSeconds` `0`.
 
+## Kerberos and insights
+
+Both are recorded and returned exactly as sent; neither changes the running PostgreSQL.
+
+- **`kerberosAuthDetails`** is set by `UpdateDbSystem` only, as in the SDK. `ENABLED` needs at
+  least one entry in `credentials` (`realmName`, `keytabSecretId`, `keytabSecretVersion`), and
+  each keytab must be an existing Vault secret version, else
+  `400 RelatedResourceNotAuthorizedOrNotFound`. PostgreSQL is not configured for GSSAPI.
+- **`odspInsightDetails`** is set on create or update. `ENABLED` takes an `odspInsightList` whose
+  `insightType` is `QUERY_INSIGHT`, the only type the SDK defines. No insight data is collected.
+- **`ListInsightCapabilities`** reports `QUERY_INSIGHT` with the `AAS_TIME_SERIES` and
+  `TOP_QUERIES` data types. OCI documents the enum values only, so the descriptions and units are
+  floci-oci's.
+
 ## Not implemented yet
 
-Kerberos and insights. The DB system service limit is not enforced.
+The DB system service limit is not enforced.
 
 ## Quickstart
 

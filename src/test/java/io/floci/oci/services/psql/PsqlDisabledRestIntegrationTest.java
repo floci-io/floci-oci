@@ -27,6 +27,15 @@ class PsqlDisabledRestIntegrationTest {
     }
 
     @Test
+    void disabledPsqlAlsoDisablesInsightCapabilities() {
+        given()
+            .when().get("/20220915/insightCapabilities")
+            .then()
+                .statusCode(503)
+                .body("code", equalTo("ServiceUnavailable"));
+    }
+
+    @Test
     void disabledPsqlRejectsAPatch() {
         given()
             .contentType("application/json")
