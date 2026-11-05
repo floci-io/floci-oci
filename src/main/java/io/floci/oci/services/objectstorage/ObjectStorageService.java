@@ -6,6 +6,7 @@ import io.floci.oci.core.common.CompartmentUsage;
 import io.floci.oci.core.common.Etags;
 import io.floci.oci.core.common.OciContext;
 import io.floci.oci.core.common.OciException;
+import io.floci.oci.core.common.Resettable;
 import io.floci.oci.core.common.Ocids;
 import io.floci.oci.core.common.ServiceDescriptor;
 import io.floci.oci.core.common.ServiceRegistry;
@@ -43,7 +44,7 @@ import java.util.function.BiConsumer;
 import java.util.function.Function;
 
 @ApplicationScoped
-public class ObjectStorageService implements CompartmentUsage {
+public class ObjectStorageService implements CompartmentUsage, Resettable {
 
     private static final Logger LOG = Logger.getLogger(ObjectStorageService.class);
 
@@ -285,7 +286,10 @@ public class ObjectStorageService implements CompartmentUsage {
         }
         pars.scan(k -> true).stream()
                 .filter(p -> bucketName.equals(p.getBucket()))
-                .forEach(p -> pars.delete(p.getToken()));
+                .forEach(p -> {
+                    pars.delete(p.getToken());
+                    parOwners.remove(p.getToken());
+                });
         buckets.delete(bucketName);
     }
 
@@ -613,6 +617,16 @@ public class ObjectStorageService implements CompartmentUsage {
     public void deletePar(String namespaceName, String bucketName, String parId) {
         StoredPar par = getParById(namespaceName, bucketName, parId);
         pars.delete(par.getToken());
+        parOwners.remove(par.getToken());
+    }
+
+    @Override
+    public void clear() {
+        parOwners.clear();
+    }
+
+    int parOwnerCount() {
+        return parOwners.size();
     }
 
     /** A pre-authenticated request and the tenancy that created it, which the token acts as. */

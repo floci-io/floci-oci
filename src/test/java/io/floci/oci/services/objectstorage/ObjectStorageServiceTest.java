@@ -332,6 +332,38 @@ class ObjectStorageServiceTest {
         assertThrows(OciException.class, () -> service.resolveParToken(par.getToken(), NS));
     }
 
+    private StoredPar resolvedPar(String bucket) {
+        StoredPar par = service.createPar(NS, bucket, "cached", "ObjectRead",
+                Instant.now().plusSeconds(3600).toString(), "secret.txt", null);
+        service.resolveParToken(par.getToken(), NS);
+        assertEquals(1, service.parOwnerCount());
+        return par;
+    }
+
+    @Test
+    void deleteParForgetsItsOwner() {
+        bucket("par-owner");
+        StoredPar par = resolvedPar("par-owner");
+        service.deletePar(NS, "par-owner", par.getId());
+        assertEquals(0, service.parOwnerCount());
+    }
+
+    @Test
+    void deleteBucketForgetsItsParOwners() {
+        bucket("par-bucket");
+        resolvedPar("par-bucket");
+        service.deleteBucket(NS, "par-bucket", null);
+        assertEquals(0, service.parOwnerCount());
+    }
+
+    @Test
+    void clearForgetsParOwners() {
+        bucket("par-clear");
+        resolvedPar("par-clear");
+        service.clear();
+        assertEquals(0, service.parOwnerCount());
+    }
+
     @Test
     void expiredParIsRejected() {
         bucket("par2");
