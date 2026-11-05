@@ -252,6 +252,8 @@ class PsqlRestIntegrationTest {
 
         given().when().get("/20220915/dbSystems/" + id)
             .then().body("compartmentId", equalTo(target));
+        // The cleanup after each test looks in the test compartment only, which this one has left.
+        PsqlTestSystems.deleteAll(target);
     }
 
     @Test
