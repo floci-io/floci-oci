@@ -34,6 +34,15 @@ class OrganizationsDisabledRestIntegrationTest {
     }
 
     @Test
+    void disabledOrganizationsAlsoDisablesOrders() {
+        given()
+            .when().get("/20230401/orders/x.e30.y")
+            .then()
+                .statusCode(503)
+                .body("code", equalTo("ServiceUnavailable"));
+    }
+
+    @Test
     void disabledOrganizationsAlsoDisablesSubscriptions() {
         given()
             .when().get("/20230401/subscriptions")

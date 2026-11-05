@@ -113,7 +113,7 @@ public class OrganizationsService {
                 .enabled(config.services().organizations().enabled())
                 .storageKey("organizations")
                 .resourceClasses(OrganizationsController.class, InvitationsController.class, DomainsController.class,
-                        SubscriptionsController.class)
+                        SubscriptionsController.class, OrdersController.class)
                 .global(true)
                 .build());
     }

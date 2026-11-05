@@ -10,7 +10,7 @@
 | [Functions](functions.md) | `/20260325/…`, `/20181201/…` | Applications, functions, real invocation via an `fnproject/fnserver` sidecar |
 | [Container Engine for Kubernetes (OKE)](containerengine.md) | `/20180222/…` | Clusters CRUD, Node Pools CRUD, Options, Kubeconfig generation, work requests, real k3s sidecar |
 | [Database with PostgreSQL](psql.md) | `/20220915/…` | DB systems CRUD, start/stop/restart, password reset, connection details with a CA certificate, shapes, custom configurations, default configurations, backups, restore and point-in-time recovery, work requests, real PostgreSQL sidecar |
-| [Organizations](organizations.md) | `/20230401/…` | Child tenancies with their own home region and isolated storage, organizations, organization tenancies, links, invitations, governance opt-in, work requests |
+| [Organizations](organizations.md) | `/20230401/…` | Child tenancies with their own home region and isolated storage, organizations, organization tenancies, transfer approval, links and link features, invitations, governance opt-in, domains and domain governance, subscriptions and subscription mappings, orders, work requests |
 | [Governance Rules](governance-rules.md) | `/20220504/…` | Governance rules (quota, tag, allowed regions), inclusion criteria, tenancy attachments, enforced rules, work requests; allowed regions enforced on region subscriptions |
 
 ## Wire contract
