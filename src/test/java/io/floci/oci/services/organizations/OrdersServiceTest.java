@@ -113,6 +113,16 @@ class OrdersServiceTest {
     }
 
     @Test
+    void anIatWhoseEndDateWouldNotFitFallsBackToTheEpoch() {
+        long lastInstantSecond = 31556889864403199L;
+        Map<String, Object> order = service.getOrder(jwt("{\"iat\":" + lastInstantSecond + "}"));
+
+        Map<?, ?> subscription = (Map<?, ?>) ((List<?>) order.get("subscriptions")).getFirst();
+        assertEquals("1970-01-01T00:00:00Z", subscription.get("startDate"));
+        assertEquals("1971-01-01T00:00:00Z", subscription.get("endDate"));
+    }
+
+    @Test
     void theHeaderMustBeAJsonObjectToo() {
         Base64.Encoder encoder = Base64.getUrlEncoder().withoutPadding();
         String payload = encoder.encodeToString("{}".getBytes(StandardCharsets.UTF_8));

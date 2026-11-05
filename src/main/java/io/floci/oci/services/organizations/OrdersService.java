@@ -77,7 +77,7 @@ public class OrdersService {
         subscription.put("spmSubscriptionId", "SPM-" + hash.substring(0, 12).toUpperCase(Locale.ROOT));
         subscription.put("service", "CLOUDCM");
         subscription.put("startDate", start.toString());
-        subscription.put("endDate", start.plus(365, ChronoUnit.DAYS).toString());
+        subscription.put("endDate", subscriptionEnd(start).toString());
         subscription.put("skus", List.of(sku));
 
         Map<String, Object> wire = new LinkedHashMap<>();
@@ -159,15 +159,22 @@ public class OrdersService {
     }
 
     /** The {@code iat} claim as the start of the subscription, or the epoch when absent or out of range. */
+    private static Instant subscriptionEnd(Instant start) {
+        return start.plus(365, ChronoUnit.DAYS);
+    }
+
     private static Instant issuedAt(JsonNode claims) {
         JsonNode iat = claims.path("iat");
         if (!iat.canConvertToLong()) {
             return Instant.EPOCH;
         }
         try {
-            return Instant.ofEpochSecond(iat.asLong()).truncatedTo(ChronoUnit.DAYS);
+            Instant start = Instant.ofEpochSecond(iat.asLong()).truncatedTo(ChronoUnit.DAYS);
+            subscriptionEnd(start);
+            return start;
         } catch (DateTimeException e) {
-            // iat beyond Instant's range: treat it as absent rather than fail the read.
+            // iat beyond Instant's range, or its end date would be: treat it as absent rather
+            // than fail the read.
             return Instant.EPOCH;
         }
     }
