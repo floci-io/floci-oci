@@ -19,6 +19,7 @@ serves it on port 4599 with the other services.
 | Domain governance | CreateDomainGovernance, GetDomainGovernance, ListDomainGovernances, UpdateDomainGovernance, DeleteDomainGovernance |
 | Subscriptions | ListSubscriptions, GetSubscription, ListSubscriptionLineItems, ListAvailableRegions, ListAssignedSubscriptions, GetAssignedSubscription, ListAssignedSubscriptionLineItems |
 | Subscription mappings | CreateSubscriptionMapping, GetSubscriptionMapping, ListSubscriptionMappings, DeleteSubscriptionMapping |
+| Orders | GetOrder, ActivateOrder |
 | Work requests | Get, List, errors, logs (`/20230401/workRequests`) |
 
 ## How isolation works
@@ -189,9 +190,30 @@ have, so it models the minimum the API needs:
 - Subscriptions have no stored record, so their `etag` is derived from the returned shape. A
   subscription's dates are its owning tenancy's creation time.
 
-## Not implemented yet
+### Orders
 
-Orders.
+An activation token is a JWT (RFC 7519) issued by Oracle's order system, which floci-oci does not
+have:
+
+- Any well-formed JWT (a JSON object header, a JSON object payload and a signature) is accepted,
+  and its signature is not checked (floci-oci never checks request signatures either); anything
+  else is `400 InvalidParameter`. The text claims `orderNumber`, `adminEmail` and
+  `dataCenterRegion` and the numeric `iat` (the subscription start) are used when present. When
+  they are not, `orderNumber` and the subscription's `spmSubscriptionId` are derived from the
+  token, so the same token always names the same order; `adminEmail` is `admin@example.com`; the
+  subscription starts at the epoch; and `dataCenterRegion` is left out.
+- `orderState` is `PENDING` until the order is activated, then `ACTIVATED`. The SDK gives the field
+  no enum, so both values are floci-oci's.
+- `ActivateOrder` activates the order into the caller's tenancy, which must be the body's
+  `compartmentId`. It returns `202` with an `opc-work-request-id` (type
+  `ACTIVATE_ORDER_EXISTING_TENANCY`; the SDK enum also has `COMPLETE_ORDER_ACTIVATION`, but this
+  call activates into an existing tenancy), once per token; a second
+  activation is `409 Conflict`. Activation records the order and changes nothing else.
+
+## Remaining gaps
+
+Work-request errors and logs are always empty, since every Organizations work request finishes
+`SUCCEEDED` when it is returned. The child tenancy limit is not enforced (see above).
 
 ## Quickstart
 

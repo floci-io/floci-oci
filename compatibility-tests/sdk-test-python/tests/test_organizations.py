@@ -1,5 +1,7 @@
 """Organizations (Tenant Manager control plane) validated through the real oci Python SDK."""
 
+import base64
+import json
 import time
 
 import oci
@@ -184,4 +186,23 @@ def test_subscriptions_are_cloud_subscriptions_and_can_be_mapped(sdk_config, org
     assert mapping.is_explicitly_assigned is True
     subscriptions.delete_subscription_mapping(mapping.id)
     assert subscriptions.get_subscription_mapping(mapping.id).data.lifecycle_state == "DELETED"
+
+
+def test_get_and_activate_an_order(sdk_config, work_requests):
+    def segment(value):
+        return base64.urlsafe_b64encode(json.dumps(value).encode()).rstrip(b"=").decode()
+
+    token = f"{segment({'alg': 'none'})}.{segment({'orderNumber': f'py-{time.time_ns()}'})}.sig"
+    orders = oci.tenant_manager_control_plane.OrdersClient(sdk_config, service_endpoint=ENDPOINT)
+
+    order = orders.get_order(token).data
+    assert order.order_state == "PENDING"
+    assert order.subscriptions[0].service
+
+    activated = orders.activate_order(
+        oci.tenant_manager_control_plane.models.ActivateOrderDetails(compartment_id=TENANCY), token
+    )
+    work_request = work_requests.get_work_request(activated.headers["opc-work-request-id"]).data
+    assert work_request.operation_type == "ACTIVATE_ORDER_EXISTING_TENANCY"
+    assert orders.get_order(token).data.order_state == "ACTIVATED"
 

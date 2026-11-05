@@ -33,7 +33,7 @@ It implements real OCI wire protocols so the official OCI SDKs, the OCI CLI, Ter
 | Functions | `/20260325/…`, `/20181201/…` | Applications, functions, real invocation via an Fn Project sidecar |
 | Container Engine for Kubernetes (OKE) | `/20180222/…` | Clusters, node pools, options, kubeconfig generation, work requests, real k3s sidecar |
 | Database with PostgreSQL | `/20220915/…` | DB systems, start/stop/restart, password reset, connection details, shapes, default and custom configurations, backups and restore, instances and replicas, work requests, real PostgreSQL sidecar |
-| Organizations | `/20230401/…` | Child tenancies, organizations, organization tenancies, links, invitations, work requests |
+| Organizations | `/20230401/…` | Child tenancies, organizations, organization tenancies, links, invitations, domains, subscriptions, orders, work requests |
 | Governance Rules | `/20220504/…` | Governance rules, inclusion criteria, tenancy attachments, enforced rules, work requests |
 
 ## Quick start
