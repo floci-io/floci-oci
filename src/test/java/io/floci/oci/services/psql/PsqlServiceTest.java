@@ -22,6 +22,7 @@ import org.mockito.ArgumentCaptor;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Base64;
 import java.util.HashMap;
 import java.util.List;
@@ -37,6 +38,7 @@ import java.util.concurrent.TimeoutException;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
 import static org.mockito.Mockito.doAnswer;
@@ -1243,6 +1245,39 @@ class PsqlServiceTest {
 
         mock.updateDbSystem(system.getId(), Map.of("kerberosAuthDetails", Map.of("kind", "DISABLED")), null);
         assertEquals(Map.of("kind", "DISABLED"), mock.getDbSystem(system.getId()).getKerberosAuthDetails());
+    }
+
+    @Test
+    void aKeytabVersionMustBeAWholeNumber() {
+        StoredDbSystem system = mock.createDbSystem(createDetails()).system();
+        Map<String, Object> fractional = Map.of("realmName", "EXAMPLE.COM",
+                "keytabSecretId", "ocid1.vaultsecret.oc1.iad.keytab", "keytabSecretVersion", 1.9);
+
+        OciException e = assertThrows(OciException.class, () -> mock.updateDbSystem(system.getId(),
+                Map.of("kerberosAuthDetails", Map.of("kind", "ENABLED", "credentials", List.of(fractional))), null));
+
+        assertEquals("InvalidParameter", e.getCode());
+        verify(vaultSecrets, never()).getSecretVersion(any(), anyLong());
+        assertNull(mock.getDbSystem(system.getId()).getKerberosAuthDetails());
+        assertEquals(7L, PsqlRequests.wholeNumber(7.0, "v"), "a whole number written with a fraction is still whole");
+        assertEquals("InvalidParameter", assertThrows(OciException.class,
+                () -> PsqlRequests.wholeNumber(1e30, "v")).getCode(), "too big for an int64");
+    }
+
+    @Test
+    void anEntryThatIsNotAnObjectIsABadParameter() {
+        StoredDbSystem system = mock.createDbSystem(createDetails()).system();
+        List<Object> withNull = new ArrayList<>();
+        withNull.add(null);
+
+        assertEquals("InvalidParameter", assertThrows(OciException.class, () -> mock.updateDbSystem(system.getId(),
+                Map.of("kerberosAuthDetails", Map.of("kind", "ENABLED", "credentials", List.of("bad"))), null))
+                .getCode());
+        assertEquals("InvalidParameter", assertThrows(OciException.class, () -> mock.updateDbSystem(system.getId(),
+                Map.of("odspInsightDetails", Map.of("kind", "ENABLED", "odspInsightList", withNull)), null))
+                .getCode());
+        assertEquals("InvalidParameter", assertThrows(OciException.class,
+                () -> mock.createDbSystem(with("instancesDetails", List.of(42)))).getCode());
     }
 
     @Test

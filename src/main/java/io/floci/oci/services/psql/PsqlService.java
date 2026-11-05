@@ -910,20 +910,21 @@ public class PsqlService implements Resettable, CompartmentUsage {
         for (Map<String, Object> credential : requested) {
             String realmName = PsqlRequests.requireString(credential, "realmName");
             String secretId = PsqlRequests.requireString(credential, "keytabSecretId");
-            if (!(credential.get("keytabSecretVersion") instanceof Number version)) {
+            if (!(credential.get("keytabSecretVersion") instanceof Number number)) {
                 throw OciException.missingParameter("Missing required parameter: keytabSecretVersion");
             }
+            long version = PsqlRequests.wholeNumber(number, "keytabSecretVersion");
             try {
-                vaultSecrets.getSecretVersion(secretId, version.longValue());
+                vaultSecrets.getSecretVersion(secretId, version);
             } catch (OciException e) {
                 throw new OciException("RelatedResourceNotAuthorizedOrNotFound",
                         "Authorization failed or requested resource not found: secret " + secretId + " version "
-                                + version.longValue(), 400);
+                                + version, 400);
             }
             Map<String, Object> wire = new LinkedHashMap<>();
             wire.put("realmName", realmName);
             wire.put("keytabSecretId", secretId);
-            wire.put("keytabSecretVersion", version.longValue());
+            wire.put("keytabSecretVersion", version);
             credentials.add(wire);
         }
         return credentials;
