@@ -37,6 +37,7 @@ class SubscriptionsServiceTest {
     private final List<StoredOrganizationTenancy> children = new ArrayList<>();
     private final Map<String, String> parents = new HashMap<>();
     private final Map<String, String> defaults = new HashMap<>();
+    private TenancyRegistry tenancies;
     private SubscriptionsService service;
 
     @BeforeEach
@@ -54,7 +55,7 @@ class SubscriptionsServiceTest {
                 .thenAnswer(invocation -> Optional.ofNullable(parents.get(invocation.<String>getArgument(0))));
         lenient().when(organizations.defaultSubscriptionOf(anyString()))
                 .thenAnswer(invocation -> Optional.ofNullable(defaults.get(invocation.<String>getArgument(0))));
-        TenancyRegistry tenancies = new TenancyRegistry(partitioned(new InMemoryStorage<>()), config, context);
+        tenancies = new TenancyRegistry(partitioned(new InMemoryStorage<>()), config, context);
         service = new SubscriptionsService(partitioned(new InMemoryStorage<>()), organizations, tenancies, context);
     }
 
@@ -209,5 +210,40 @@ class SubscriptionsServiceTest {
         assertEquals(parentCreated, service.getAssignedSubscription(parentSubscription).get("timeCreated"));
         assertEquals(parentLineStart, service.listAssignedSubscriptionLineItems(parentSubscription, null, null)
                 .getFirst().get("timeStarted"));
+    }
+
+    @Test
+    void assignedSubscriptionsAreSorted() {
+        joinChild();
+        tenancies.get(PARENT).setTimeCreated("2020-01-01T00:00:00Z");
+        tenancies.get(CHILD).setTimeCreated("2025-01-01T00:00:00Z");
+        String older = ownSubscription(PARENT);
+        String newer = ownSubscription(CHILD);
+        service.createSubscriptionMapping(CHILD, older);
+        caller.set(CHILD);
+        service.createSubscriptionMapping(CHILD, newer);
+
+        assertEquals(List.of(newer, older), assignedIds(null, null), "timeCreated, newest first, by default");
+        assertEquals(List.of(older, newer), assignedIds("timeCreated", "ASC"));
+        assertEquals(List.of(newer, older), assignedIds("timeCreated", "DESC"));
+        List<String> byId = List.of(older, newer).stream().sorted().toList();
+        assertEquals(byId, assignedIds("displayName", null), "displayName ascending by default");
+        assertEquals(byId.reversed(), assignedIds("displayName", "DESC"));
+    }
+
+    private List<Object> assignedIds(String sortBy, String sortOrder) {
+        return service.listAssignedSubscriptions(CHILD, null, null, sortBy, sortOrder)
+                .stream().map(s -> s.get("id")).toList();
+    }
+
+    @Test
+    void aDefaultSubscriptionNoTenancyOwnsHasNoLineItems() {
+        joinChild();
+        String unowned = "ocid1.organizationssubscription.oc1.iad.unowned";
+        defaults.put(PARENT, unowned);
+        caller.set(CHILD);
+
+        assertEquals(unowned, service.getAssignedSubscription(unowned).get("id"));
+        assertEquals(List.of(), service.listAssignedSubscriptionLineItems(unowned, null, null));
     }
 }

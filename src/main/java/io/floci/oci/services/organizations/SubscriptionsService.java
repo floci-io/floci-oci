@@ -144,7 +144,22 @@ public class SubscriptionsService implements OrganizationMembershipListener {
         return assignedTo(caller).stream()
                 .filter(id -> subscriptionId == null || subscriptionId.equals(id))
                 .map(id -> subscriptionWire(id, caller, ownerOf(id, caller)))
+                .sorted(assignedOrder(sortBy, sortOrder))
                 .toList();
+    }
+
+    /**
+     * timeCreated, the default, sorts newest first and displayName ascending, as the SDK says. An
+     * assigned subscription has no display name, so that sort falls back on its OCID.
+     */
+    private static Comparator<Map<String, Object>> assignedOrder(String sortBy, String sortOrder) {
+        boolean byName = "displayName".equals(sortBy);
+        Comparator<Map<String, Object>> byId = Comparator.comparing(s -> (String) s.get("id"));
+        Comparator<Map<String, Object>> order = byName ? byId
+                : Comparator.<Map<String, Object>, Instant>comparing(s -> Instant.parse((String) s.get("timeCreated")))
+                        .thenComparing(byId);
+        boolean descending = sortOrder != null ? "DESC".equals(sortOrder) : !byName;
+        return descending ? order.reversed() : order;
     }
 
     public Map<String, Object> getAssignedSubscription(String assignedSubscriptionId) {
@@ -160,7 +175,12 @@ public class SubscriptionsService implements OrganizationMembershipListener {
         requireSort(sortBy, sortOrder);
         getAssignedSubscription(assignedSubscriptionId);
         String caller = ociContext.tenancyId();
-        return List.of(lineItem(assignedSubscriptionId, ownerOf(assignedSubscriptionId, caller)));
+        String owner = ownerOf(assignedSubscriptionId, caller);
+        if (!assignedSubscriptionId.equals(ownSubscriptionId(owner))) {
+            // A default subscription no tenancy here owns: nothing bills through it.
+            return List.of();
+        }
+        return List.of(lineItem(assignedSubscriptionId, owner));
     }
 
     // ── Subscription mappings ──────────────────────────────────────────────────
