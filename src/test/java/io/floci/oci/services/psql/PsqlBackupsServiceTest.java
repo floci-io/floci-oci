@@ -16,6 +16,7 @@ import java.time.Instant;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -191,6 +192,76 @@ class PsqlBackupsServiceTest {
                 copy.getSourceBackupDetails());
         assertEquals("InvalidParameter", assertThrows(OciException.class, () -> mock.copyBackup(source.getId(),
                 Map.of("compartmentId", COMPARTMENT, "regions", List.of("mars-1")), null)).getCode());
+    }
+
+    @Test
+    void aCopyThatWouldPassTheLimitIsRefusedWholeInItsRegion() {
+        String dbSystemId = "ocid1.postgresqldbsystem.oc1.iad.limit";
+        for (int i = 0; i < PsqlBackupsService.LIMIT; i++) {
+            mock.createBackup(system(dbSystemId), details("b" + i));
+        }
+        StoredBackup source = only(mock);
+
+        assertEquals("LimitExceeded", assertThrows(OciException.class, () -> mock.copyBackup(source.getId(),
+                Map.of("compartmentId", COMPARTMENT, "regions", List.of("us-phoenix-1", "us-ashburn-1")), null)).getCode());
+        assertEquals(PsqlBackupsService.LIMIT, liveBackups(), "the copy to the region with room was not made either");
+
+        mock.deleteBackup(source.getId(), null);
+        StoredBackup kept = mock.listBackups(null, null, null, "ACTIVE", null, null, null, null, null, null).getFirst();
+        mock.copyBackup(kept.getId(), Map.of("compartmentId", COMPARTMENT, "regions", List.of("us-ashburn-1")), null);
+        assertEquals(PsqlBackupsService.LIMIT, liveBackups(), "a freed slot takes one copy");
+    }
+
+    @Test
+    void repeatingARegionCountsEveryCopyAgainstItsLimit() {
+        mock.createBackup(system("ocid1.postgresqldbsystem.oc1.iad.repeat"), details("source"));
+        StoredBackup source = only(mock);
+        List<String> tooMany = Collections.nCopies(PsqlBackupsService.LIMIT + 1, "us-phoenix-1");
+
+        assertEquals("LimitExceeded", assertThrows(OciException.class, () -> mock.copyBackup(source.getId(),
+                Map.of("compartmentId", COMPARTMENT, "regions", tooMany), null)).getCode());
+        assertEquals(1, liveBackups());
+    }
+
+    private long liveBackups() {
+        return mock.listBackups(null, null, null, null, null, null, null, null, null, null).stream()
+                .filter(b -> !"DELETED".equals(b.getLifecycleState()))
+                .count();
+    }
+
+    @Test
+    void aCopyDoesNotMakeItsOlderDumpTheNewestToRecoverTo() {
+        String dbSystemId = "ocid1.postgresqldbsystem.oc1.iad.copyorder";
+        mock.createBackup(system(dbSystemId), details("older"));
+        StoredBackup older = only(mock);
+        clock.advance(60);
+        mock.createBackup(system(dbSystemId), details("newer"));
+        clock.advance(60);
+
+        mock.copyBackup(older.getId(), Map.of("compartmentId", COMPARTMENT, "regions", List.of("us-ashburn-1")), null);
+
+        StoredBackup recovered = mock.requireAtOrBefore(dbSystemId, "2026-10-29T12:30:00Z");
+        assertEquals("newer", recovered.getDisplayName());
+    }
+
+    @Test
+    void aBackupTheRestartInterruptedFailsAndCanBeDeleted() {
+        PsqlBackupsService interrupted = new PsqlBackupsService(new InMemoryStorage<>(), workRequests, containers,
+                OciContext.fromConfig(config), config, clock, command -> { });
+        String workRequestId = interrupted.createBackup(system("ocid1.postgresqldbsystem.oc1.iad.cut"), details("cut"));
+        StoredBackup backup = only(interrupted);
+        assertEquals("CREATING", backup.getLifecycleState());
+        assertEquals("Conflict", assertThrows(OciException.class,
+                () -> interrupted.deleteBackup(backup.getId(), null)).getCode());
+
+        interrupted.settleInterruptedBackups();
+
+        StoredBackup settled = interrupted.getBackup(backup.getId());
+        assertEquals("FAILED", settled.getLifecycleState());
+        assertTrue(settled.getLifecycleDetails().contains("restarted"));
+        assertEquals("FAILED", workRequests.get(workRequestId).getStatus());
+        interrupted.deleteBackup(backup.getId(), null);
+        assertEquals("DELETED", interrupted.getBackup(backup.getId()).getLifecycleState());
     }
 
     @Test

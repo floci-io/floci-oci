@@ -192,11 +192,10 @@ public class PsqlService implements Resettable, CompartmentUsage {
                     purgeQuietly(system);
                 }
             }
-            // After the containers: Docker does not remove a volume a container still mounts.
             try {
                 containers.removeBackups();
             } catch (RuntimeException e) {
-                LOG.warnv("Could not remove the PostgreSQL backup volume: {0}", e.getMessage());
+                LOG.warnv("Could not remove the PostgreSQL backups: {0}", e.getMessage());
             }
         }
         systems.clear();
@@ -970,6 +969,7 @@ public class PsqlService implements Resettable, CompartmentUsage {
      * cannot be resumed either: its work request fails and the system comes back ACTIVE as it was.
      */
     void restartPersistedSystems() {
+        backups.settleInterruptedBackups();
         for (StoredDbSystem system : allSystems()) {
             if (system.getWorkRequestId() != null) {
                 switch (system.getLifecycleState()) {

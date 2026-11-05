@@ -146,31 +146,37 @@ an `etag`; delete and change-compartment answer `204` with no work request.
 ## Backups and recovery
 
 A backup is a `pg_dumpall` of the running DB system: every database and role, without role
-passwords. Dumps live in one Docker volume, `floci-oci-psql-backups` (with
-`FLOCI_OCI_DOCKER_RESOURCE_NAMESPACE` set, the namespace follows `floci-oci-`), which every DB
-system container mounts at `/floci-backups`.
+passwords. Dumps are kept by the emulator, under `psql-backups` in its persistent path, and not in
+any DB system container: the admin of a DB system is a PostgreSQL superuser who can read any file
+its container can see. A dump is copied into a container only while it loads there, and removed
+afterwards. With `memory` storage the dumps are removed when the emulator stops.
 
 - **Create.** `CreateBackup` needs an `ACTIVE` DB system and answers `202` with a work request.
   The backup is `CREATING` while the dump runs in the background, then `ACTIVE` with
   `backupSize` in whole gigabytes (at least 1), or `FAILED` with the error in
-  `lifecycleDetails` and on the work request. `sourceType` is `MANUAL`. In mock mode the backup is
-  `ACTIVE` at once and holds no data.
+  `lifecycleDetails` and on the work request. A backup the emulator's restart interrupted is
+  `FAILED` too. `sourceType` is `MANUAL`. In mock mode the backup is `ACTIVE` at once and holds no
+  data.
 - **Restore.** `RestoreDbSystem` with a `backupId` replaces the DB system's databases with the
   backup, in place: every database is dropped (closing its connections) and the dump is loaded.
   Roles are kept, so the admin password stays the current one. A DB system created with source
   `BACKUP` starts empty and loads the backup before it turns `ACTIVE`, with the credentials of
-  its create request. A failed load leaves the DB system `NEEDS_ATTENTION` (`FAILED` on create).
+  its create request. Any SQL error stops the load: the only statement skipped is `CREATE ROLE`
+  for a role the DB system already has. A failed load leaves the DB system `NEEDS_ATTENTION`
+  (`FAILED` on create), and its old databases are already gone by then; `StartDbSystem` brings it
+  back, and another restore can run.
   The backup must be `ACTIVE`, in the same tenancy and region, and of the same major version. The
   `ad` of a restore is accepted and ignored, since every instance runs in the one container.
 - **Point in time.** floci-oci archives no WAL, so a `timeToRestore` (on `RestoreDbSystem`, or a
-  `POINT_IN_TIME_DB_SYSTEM` source) resolves to the newest `ACTIVE` backup of that DB system taken
-  at or before it; with none it is `400 InvalidParameter`. `GetPitrDetails` is `ACTIVE` when the
+  `POINT_IN_TIME_DB_SYSTEM` source) resolves to the newest `ACTIVE` backup of that DB system whose
+  data was taken at or before it, so a copy counts from its source's time, not its own; with none it is `400 InvalidParameter`. `GetPitrDetails` is `ACTIVE` when the
   management policy has `pitrPolicy.kind` `STANDARD`, with one recovery window from the first
   backup until now, and `INACTIVE` otherwise.
 - **Copy.** `BackupCopy` creates a `COPIED` backup in each requested region of the tenancy, at
-  once, sharing the source's dump, and records it in the source's `copyStatus`.
-- **Delete.** The backup stays readable as `DELETED`. Its dump stays in the volume until a state
-  reset (`POST /_floci-oci/state/reset`) removes the volume.
+  once, sharing the source's dump, and records it in the source's `copyStatus`. If any region would
+  go over the limit, it is `400 LimitExceeded` and no copy is made.
+- **Delete.** The backup stays readable as `DELETED`. Its dump stays until a state reset
+  (`POST /_floci-oci/state/reset`) removes the dumps.
 - **Schedules.** The `backupPolicy` of a management policy is stored and returned, but no
   scheduled backup is ever taken. `retentionPeriod` is stored, and nothing expires.
 - **Limit.** 10 backups that are not `DELETED` per tenancy per region, Oracle's service limit; the

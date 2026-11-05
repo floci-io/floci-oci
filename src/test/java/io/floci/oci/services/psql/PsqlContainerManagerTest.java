@@ -1,6 +1,7 @@
 package io.floci.oci.services.psql;
 
 import io.floci.oci.config.EmulatorConfig;
+import io.floci.oci.core.common.ServiceConfigAccess;
 import io.floci.oci.core.common.docker.ContainerBuilder;
 import io.floci.oci.core.common.docker.ContainerLifecycleManager;
 import io.floci.oci.core.common.docker.ContainerLifecycleManager.ExecResult;
@@ -63,7 +64,7 @@ class PsqlContainerManagerTest {
         portAllocator = mock(PortAllocator.class);
         lenient().when(portAllocator.allocate(15432, 15531)).thenReturn(15440);
         manager = new PsqlContainerManager(new ContainerBuilder(config, mock(DockerHostResolver.class), null),
-                lifecycleManager, imageCacheService, portAllocator, config);
+                lifecycleManager, imageCacheService, portAllocator, config, mock(ServiceConfigAccess.class));
     }
 
     private StoredDbSystem system(String dbVersion) {

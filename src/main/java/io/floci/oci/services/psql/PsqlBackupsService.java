@@ -36,8 +36,8 @@ import java.util.concurrent.Executors;
 
 /**
  * Backups of OCI Database with PostgreSQL DB systems. In real mode a backup is a
- * {@code pg_dumpall} of the running system, taken in the background into the backup volume
- * every DB system container mounts; creating a DB system from it, or restoring one, loads it
+ * {@code pg_dumpall} of the running system, taken in the background into the emulator's dump
+ * store, which no DB system container can see; creating a DB system from it, or restoring one, loads it
  * back. Create, delete, copy and change-compartment are work-request based, as in the SDK.
  */
 @ApplicationScoped
@@ -138,6 +138,7 @@ public class PsqlBackupsService implements CompartmentUsage {
             backup.setTenancyId(ociContext.tenancyId());
             backup.setRegion(ociContext.region());
             backup.setDumpId(backup.getId());
+            backup.setTimeDumped(now);
             backup.setEtag(Etags.newEtag());
             if (!realMode()) {
                 backup.setLifecycleState("ACTIVE");
@@ -184,6 +185,28 @@ public class PsqlBackupsService implements CompartmentUsage {
                     : List.of(new StoredWorkRequest.ErrorEntry("InternalServerError", failure));
             workRequests.finish(tenancyId, region, backup.getWorkRequestId(), failure == null ? "SUCCEEDED" : "FAILED",
                     errors);
+        }
+    }
+
+    /**
+     * After a restart of the emulator, fails the backups whose dump the restart interrupted: a
+     * dump cannot be resumed, and a backup left CREATING could never be deleted.
+     */
+    public synchronized void settleInterruptedBackups() {
+        for (StoredBackup backup : TenancyAwareStorageBackend.scanAll(backups)) {
+            if (!"CREATING".equals(backup.getLifecycleState())) {
+                continue;
+            }
+            String message = "The emulator restarted while the backup was being taken";
+            backup.setLifecycleState("FAILED");
+            backup.setLifecycleDetails(message);
+            touch(backup);
+            TenancyAwareStorageBackend.putIn(backups,
+                    TenancyAwareStorageBackend.regionalPartition(backup.getTenancyId(), backup.getRegion()),
+                    backup.getId(), backup);
+            workRequests.finish(backup.getTenancyId(), backup.getRegion(), backup.getWorkRequestId(), "FAILED",
+                    List.of(new StoredWorkRequest.ErrorEntry("InternalServerError", message)));
+            LOG.warnv("Backup {0} failed: {1}", backup.getId(), message);
         }
     }
 
@@ -250,7 +273,7 @@ public class PsqlBackupsService implements CompartmentUsage {
 
     /**
      * Deletes the backup, which stays readable as DELETED. Its dump file stays in the backup
-     * volume (a copy may share it) until a state reset removes the volume.
+     * store (a copy may share it) until a state reset removes the volume.
      */
     public synchronized String deleteBackup(String backupId, String ifMatch) {
         StoredBackup backup = getBackup(backupId);
@@ -295,6 +318,7 @@ public class PsqlBackupsService implements CompartmentUsage {
                 throw OciException.invalidParameter("Unknown region: " + region);
             }
         }
+        requireRoomForCopies(source.getTenancyId(), regions);
         Integer retentionPeriod = retention(details);
         String now = clock.instant().toString();
         List<StoredWorkRequest.Resource> resources = new ArrayList<>();
@@ -317,6 +341,7 @@ public class PsqlBackupsService implements CompartmentUsage {
             copy.setTenancyId(source.getTenancyId());
             copy.setRegion(region);
             copy.setDumpId(source.getDumpId());
+            copy.setTimeDumped(source.getTimeDumped());
             copy.setEtag(Etags.newEtag());
             TenancyAwareStorageBackend.putIn(backups,
                     TenancyAwareStorageBackend.regionalPartition(source.getTenancyId(), region), copy.getId(), copy);
@@ -352,8 +377,8 @@ public class PsqlBackupsService implements CompartmentUsage {
         Instant time = instant(timeToRestore, "timeToRestore");
         return backups.scan(k -> true).stream()
                 .filter(b -> dbSystemId.equals(b.getDbSystemId()) && "ACTIVE".equals(b.getLifecycleState()))
-                .filter(b -> !Instant.parse(b.getTimeCreated()).isAfter(time))
-                .max(Comparator.comparing(StoredBackup::getTimeCreated))
+                .filter(b -> !Instant.parse(b.getTimeDumped()).isAfter(time))
+                .max(Comparator.comparing(b -> Instant.parse(b.getTimeDumped())))
                 .orElseThrow(() -> OciException.invalidParameter("DB system " + dbSystemId
                         + " has no backup at or before " + timeToRestore + " to recover to"));
     }
@@ -371,9 +396,9 @@ public class PsqlBackupsService implements CompartmentUsage {
         if (standard) {
             backups.scan(k -> true).stream()
                     .filter(b -> system.getId().equals(b.getDbSystemId()) && "ACTIVE".equals(b.getLifecycleState()))
-                    .map(StoredBackup::getTimeCreated)
+                    .map(b -> Instant.parse(b.getTimeDumped()))
                     .min(Comparator.naturalOrder())
-                    .ifPresent(first -> windows.add(Map.of("timeRecoveryWindowStart", first,
+                    .ifPresent(first -> windows.add(Map.of("timeRecoveryWindowStart", first.toString(),
                             "timeRecoveryWindowEnd", clock.instant().toString())));
         }
         wire.put("recoveryTimeWindows", windows);
@@ -389,6 +414,21 @@ public class PsqlBackupsService implements CompartmentUsage {
         if (live >= LIMIT) {
             throw OciException.limitExceeded("The tenancy already has " + LIMIT
                     + " PostgreSQL backups in this region, the service limit");
+        }
+    }
+
+    /** Every requested copy has to fit, counting a region named twice, before any is written. */
+    private void requireRoomForCopies(String tenancyId, List<String> regions) {
+        for (String region : Set.copyOf(regions)) {
+            long live = TenancyAwareStorageBackend.scanAll(backups).stream()
+                    .filter(b -> tenancyId.equals(b.getTenancyId()) && region.equals(b.getRegion()))
+                    .filter(b -> !"DELETED".equals(b.getLifecycleState()))
+                    .count();
+            long requested = regions.stream().filter(region::equals).count();
+            if (live + requested > LIMIT) {
+                throw OciException.limitExceeded("The tenancy would have more than " + LIMIT
+                        + " PostgreSQL backups in " + region + ", the service limit");
+            }
         }
     }
 

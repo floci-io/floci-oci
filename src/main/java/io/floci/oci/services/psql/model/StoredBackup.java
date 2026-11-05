@@ -34,6 +34,7 @@ public class StoredBackup {
     private String tenancyId;
     private String region;
     private String dumpId;
+    private String timeDumped;
     private String workRequestId;
 
     /** The BackupSummary body. */
@@ -244,6 +245,15 @@ public class StoredBackup {
 
     public void setDumpId(String dumpId) {
         this.dumpId = dumpId;
+    }
+
+    /** When the data in the dump was taken. A copy has its own timeCreated, but the source's dump. */
+    public String getTimeDumped() {
+        return timeDumped;
+    }
+
+    public void setTimeDumped(String timeDumped) {
+        this.timeDumped = timeDumped;
     }
 
     public String getWorkRequestId() {

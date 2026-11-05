@@ -1,6 +1,7 @@
 package io.floci.oci.services.psql;
 
 import io.floci.oci.config.EmulatorConfig;
+import io.floci.oci.core.common.ServiceConfigAccess;
 import io.floci.oci.core.common.docker.ContainerBuilder;
 import io.floci.oci.core.common.docker.ContainerLifecycleManager;
 import io.floci.oci.core.common.docker.ContainerLifecycleManager.EndpointInfo;
@@ -10,16 +11,21 @@ import io.floci.oci.core.common.docker.ContainerStorageHelper;
 import io.floci.oci.core.common.docker.ImageCacheService;
 import io.floci.oci.core.common.docker.PortAllocator;
 import io.floci.oci.services.psql.model.StoredDbSystem;
+import jakarta.annotation.PreDestroy;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.stream.Stream;
 
 /**
  * Runs one PostgreSQL container per DB system. It owns only the mechanics: it never reads the
@@ -37,13 +43,30 @@ public class PsqlContainerManager {
     private static final Duration EXEC_TIMEOUT = Duration.ofSeconds(30);
     private static final Duration PROBE_TIMEOUT = Duration.ofSeconds(5);
     private static final Duration DUMP_TIMEOUT = Duration.ofMinutes(10);
-    /** Where every DB system container mounts the volume that holds the backups. */
-    static final String BACKUP_DIR = "/floci-backups";
-    private static final String RESTORE = "test -f \"$FLOCI_DUMP\""
-            + " && printf '%s\\n' \"SELECT format('DROP DATABASE %I WITH (FORCE)', datname) FROM pg_database"
-            + " WHERE NOT datistemplate \\\\gexec\" 'CREATE DATABASE postgres;'"
-            + " | psql -v ON_ERROR_STOP=1 -q -U \"$FLOCI_ROLE\" -d template1"
-            + " && psql -q -U \"$FLOCI_ROLE\" -d template1 -f \"$FLOCI_DUMP\" > /dev/null";
+    /**
+     * Where a dump sits inside a container, only while it is written or loaded. Dumps are kept
+     * outside the containers, because the admin of a DB system is a superuser who can read any
+     * file the container can see.
+     */
+    private static final String DUMP_DIR = "/tmp";
+    private static final String DUMPS_STORE = "psql-backups";
+    /**
+     * Any error stops the load and fails the restore, so a partial restore never looks like a
+     * good one. The one statement that may fail is taken out first: {@code CREATE ROLE} for a role
+     * the system already has, such as its admin. Roles come before the first {@code \connect} of
+     * a {@code pg_dumpall}, so that is as far as the filter looks, and table data stays untouched.
+     */
+    private static final String RESTORE = String.join("\n",
+            "set -e",
+            "test -f \"$FLOCI_DUMP\"",
+            "printf '%s\\n' \"SELECT format('DROP DATABASE %I WITH (FORCE)', datname) FROM pg_database"
+                    + " WHERE NOT datistemplate \\\\gexec\" 'CREATE DATABASE postgres;'"
+                    + " | psql -v ON_ERROR_STOP=1 -q -U \"$FLOCI_ROLE\" -d template1",
+            "psql -Atq -U \"$FLOCI_ROLE\" -d template1"
+                    + " -c \"SELECT format('CREATE ROLE %I;', rolname) FROM pg_roles\" > \"$FLOCI_DUMP.roles\"",
+            "awk 'NR == FNR { existing[$0]; next } /^\\\\connect / { rolesDone = 1 }"
+                    + " rolesDone || !($0 in existing)' \"$FLOCI_DUMP.roles\" \"$FLOCI_DUMP\" > \"$FLOCI_DUMP.load\"",
+            "psql -v ON_ERROR_STOP=1 -q -U \"$FLOCI_ROLE\" -d template1 -f \"$FLOCI_DUMP.load\" > /dev/null");
 
     /**
      * Writes the certificate and key the container received in its environment where Postgres
@@ -73,18 +96,21 @@ public class PsqlContainerManager {
     private final ImageCacheService imageCacheService;
     private final PortAllocator portAllocator;
     private final EmulatorConfig config;
+    private final ServiceConfigAccess serviceConfigAccess;
 
     @Inject
     public PsqlContainerManager(ContainerBuilder containerBuilder,
                                 ContainerLifecycleManager lifecycleManager,
                                 ImageCacheService imageCacheService,
                                 PortAllocator portAllocator,
-                                EmulatorConfig config) {
+                                EmulatorConfig config,
+                                ServiceConfigAccess serviceConfigAccess) {
         this.containerBuilder = containerBuilder;
         this.lifecycleManager = lifecycleManager;
         this.imageCacheService = imageCacheService;
         this.portAllocator = portAllocator;
         this.config = config;
+        this.serviceConfigAccess = serviceConfigAccess;
     }
 
     /**
@@ -127,7 +153,6 @@ public class PsqlContainerManager {
         int hostPort = claimPort(system.getHostPort());
         try {
             lifecycleManager.ensureVolume(system.getVolumeName());
-            lifecycleManager.ensureVolume(backupVolumeName());
             ContainerSpec spec = containerBuilder.newContainer(image)
                     .withName(name)
                     .withEnv("POSTGRES_USER", system.getAdminUsername())
@@ -138,7 +163,6 @@ public class PsqlContainerManager {
                     .withEntrypoint(entrypoint(system))
                     .withPortBinding(POSTGRES_PORT, hostPort)
                     .withNamedVolume(system.getVolumeName(), dataPath(major))
-                    .withNamedVolume(backupVolumeName(), BACKUP_DIR)
                     .withDockerNetwork(Optional.empty())
                     .withLogRotation()
                     .withLabels(ContainerStorageHelper.resourceIdentityLabels(
@@ -287,56 +311,112 @@ public class PsqlContainerManager {
         lifecycleManager.removeVolume(system.getVolumeName());
     }
 
-    /** The one volume every DB system container shares, holding a dump file per backup. */
-    public String backupVolumeName() {
-        return ContainerStorageHelper.dockerName(config, "psql-backups");
-    }
-
     /**
-     * Dumps every database and role of the running system into the backup volume, as
-     * {@code <dumpId>.sql}, and returns the dump's size in bytes. Role passwords stay out
-     * ({@code --no-role-passwords}), so a system the dump is loaded into keeps its own.
+     * Dumps every database and role of the running system into the emulator's dump store and
+     * returns the dump's size in bytes. Role passwords stay out ({@code --no-role-passwords}), so
+     * a system the dump is loaded into keeps its own.
      *
      * @throws IllegalStateException when the dump fails
      */
     public long dump(StoredDbSystem system, String dumpId) {
-        String file = BACKUP_DIR + "/" + dumpId + ".sql";
-        ExecResult result = lifecycleManager.exec(system.getContainerName(),
-                List.of("FLOCI_ROLE=" + system.getAdminUsername(), "FLOCI_DUMP=" + file),
-                List.of("sh", "-c", "pg_dumpall --no-role-passwords -U \"$FLOCI_ROLE\""
-                        + " -f \"$FLOCI_DUMP\" && stat -c %s \"$FLOCI_DUMP\""),
-                DUMP_TIMEOUT);
-        if (!result.succeeded()) {
-            throw new IllegalStateException("pg_dumpall failed (exit " + result.exitCode() + "): "
-                    + result.stderr().strip());
+        String file = dumpFile(dumpId);
+        try {
+            ExecResult result = lifecycleManager.exec(system.getContainerName(),
+                    List.of("FLOCI_ROLE=" + system.getAdminUsername(), "FLOCI_DUMP=" + file),
+                    List.of("sh", "-c", "pg_dumpall --no-role-passwords -U \"$FLOCI_ROLE\""
+                            + " -f \"$FLOCI_DUMP\" && stat -c %s \"$FLOCI_DUMP\""),
+                    DUMP_TIMEOUT);
+            if (!result.succeeded()) {
+                throw new IllegalStateException("pg_dumpall failed (exit " + result.exitCode() + "): "
+                        + result.stderr().strip());
+            }
+            long bytes = Long.parseLong(result.stdout().strip());
+            lifecycleManager.copyFromContainer(system.getContainerName(), file, storedDump(dumpId));
+            return bytes;
+        } finally {
+            removeDumpFiles(system, file);
         }
-        return Long.parseLong(result.stdout().strip());
     }
 
     /**
-     * Replaces the running system's databases with the dump {@code dumpId}. From
-     * {@code template1}, every database that is not a template is dropped (closing its
-     * connections) and an empty {@code postgres} created; then the dump is loaded. Roles are
-     * kept: a role the dump creates that already exists, such as the admin, fails and is
-     * skipped, as psql does without ON_ERROR_STOP.
+     * Replaces the running system's databases with the dump {@code dumpId}, which reaches the
+     * container only for the load. From {@code template1}, every database that is not a template
+     * is dropped (closing its connections) and an empty {@code postgres} created; then the dump is
+     * loaded. The roles the system has are kept.
      *
-     * @throws IllegalStateException when the dump file is missing or the databases cannot be dropped
+     * @throws IllegalStateException when the dump is missing or any part of the load fails
      */
     public void restore(StoredDbSystem system, String dumpId) {
-        String file = BACKUP_DIR + "/" + dumpId + ".sql";
-        ExecResult result = lifecycleManager.exec(system.getContainerName(),
-                List.of("FLOCI_ROLE=" + system.getAdminUsername(), "FLOCI_DUMP=" + file),
-                List.of("sh", "-c", RESTORE),
-                DUMP_TIMEOUT);
-        if (!result.succeeded()) {
-            throw new IllegalStateException("The backup could not be restored (exit " + result.exitCode() + "): "
-                    + result.stderr().strip());
+        Path stored = storedDump(dumpId);
+        if (!Files.exists(stored)) {
+            throw new IllegalStateException("The dump of backup " + dumpId + " is gone");
+        }
+        String file = dumpFile(dumpId);
+        try {
+            lifecycleManager.copyToContainer(system.getContainerName(), stored, DUMP_DIR);
+            ExecResult result = lifecycleManager.exec(system.getContainerName(),
+                    List.of("FLOCI_ROLE=" + system.getAdminUsername(), "FLOCI_DUMP=" + file),
+                    List.of("sh", "-c", RESTORE),
+                    DUMP_TIMEOUT);
+            if (!result.succeeded()) {
+                throw new IllegalStateException("The backup could not be restored (exit " + result.exitCode() + "): "
+                        + result.stderr().strip());
+            }
+        } finally {
+            removeDumpFiles(system, file);
         }
     }
 
-    /** Removes the backup volume: for a state reset, once no container uses it. */
+    /** Removes every stored dump: for a state reset. */
     public void removeBackups() {
-        lifecycleManager.removeVolume(backupVolumeName());
+        Path store = dumpsStore();
+        if (!Files.exists(store)) {
+            return;
+        }
+        try (Stream<Path> dumps = Files.list(store)) {
+            for (Path dump : dumps.toList()) {
+                Files.deleteIfExists(dump);
+            }
+            Files.deleteIfExists(store);
+        } catch (IOException e) {
+            throw new IllegalStateException("Could not remove " + store + ": " + e.getMessage(), e);
+        }
+    }
+
+    /** With in-memory storage the backup records die with the emulator, so their dumps do too. */
+    @PreDestroy
+    void removeDumpsThatWouldOutliveTheirBackups() {
+        if ("memory".equals(serviceConfigAccess.storageMode("psql"))) {
+            try {
+                removeBackups();
+            } catch (RuntimeException e) {
+                LOG.warnv("Could not remove the PostgreSQL dumps: {0}", e.getMessage());
+            }
+        }
+    }
+
+    private static String dumpFile(String dumpId) {
+        return DUMP_DIR + "/" + dumpId + ".sql";
+    }
+
+    /** The dump as Docker hands it out: a tar archive holding {@code <dumpId>.sql}. */
+    private Path storedDump(String dumpId) {
+        return dumpsStore().resolve(dumpId + ".tar");
+    }
+
+    private Path dumpsStore() {
+        return Path.of(config.storage().persistentPath(), DUMPS_STORE);
+    }
+
+    /** Best effort: the container may be gone, and a dump left in it holds only its own data. */
+    private void removeDumpFiles(StoredDbSystem system, String file) {
+        try {
+            lifecycleManager.exec(system.getContainerName(), List.of("FLOCI_DUMP=" + file),
+                    List.of("sh", "-c", "rm -f \"$FLOCI_DUMP\" \"$FLOCI_DUMP.roles\" \"$FLOCI_DUMP.load\""),
+                    EXEC_TIMEOUT);
+        } catch (RuntimeException e) {
+            LOG.debugv("Could not remove {0} from {1}: {2}", file, system.getContainerName(), e.getMessage());
+        }
     }
 
     /** The host a client reaches a published port at, which the certificate has to name. */

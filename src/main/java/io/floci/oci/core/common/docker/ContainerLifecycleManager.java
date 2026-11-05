@@ -26,8 +26,13 @@ import org.jboss.logging.Logger;
 
 import java.io.ByteArrayOutputStream;
 import java.io.Closeable;
+import java.io.IOException;
+import java.io.InputStream;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.List;
@@ -599,6 +604,41 @@ public class ContainerLifecycleManager {
 
         public boolean succeeded() {
             return exitCode == 0;
+        }
+    }
+
+    /**
+     * Saves {@code path} of a container as a tar archive at {@code archive}, which appears only
+     * once it is complete.
+     *
+     * @throws IllegalStateException when the file cannot be read or saved
+     */
+    public void copyFromContainer(String containerId, String path, Path archive) {
+        Path partial = archive.resolveSibling(archive.getFileName() + ".partial");
+        try (InputStream tar = dockerClient.copyArchiveFromContainerCmd(containerId, path).exec()) {
+            Files.createDirectories(archive.getParent());
+            Files.copy(tar, partial, StandardCopyOption.REPLACE_EXISTING);
+            Files.move(partial, archive, StandardCopyOption.REPLACE_EXISTING);
+        } catch (IOException e) {
+            throw new IllegalStateException("Could not copy " + path + " out of " + containerId + ": "
+                    + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Unpacks the tar archive at {@code archive} into {@code directory} of a container.
+     *
+     * @throws IllegalStateException when the archive cannot be read
+     */
+    public void copyToContainer(String containerId, Path archive, String directory) {
+        try (InputStream tar = Files.newInputStream(archive)) {
+            dockerClient.copyArchiveToContainerCmd(containerId)
+                    .withTarInputStream(tar)
+                    .withRemotePath(directory)
+                    .exec();
+        } catch (IOException e) {
+            throw new IllegalStateException("Could not copy " + archive + " into " + containerId + ": "
+                    + e.getMessage(), e);
         }
     }
 

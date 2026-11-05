@@ -257,10 +257,68 @@ class PsqlDockerTest {
 
         given().when().delete("/20220915/dbSystems/" + restoredId).then().statusCode(202);
         awaitState(restoredId, "DELETED");
+
+        assertEquals("0", query("SELECT count(*) FROM pg_ls_dir('/floci-backups', true, false)"),
+                "no shared backup directory: an admin is a superuser and could read any dump there");
+        assertEquals("0", query("SELECT count(*) FROM pg_ls_dir('/tmp') AS name WHERE name LIKE '%.sql%'"),
+                "a dump is in the container only while it is written or loaded");
     }
 
     @Test
     @Order(7)
+    void aRestoreThatCannotLoadTheWholeDumpFailsAndTheSystemRecovers() throws Exception {
+        execute("CREATE DATABASE clash");
+        String good = takeBackup("docker-with-clash");
+        // Not dropped by the restore, since it is a template, so the dump's CREATE DATABASE fails.
+        execute("ALTER DATABASE clash IS_TEMPLATE true");
+
+        awaitWorkRequest(restore(good), "FAILED");
+        awaitState("NEEDS_ATTENTION");
+
+        given().when().post("/20220915/dbSystems/" + dbSystemId + "/actions/start")
+            .then().statusCode(202);
+        awaitState("ACTIVE");
+        jdbcUrl = jdbcUrl();
+        execute("ALTER DATABASE clash IS_TEMPLATE false");
+        execute("DROP DATABASE clash");
+
+        awaitWorkRequest(restore(good));
+        awaitState("ACTIVE");
+        assertEquals(List.of("kept across a restart"), items(jdbcUrl, NEW_PASSWORD));
+    }
+
+    private String takeBackup(String name) throws InterruptedException {
+        String workRequest = given().contentType("application/json")
+                .body(Map.of("displayName", name, "compartmentId", compartment, "dbSystemId", dbSystemId))
+            .when().post("/20220915/backups")
+            .then().statusCode(202).extract().header("opc-work-request-id");
+        awaitWorkRequest(workRequest);
+        return given().when().get("/20220915/workRequests/" + workRequest)
+            .then().statusCode(200).extract().path("resources[0].identifier");
+    }
+
+    private String restore(String backupId) {
+        return given().contentType("application/json").body(Map.of("backupId", backupId))
+            .when().post("/20220915/dbSystems/" + dbSystemId + "/actions/restore")
+            .then().statusCode(202).extract().header("opc-work-request-id");
+    }
+
+    private String query(String sql) throws SQLException {
+        try (Connection connection = connect(NEW_PASSWORD); Statement statement = connection.createStatement();
+             ResultSet row = statement.executeQuery(sql)) {
+            assertTrue(row.next());
+            return row.getString(1);
+        }
+    }
+
+    private void execute(String sql) throws SQLException {
+        try (Connection connection = connect(NEW_PASSWORD); Statement statement = connection.createStatement()) {
+            statement.execute(sql);
+        }
+    }
+
+    @Test
+    @Order(8)
     void stopAndStartKeepTheData() throws Exception {
         given().when().post("/20220915/dbSystems/" + dbSystemId + "/actions/stop")
             .then().statusCode(202);
@@ -280,7 +338,7 @@ class PsqlDockerTest {
     }
 
     @Test
-    @Order(8)
+    @Order(9)
     void deleteRemovesTheContainer() throws Exception {
         given().when().delete("/20220915/dbSystems/" + dbSystemId)
             .then().statusCode(202);
