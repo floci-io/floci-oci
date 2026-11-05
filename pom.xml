@@ -124,7 +124,7 @@
             <version>3.7.1</version>
         </dependency>
         <!-- httpclient5 5.5.1 and commons-compress 1.28.0 (pulled by docker-java) optionally
-             depend on Brotli, XZ, and Zstandard; GraalVM native image requires the classes on the classpath -->
+             depend on Brotli and XZ; GraalVM native image requires the classes on the classpath -->
         <dependency>
             <groupId>org.brotli</groupId>
             <artifactId>dec</artifactId>
@@ -134,11 +134,6 @@
             <groupId>org.tukaani</groupId>
             <artifactId>xz</artifactId>
             <version>1.12</version>
-        </dependency>
-        <dependency>
-            <groupId>com.github.luben</groupId>
-            <artifactId>zstd-jni</artifactId>
-            <version>1.5.7-17</version>
         </dependency>
 
         <!-- BouncyCastle for self-signed TLS certificate generation and PEM handling -->
