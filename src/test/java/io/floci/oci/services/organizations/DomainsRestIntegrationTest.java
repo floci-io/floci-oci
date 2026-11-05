@@ -1,12 +1,14 @@
 package io.floci.oci.services.organizations;
 
 import io.quarkus.test.junit.QuarkusTest;
+import io.restassured.response.Response;
 import org.junit.jupiter.api.Test;
 
 import java.util.Map;
 
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.equalTo;
+import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.notNullValue;
 import static org.hamcrest.Matchers.startsWith;
 
@@ -68,6 +70,100 @@ class DomainsRestIntegrationTest {
         given().header("Authorization", signedAs(owner))
             .when().get("/20230401/domainGovernances/" + governanceId)
             .then().statusCode(200).body("lifecycleState", equalTo("INACTIVE"));
+    }
+
+    @Test
+    void updateDomainChangesItsTagsAndEtagAndRefusesAStaleIfMatch() {
+        String owner = "ocid1.tenancy.oc1..domupdate" + System.nanoTime();
+        Response created = claim(owner);
+        String domainId = created.path("id");
+        String etag = created.header("etag");
+        Map<String, Object> tags = Map.of("freeformTags", Map.of("team", "ops"),
+                "definedTags", Map.of("finance", Map.of("costCenter", "42")));
+
+        given().header("Authorization", signedAs(owner)).header("if-match", "stale").contentType("application/json")
+                .body(tags)
+            .when().put("/20230401/domains/" + domainId)
+            .then()
+                .statusCode(412)
+                .header("opc-request-id", notNullValue())
+                .body("code", equalTo("NoEtagMatch"));
+
+        String updatedEtag = given().header("Authorization", signedAs(owner)).header("if-match", etag)
+                .contentType("application/json").body(tags)
+            .when().put("/20230401/domains/" + domainId)
+            .then()
+                .statusCode(200)
+                .header("opc-request-id", notNullValue())
+                .header("etag", not(equalTo(etag)))
+                .body("freeformTags.team", equalTo("ops"))
+                .body("definedTags.finance.costCenter", equalTo("42"))
+                .extract().header("etag");
+
+        given().header("Authorization", signedAs(owner))
+            .when().get("/20230401/domains/" + domainId)
+            .then()
+                .statusCode(200)
+                .header("etag", equalTo(updatedEtag))
+                .body("freeformTags.team", equalTo("ops"))
+                .body("definedTags.finance.costCenter", equalTo("42"));
+    }
+
+    @Test
+    void updateDomainGovernanceChangesItsFieldsAndEtagAndRefusesAStaleIfMatch() {
+        String owner = "ocid1.tenancy.oc1..govupdate" + System.nanoTime();
+        String domainId = claim(owner).path("id");
+        Response created = given().header("Authorization", signedAs(owner)).contentType("application/json")
+                .body(Map.of("compartmentId", owner, "domainId", domainId, "subscriptionEmail", "ops@example.com",
+                        "onsTopicId", "ocid1.onstopic.oc1.iad.t", "onsSubscriptionId", "ocid1.onssubscription.oc1.iad.s"))
+            .when().post("/20230401/domainGovernances")
+            .then().statusCode(200).extract().response();
+        String governanceId = created.path("id");
+        String etag = created.header("etag");
+        Map<String, Object> changes = Map.of("subscriptionEmail", "new@example.com", "isGovernanceEnabled", false,
+                "freeformTags", Map.of("team", "ops"),
+                "definedTags", Map.of("finance", Map.of("costCenter", "42")));
+
+        given().header("Authorization", signedAs(owner)).header("if-match", "stale").contentType("application/json")
+                .body(changes)
+            .when().put("/20230401/domainGovernances/" + governanceId)
+            .then()
+                .statusCode(412)
+                .header("opc-request-id", notNullValue())
+                .body("code", equalTo("NoEtagMatch"));
+        given().header("Authorization", signedAs(owner))
+            .when().get("/20230401/domainGovernances/" + governanceId)
+            .then()
+                .statusCode(200)
+                .header("etag", equalTo(etag))
+                .body("subscriptionEmail", equalTo("ops@example.com"))
+                .body("isGovernanceEnabled", equalTo(true));
+
+        String updatedEtag = given().header("Authorization", signedAs(owner)).header("if-match", etag)
+                .contentType("application/json").body(changes)
+            .when().put("/20230401/domainGovernances/" + governanceId)
+            .then()
+                .statusCode(200)
+                .header("opc-request-id", notNullValue())
+                .header("etag", not(equalTo(etag)))
+                .extract().header("etag");
+
+        given().header("Authorization", signedAs(owner))
+            .when().get("/20230401/domainGovernances/" + governanceId)
+            .then()
+                .statusCode(200)
+                .header("etag", equalTo(updatedEtag))
+                .body("subscriptionEmail", equalTo("new@example.com"))
+                .body("isGovernanceEnabled", equalTo(false))
+                .body("freeformTags.team", equalTo("ops"))
+                .body("definedTags.finance.costCenter", equalTo("42"));
+    }
+
+    private static Response claim(String owner) {
+        return given().header("Authorization", signedAs(owner)).contentType("application/json")
+                .body(Map.of("compartmentId", owner, "domainName", "u" + System.nanoTime() + ".example.com"))
+            .when().post("/20230401/domains")
+            .then().statusCode(200).extract().response();
     }
 
     @Test
