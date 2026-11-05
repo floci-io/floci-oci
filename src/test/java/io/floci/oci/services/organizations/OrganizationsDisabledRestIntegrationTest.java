@@ -34,6 +34,15 @@ class OrganizationsDisabledRestIntegrationTest {
     }
 
     @Test
+    void disabledOrganizationsAlsoDisablesSubscriptions() {
+        given()
+            .when().get("/20230401/subscriptions")
+            .then()
+                .statusCode(503)
+                .body("code", equalTo("ServiceUnavailable"));
+    }
+
+    @Test
     void disabledOrganizationsAlsoDisablesDomains() {
         given().queryParam("compartmentId", "ocid1.tenancy.oc1..any")
             .when().get("/20230401/domains")

@@ -17,6 +17,8 @@ serves it on port 4599 with the other services.
 | Governance | AddGovernance, RemoveGovernance |
 | Domains | CreateDomain, GetDomain, ListDomains, UpdateDomain, DeleteDomain |
 | Domain governance | CreateDomainGovernance, GetDomainGovernance, ListDomainGovernances, UpdateDomainGovernance, DeleteDomainGovernance |
+| Subscriptions | ListSubscriptions, GetSubscription, ListSubscriptionLineItems, ListAvailableRegions, ListAssignedSubscriptions, GetAssignedSubscription, ListAssignedSubscriptionLineItems |
+| Subscription mappings | CreateSubscriptionMapping, GetSubscriptionMapping, ListSubscriptionMappings, DeleteSubscriptionMapping |
 | Work requests | Get, List, errors, logs (`/20230401/workRequests`) |
 
 ## How isolation works
@@ -74,8 +76,8 @@ The OCI SDKs leave these open, so floci-oci picks:
 - `governanceStatus` defaults to `OPTED_IN` when omitted.
 - Organizations and links get global OCIDs: `ocid1.organization.<realm>..…` and
   `ocid1.link.<realm>..…`. A child tenancy's OCID uses the realm of its home region.
-- When no `subscriptionId` is given, the organization gets a synthetic
-  `ocid1.organizationssubscription…` default subscription.
+- When no `subscriptionId` is given, the organization's default subscription is the parent
+  tenancy's own subscription (see Subscriptions below).
 - **The child tenancy limit is not enforced.** Oracle's `child-tenancy-count` limit defaults to
   0 in every tenancy (service limits, Organizations), so a tenancy needs it raised before its
   first child; floci-oci behaves as a tenancy whose limit has been raised, and creates any
@@ -159,9 +161,37 @@ The SDKs give the shapes and the status enum, but not the verification flow, so 
 - Domains and their governance are visible only to the tenancy that claimed them. Changing a
   released domain or an inactive governance is `409 Conflict`.
 
+### Subscriptions
+
+Subscriptions are billing records held in Oracle's commerce systems, which floci-oci does not
+have, so it models the minimum the API needs:
+
+- **Every tenancy owns one subscription**, a V2 (cloud) subscription: `entityVersion` `V2`,
+  service `CLOUDCM`, currency `USD`, `ACTIVE`. Its OCID is derived from the tenancy OCID, so it is
+  the same on every call and needs no stored record. `ListSubscriptions` returns it (and nothing
+  for `entityVersion=V1`); `GetSubscription` only for the tenancy that owns it.
+- **Assigned subscriptions** are the ones a tenancy consumes: those mapped to it and, for a child
+  with no mapping, its organization's default subscription, as the SDK describes ("any tenancy
+  joining the organization will automatically get assigned this subscription"). An assigned
+  subscription keeps the id of the subscription it is.
+- **A subscription mapping** assigns the caller's own subscription to the caller or to an `ACTIVE`
+  child of its organization (`404` for any other tenancy, `409 Conflict` for a second active
+  mapping of the same pair). It is synchronous, `isExplicitlyAssigned` `true`.
+  `DeleteSubscriptionMapping` answers `204` and keeps the mapping readable as `DELETED` with
+  `timeTerminated`, as Terraform's `oci_tenantmanagercontrolplane_subscription_mapping` reads it.
+- Each subscription has one synthetic line item (`PAYGO`, ten years from the tenancy's creation),
+  and its available regions are the regions of the tenancy's realm.
+- A mapping to a child ends (`DELETED`, `timeTerminated` set) when the child stops being an `ACTIVE`
+  member, for example when it is terminated.
+- A `defaultUcmSubscriptionId` set through `UpdateOrganization` or `CreateChildTenancy` that is not
+  a tenancy's own subscription is still what children consume, but no tenancy owns it: it has no
+  line items or available regions, and it cannot be mapped.
+- Subscriptions have no stored record, so their `etag` is derived from the returned shape. A
+  subscription's dates are its owning tenancy's creation time.
+
 ## Not implemented yet
 
-Subscriptions and orders.
+Orders.
 
 ## Quickstart
 

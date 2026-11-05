@@ -64,6 +64,13 @@ public final class EmulatorFixture {
         return client;
     }
 
+    public static com.oracle.bmc.tenantmanagercontrolplane.SubscriptionClient subscriptionsAs(String tenancyId) {
+        var client = com.oracle.bmc.tenantmanagercontrolplane.SubscriptionClient.builder()
+                .region(Region.US_ASHBURN_1).build(buildAuth(tenancyId));
+        client.setEndpoint(ENDPOINT);
+        return client;
+    }
+
     public static com.oracle.bmc.tenantmanagercontrolplane.DomainClient domainsAs(String tenancyId) {
         var client = com.oracle.bmc.tenantmanagercontrolplane.DomainClient.builder()
                 .region(Region.US_ASHBURN_1).build(buildAuth(tenancyId));
