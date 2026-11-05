@@ -19,9 +19,9 @@ import io.floci.oci.core.tls.CertificateGenerator.GeneratedCertificate;
 import io.floci.oci.core.tls.KeyAlgorithm;
 import io.floci.oci.core.workrequest.StoredWorkRequest;
 import io.floci.oci.core.workrequest.WorkRequestService;
-import io.floci.oci.services.psql.model.StoredDbInstance;
 import io.floci.oci.services.psql.model.StoredBackup;
 import io.floci.oci.services.psql.model.StoredConfiguration;
+import io.floci.oci.services.psql.model.StoredDbInstance;
 import io.floci.oci.services.psql.model.StoredDbSystem;
 import io.floci.oci.services.vault.VaultSecretsService;
 import io.quarkus.runtime.StartupEvent;
@@ -53,6 +53,8 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * OCI Database with PostgreSQL: the DB system management plane, and the lifecycle of the
@@ -69,6 +71,13 @@ public class PsqlService implements Resettable, CompartmentUsage {
     private static final Logger LOG = Logger.getLogger(PsqlService.class);
 
     static final String WR_SERVICE = "psql";
+    static final String STANDALONE = "STANDALONE_DB_SYSTEM";
+    static final String PRIMARY = "PRIMARY_DB_SYSTEM";
+    static final String WARM_STANDBY = "WARM_STANDBY_DB_SYSTEM";
+    static final Set<String> CHANGE_MODES = Set.of("REPLAY_PENDING_UPDATES", "IMMEDIATELY");
+    static final Set<String> SYSTEM_ROLES = Set.of(STANDALONE, PRIMARY, WARM_STANDBY, "PILOT_LIGHT_DB_SYSTEM");
+    /** The selection a REMOVE patch names one instance by, as Terraform and the SDK examples send it. */
+    private static final Pattern INSTANCE_SELECTION = Pattern.compile("instances\\[\\?id == '([^']+)'\\]");
     /** Terraform finds the DB system in a work request by an entity type containing "dbsystem". */
     static final Set<String> APPLY_CONFIG = Set.of("RESTART", "RELOAD");
     static final String ENTITY_TYPE = "postgresqlDbSystem";
@@ -229,9 +238,16 @@ public class PsqlService implements Resettable, CompartmentUsage {
         Map<String, Object> storage = storageDetails(PsqlRequests.requireMap(details, "storageDetails"));
         Map<String, Object> network = networkDetails(PsqlRequests.requireMap(details, "networkDetails"));
         RestoreSource source = sourceDetails(PsqlRequests.map(details, "source"), major);
-        Map<String, Object> credentials = PsqlRequests.requireMap(details, "credentials");
-        String adminUsername = PsqlRequests.requireString(credentials, "username");
-        String masterPassword = resolvePassword(PsqlRequests.requireMap(credentials, "passwordDetails"));
+        // A replica may leave out credentials: it takes the primary's admin username, and a
+        // password nobody knows until ResetMasterUserPassword sets one, since none is stored.
+        Map<String, Object> credentials = source.primary() != null
+                ? PsqlRequests.map(details, "credentials") : PsqlRequests.requireMap(details, "credentials");
+        String adminUsername = credentials != null ? PsqlRequests.requireString(credentials, "username")
+                : source.primary().getAdminUsername();
+        String masterPassword = credentials != null
+                ? resolvePassword(PsqlRequests.requireMap(credentials, "passwordDetails"))
+                : UUID.randomUUID() + "-Aa1";
+        Map<String, Object> replicationConfig = replicationConfig(PsqlRequests.map(details, "replicationConfig"), null);
         String systemType = PsqlRequests.string(details, "systemType");
         if (systemType != null && !PsqlCatalog.SYSTEM_TYPE.equals(systemType)) {
             throw OciException.invalidParameter("Unsupported systemType: " + systemType);
@@ -255,7 +271,8 @@ public class PsqlService implements Resettable, CompartmentUsage {
         system.setCompartmentId(compartmentId);
         system.setTimeCreated(now);
         system.setSystemType(PsqlCatalog.SYSTEM_TYPE);
-        system.setSystemRole("STANDALONE_DB_SYSTEM");
+        system.setSystemRole(source.primary() != null ? WARM_STANDBY : STANDALONE);
+        system.setReplicationConfig(replicationConfig);
         system.setDbVersion(major);
         system.setShape(shape.name());
         system.setInstanceOcpuCount(firstNonNull(shape.ocpuCount(), PsqlRequests.integer(details, "instanceOcpuCount"),
@@ -283,6 +300,9 @@ public class PsqlService implements Resettable, CompartmentUsage {
                 system.getContainerName(), certificateNames(system), KeyAlgorithm.RSA_2048);
         system.setCertificatePem(certificate.certificatePem());
         system.setPrivateKeyPem(certificate.privateKeyPem());
+        if (source.primary() != null) {
+            becomePrimary(source.primary());
+        }
 
         if (!realMode()) {
             system.setLifecycleState("ACTIVE");
@@ -312,7 +332,8 @@ public class PsqlService implements Resettable, CompartmentUsage {
     }
 
     public List<StoredDbSystem> listDbSystems(String compartmentId, String lifecycleState, String displayName,
-                                              String id, String sortBy, String sortOrder) {
+                                              String id, String sortBy, String sortOrder, String systemRole) {
+        PsqlRequests.requireEnum(systemRole, SYSTEM_ROLES, "systemRole");
         if (lifecycleState != null && !LIFECYCLE_STATES.contains(lifecycleState)) {
             throw OciException.invalidParameter("Invalid lifecycleState: " + lifecycleState);
         }
@@ -337,6 +358,7 @@ public class PsqlService implements Resettable, CompartmentUsage {
                 .filter(s -> lifecycleState == null || lifecycleState.equals(s.getLifecycleState()))
                 .filter(s -> displayName == null || displayName.equals(s.getDisplayName()))
                 .filter(s -> id == null || id.equals(s.getId()))
+                .filter(s -> systemRole == null || systemRole.equals(s.getSystemRole()))
                 .sorted(order)
                 .toList();
     }
@@ -370,6 +392,8 @@ public class PsqlService implements Resettable, CompartmentUsage {
         PsqlRequests.requireEnum(applyConfig, APPLY_CONFIG, "applyConfig");
         Map<String, String> overrides = configId != null
                 ? requireConfiguration(configId, PsqlCatalog.major(system.getDbVersion())) : null;
+        Map<String, Object> replicationConfig = PsqlRequests.map(details, "replicationConfig") != null
+                ? replicationConfig(PsqlRequests.map(details, "replicationConfig"), system.getReplicationConfig()) : null;
 
         if (PsqlRequests.string(details, "displayName") != null) {
             system.setDisplayName(PsqlRequests.string(details, "displayName"));
@@ -414,6 +438,9 @@ public class PsqlService implements Resettable, CompartmentUsage {
         if (configId != null) {
             system.setConfigId(configId);
             system.setConfigOverrides(overrides);
+        }
+        if (replicationConfig != null) {
+            system.setReplicationConfig(replicationConfig);
         }
         if (details.containsKey("freeformTags")) {
             system.setFreeformTags(PsqlRequests.stringMap(details, "freeformTags"));
@@ -511,7 +538,15 @@ public class PsqlService implements Resettable, CompartmentUsage {
                 compartmentId, resources(system, "UPDATED"));
     }
 
+    /**
+     * Holds the lock a replica takes to attach to its primary, so the check for replicas sees
+     * either the finished replica or none, and the replica sees the primary as this left it.
+     */
     public String deleteDbSystem(String dbSystemId, String ifMatch) {
+        return configurations.attachingConfiguration(() -> delete(dbSystemId, ifMatch));
+    }
+
+    private String delete(String dbSystemId, String ifMatch) {
         StoredDbSystem system = getDbSystem(dbSystemId);
         Etags.checkIfMatch(ifMatch, system.getEtag());
         if ("DELETED".equals(system.getLifecycleState()) || "DELETING".equals(system.getLifecycleState())) {
@@ -520,17 +555,31 @@ public class PsqlService implements Resettable, CompartmentUsage {
         String workRequestId;
         // An operation still under way is abandoned: its work request ends CANCELED, and its
         // step is skipped, or its outcome dropped, because the system has moved on to another
-        // work request. The lock keeps a step from recording its outcome in between.
+        // work request. The lock keeps a step from recording its outcome in between, and a
+        // switchover from changing which system is the primary.
         synchronized (this) {
+            if (PRIMARY.equals(system.getSystemRole()) && !replicas(system).isEmpty()) {
+                throw OciException.conflict("DB system " + dbSystemId
+                        + " has replicas; delete them, or make them standalone, first");
+            }
             pending.remove(dbSystemId);
             finishWorkRequest(system, "CANCELED", null);
+            String primaryId = WARM_STANDBY.equals(system.getSystemRole()) ? primaryIdOf(system) : null;
             if (!realMode()) {
                 markDeleted(system);
                 systems.put(system.getId(), system);
-                return workRequests.succeeded(WR_SERVICE, "DELETE_POSTGRESQL_DB_SYSTEM",
+                workRequestId = workRequests.succeeded(WR_SERVICE, "DELETE_POSTGRESQL_DB_SYSTEM",
                         system.getCompartmentId(), resources(system, "DELETED"));
+            } else {
+                workRequestId = begin(system, "DELETING", "DELETE_POSTGRESQL_DB_SYSTEM", "DELETED");
             }
-            workRequestId = begin(system, "DELETING", "DELETE_POSTGRESQL_DB_SYSTEM", "DELETED");
+            // A replica stops counting once it is going, so its primary may stand alone again.
+            if (primaryId != null) {
+                standAloneIfNoReplicas(system.getTenancyId(), primaryId);
+            }
+            if (!realMode()) {
+                return workRequestId;
+            }
         }
         runDelete(system);
         return workRequestId;
@@ -547,6 +596,274 @@ public class PsqlService implements Resettable, CompartmentUsage {
                 LOG.infov("deleteDbSystem {0}", current.getId());
             };
         });
+    }
+
+    // ── Instances and replicas ─────────────────────────────────────────────────
+
+    /**
+     * Adds or removes DB instances: {@code INSERT} at selection {@code instances} with a
+     * CreateDbInstanceDetails value, {@code REMOVE} at {@code instances[?id == '<id>']}. Every
+     * instance is served by the system's one PostgreSQL server, so nothing starts or stops.
+     * An empty patch succeeds and changes nothing.
+     */
+    public synchronized String patchDbSystem(String dbSystemId, Map<String, Object> details, String ifMatch) {
+        StoredDbSystem system = mutable(dbSystemId, ifMatch, "ACTIVE");
+        List<StoredDbInstance> instances = new ArrayList<>(system.getInstances());
+        String now = now();
+        for (Map<String, Object> item : PsqlRequests.mapList(details, "items")) {
+            String operation = PsqlRequests.requireString(item, "operation");
+            String selection = PsqlRequests.requireString(item, "selection");
+            switch (operation) {
+                case "INSERT" -> {
+                    if (!"instances".equals(selection)) {
+                        throw OciException.invalidParameter("An INSERT selects instances, not " + selection);
+                    }
+                    StoredDbInstance instance = newInstance(PsqlRequests.requireMap(item, "value"),
+                            system.getStorageDetails(), instances.size(), now);
+                    instance.setLifecycleState(system.getLifecycleState());
+                    instances.add(instance);
+                }
+                case "REMOVE" -> {
+                    Matcher matcher = INSTANCE_SELECTION.matcher(selection);
+                    if (!matcher.matches()) {
+                        throw OciException.invalidParameter("A REMOVE selects instances[?id == '<id>'], not "
+                                + selection);
+                    }
+                    StoredDbInstance removed = instance(system, matcher.group(1));
+                    if (instances.size() == 1) {
+                        throw OciException.invalidParameter("A DB system keeps at least one instance");
+                    }
+                    instances.removeIf(instance -> instance.getId().equals(removed.getId()));
+                }
+                default -> throw OciException.invalidParameter("Unsupported patch operation " + operation
+                        + ": only INSERT and REMOVE of instances are supported");
+            }
+        }
+        system.setInstances(instances);
+        system.setInstanceCount(instances.size());
+        touch(system);
+        systems.put(system.getId(), system);
+        LOG.infov("patchDbSystem {0}: {1} instance(s)", dbSystemId, instances.size());
+        return workRequests.succeeded(WR_SERVICE, "UPDATE_POSTGRESQL_DB_SYSTEM", system.getCompartmentId(),
+                resources(system, "UPDATED"));
+    }
+
+    /**
+     * Makes another instance the primary one, the first that GetPrimaryDbInstance reports: the
+     * one named by {@code dbInstanceId}, else the first standby in {@code ad}, else the first
+     * standby.
+     */
+    public synchronized String failoverDbSystem(String dbSystemId, Map<String, Object> details, String ifMatch) {
+        StoredDbSystem system = mutable(dbSystemId, ifMatch, "ACTIVE");
+        List<StoredDbInstance> instances = new ArrayList<>(system.getInstances());
+        if (instances.size() < 2) {
+            throw OciException.conflict("DB system " + dbSystemId + " has one instance and no standby to fail over to");
+        }
+        String dbInstanceId = PsqlRequests.string(details, "dbInstanceId");
+        String ad = PsqlRequests.string(details, "ad");
+        StoredDbInstance target = dbInstanceId != null ? instance(system, dbInstanceId)
+                : instances.stream().skip(1)
+                        .filter(instance -> ad == null || ad.equals(instance.getAvailabilityDomain()))
+                        .findFirst()
+                        .orElseThrow(() -> OciException.invalidParameter(
+                                "DB system " + dbSystemId + " has no standby instance in " + ad));
+        if (target.getId().equals(instances.getFirst().getId())) {
+            throw OciException.invalidParameter("DB instance " + target.getId() + " is already the primary");
+        }
+        instances.removeIf(instance -> instance.getId().equals(target.getId()));
+        instances.addFirst(target);
+        system.setInstances(instances);
+        touch(system);
+        systems.put(system.getId(), system);
+        return workRequests.succeeded(WR_SERVICE, "UPDATE_POSTGRESQL_DB_SYSTEM", system.getCompartmentId(),
+                resources(system, "UPDATED"));
+    }
+
+    /**
+     * Swaps the roles of a primary and one of its replicas; the primary's other replicas follow
+     * the new primary. Only the records change: no data is replicated.
+     */
+    public synchronized String switchOver(String dbSystemId, Map<String, Object> details, String ifMatch) {
+        StoredDbSystem primary = mutable(dbSystemId, ifMatch, "ACTIVE");
+        String replicaId = PsqlRequests.requireString(details, "replicaDbSystemId");
+        if (!PRIMARY.equals(primary.getSystemRole())) {
+            throw OciException.conflict("DB system " + dbSystemId + " is " + primary.getSystemRole()
+                    + ", not a primary with replicas");
+        }
+        List<StoredDbSystem> replicas = replicas(primary);
+        StoredDbSystem replica = replicas.stream()
+                .filter(candidate -> candidate.getId().equals(replicaId))
+                .findFirst()
+                .orElseThrow(() -> OciException.invalidParameter("DB system " + replicaId
+                        + " is not a replica of " + dbSystemId));
+        if (!"ACTIVE".equals(replica.getLifecycleState())) {
+            throw incorrectState(replica, "switched over");
+        }
+        replica.setSystemRole(PRIMARY);
+        replica.setSource(Map.of("sourceType", "NONE"));
+        primary.setSystemRole(WARM_STANDBY);
+        primary.setSource(dbSystemSource(replicaId));
+        List<StoredWorkRequest.Resource> resources = new ArrayList<>();
+        for (StoredDbSystem changed : replicas) {
+            if (changed != replica) {
+                changed.setSource(dbSystemSource(replicaId));
+            }
+        }
+        List<StoredDbSystem> changedSystems = new ArrayList<>(replicas);
+        changedSystems.add(primary);
+        for (StoredDbSystem changed : changedSystems) {
+            touch(changed);
+            saveIn(changed);
+            resources.addAll(resources(changed, "UPDATED"));
+        }
+        LOG.infov("switchOver {0} to replica {1}", dbSystemId, replicaId);
+        return workRequests.succeeded(WR_SERVICE, "UPDATE_POSTGRESQL_DB_SYSTEM", primary.getCompartmentId(),
+                resources);
+    }
+
+    /** Makes a standalone DB system a warm-standby replica of {@code primaryDbSystemId}. */
+    public String changeRoleToReplica(String dbSystemId, Map<String, Object> details, String ifMatch) {
+        return configurations.attachingConfiguration(() -> becomeReplica(dbSystemId, details, ifMatch));
+    }
+
+    private synchronized String becomeReplica(String dbSystemId, Map<String, Object> details, String ifMatch) {
+        StoredDbSystem system = mutable(dbSystemId, ifMatch, "ACTIVE");
+        String primaryId = PsqlRequests.requireString(details, "primaryDbSystemId");
+        if (!STANDALONE.equals(system.getSystemRole())) {
+            throw OciException.conflict("DB system " + dbSystemId + " is " + system.getSystemRole()
+                    + "; only a standalone DB system can become a replica");
+        }
+        StoredDbSystem primary = requirePrimary(primaryId, PsqlCatalog.major(system.getDbVersion()), dbSystemId);
+        system.setSystemRole(WARM_STANDBY);
+        system.setSource(dbSystemSource(primaryId));
+        touch(system);
+        systems.put(system.getId(), system);
+        becomePrimary(primary);
+        return workRequests.succeeded(WR_SERVICE, "UPDATE_POSTGRESQL_DB_SYSTEM", system.getCompartmentId(),
+                resources(system, "UPDATED"));
+    }
+
+    /**
+     * Detaches a replica from its primary. Both change modes have the same effect, since nothing
+     * is replicated; the primary stands alone again once it has no replica left.
+     */
+    public synchronized String changeRoleToStandalone(String dbSystemId, Map<String, Object> details,
+                                                      String ifMatch) {
+        StoredDbSystem system = mutable(dbSystemId, ifMatch, "ACTIVE");
+        String changeMode = PsqlRequests.requireString(details, "changeMode");
+        PsqlRequests.requireEnum(changeMode, CHANGE_MODES, "changeMode");
+        if (!WARM_STANDBY.equals(system.getSystemRole())) {
+            throw OciException.conflict("DB system " + dbSystemId + " is " + system.getSystemRole()
+                    + ", not a replica");
+        }
+        String primaryId = primaryIdOf(system);
+        system.setSystemRole(STANDALONE);
+        system.setSource(Map.of("sourceType", "NONE"));
+        touch(system);
+        systems.put(system.getId(), system);
+        if (primaryId != null) {
+            standAloneIfNoReplicas(system.getTenancyId(), primaryId);
+        }
+        return workRequests.succeeded(WR_SERVICE, "UPDATE_POSTGRESQL_DB_SYSTEM", system.getCompartmentId(),
+                resources(system, "UPDATED"));
+    }
+
+    /** The DbSystemReplicaSummary of each live replica, in any region of the tenancy. */
+    public List<Map<String, Object>> listReplicas(String dbSystemId) {
+        StoredDbSystem system = getDbSystem(dbSystemId);
+        return replicas(system).stream()
+                .<Map<String, Object>>map(replica -> Map.of("id", replica.getId(), "region", replica.getRegion()))
+                .toList();
+    }
+
+    /**
+     * A DB system that can be a primary for a DB system of {@code major}: in the tenancy (any
+     * region), ACTIVE, not itself a replica, and of the same major version.
+     */
+    private StoredDbSystem requirePrimary(String primaryId, String major, String replicaId) {
+        StoredDbSystem primary = TenancyAwareStorageBackend.findInTenancy(systems, ociContext.tenancyId(), primaryId)
+                .filter(candidate -> !"DELETED".equals(candidate.getLifecycleState()))
+                .orElseThrow(() -> new OciException("RelatedResourceNotAuthorizedOrNotFound",
+                        "Authorization failed or requested resource not found: DB system " + primaryId, 400));
+        if (primaryId.equals(replicaId)) {
+            throw OciException.invalidParameter("A DB system cannot be its own replica");
+        }
+        if (WARM_STANDBY.equals(primary.getSystemRole())) {
+            throw OciException.invalidParameter("DB system " + primaryId + " is itself a replica");
+        }
+        if (!"ACTIVE".equals(primary.getLifecycleState())) {
+            throw incorrectState(primary, "replicated");
+        }
+        if (!PsqlCatalog.major(primary.getDbVersion()).equals(major)) {
+            throw OciException.invalidParameter("DB system " + primaryId + " is PostgreSQL "
+                    + PsqlCatalog.major(primary.getDbVersion()) + ", not " + major);
+        }
+        return primary;
+    }
+
+    private void becomePrimary(StoredDbSystem primary) {
+        if (!PRIMARY.equals(primary.getSystemRole())) {
+            primary.setSystemRole(PRIMARY);
+            touch(primary);
+            saveIn(primary);
+        }
+    }
+
+    private void standAloneIfNoReplicas(String tenancyId, String primaryId) {
+        TenancyAwareStorageBackend.findInTenancy(systems, tenancyId, primaryId)
+                .filter(primary -> PRIMARY.equals(primary.getSystemRole()) && replicas(primary).isEmpty())
+                .ifPresent(primary -> {
+                    primary.setSystemRole(STANDALONE);
+                    touch(primary);
+                    saveIn(primary);
+                });
+    }
+
+    /** The replicas of {@code primary} that are not going or gone, in any region of its tenancy. */
+    private List<StoredDbSystem> replicas(StoredDbSystem primary) {
+        return TenancyAwareStorageBackend.scanTenancy(systems, primary.getTenancyId()).stream()
+                .filter(system -> WARM_STANDBY.equals(system.getSystemRole()))
+                .filter(system -> primary.getId().equals(primaryIdOf(system)))
+                .filter(system -> !"DELETED".equals(system.getLifecycleState())
+                        && !"DELETING".equals(system.getLifecycleState()))
+                .sorted(Comparator.comparing(StoredDbSystem::getTimeCreated).thenComparing(StoredDbSystem::getId))
+                .toList();
+    }
+
+    private static String primaryIdOf(StoredDbSystem system) {
+        Object primaryId = system.getSource() != null ? system.getSource().get("primaryDbSystemId") : null;
+        return primaryId != null ? primaryId.toString() : null;
+    }
+
+    private static Map<String, Object> dbSystemSource(String primaryId) {
+        Map<String, Object> source = new LinkedHashMap<>();
+        source.put("sourceType", "DB_SYSTEM");
+        source.put("primaryDbSystemId", primaryId);
+        return source;
+    }
+
+    /**
+     * The ReplicationConfig a create or update leaves: both fields are mandatory in the
+     * response, so an RPO that was never set reads as not enforced, with 0 seconds.
+     */
+    private static Map<String, Object> replicationConfig(Map<String, Object> requested, Map<String, Object> current) {
+        if (requested == null) {
+            return current;
+        }
+        Object enforced = requested.get("isRpoEnforced");
+        if (enforced != null && !(enforced instanceof Boolean)) {
+            throw OciException.invalidParameter("replicationConfig.isRpoEnforced must be a boolean");
+        }
+        Object rpo = requested.get("rpoInSeconds");
+        if (rpo != null && (!(rpo instanceof Number number) || number.longValue() < 0)) {
+            throw OciException.invalidParameter("replicationConfig.rpoInSeconds must be a number of seconds");
+        }
+        Map<String, Object> config = new LinkedHashMap<>();
+        config.put("isRpoEnforced", enforced != null ? enforced
+                : current != null ? current.get("isRpoEnforced") : Boolean.FALSE);
+        config.put("rpoInSeconds", rpo != null ? ((Number) rpo).longValue()
+                : current != null ? current.get("rpoInSeconds") : 0L);
+        return config;
     }
 
     // ── Backups and restore ────────────────────────────────────────────────────
@@ -1043,7 +1360,6 @@ public class PsqlService implements Resettable, CompartmentUsage {
                         "Authorization failed or requested resource not found: DB instance " + dbInstanceId));
     }
 
-    /** A configuration must be one of the catalog's defaults, for the DB system's own version. */
     /**
      * The settings {@code configId} overrides, once it is checked to be a default configuration
      * or an ACTIVE custom one in this tenancy and region, for {@code major}.
@@ -1098,19 +1414,23 @@ public class PsqlService implements Resettable, CompartmentUsage {
                                                 Map<String, Object> storage, String now) {
         List<StoredDbInstance> instances = new ArrayList<>();
         for (int i = 0; i < count; i++) {
-            StoredDbInstance instance = new StoredDbInstance();
-            instance.setId(Ocids.generate("postgresqldbinstance", ociContext.realm(), ociContext.regionCode()));
-            if (!details.isEmpty()) {
-                instance.setDisplayName(PsqlRequests.string(details.get(i), "displayName"));
-                instance.setDescription(PsqlRequests.string(details.get(i), "description"));
-            }
-            Object availabilityDomain = storage.get("availabilityDomain");
-            instance.setAvailabilityDomain(availabilityDomain != null ? availabilityDomain.toString()
-                    : ociContext.region().toUpperCase(Locale.ROOT) + "-AD-" + (i % 3 + 1));
-            instance.setTimeCreated(now);
-            instances.add(instance);
+            instances.add(newInstance(details.isEmpty() ? Map.of() : details.get(i), storage, i, now));
         }
         return instances;
+    }
+
+    /** An instance from CreateDbInstanceDetails, in the storage's AD or spread over three. */
+    private StoredDbInstance newInstance(Map<String, Object> details, Map<String, Object> storage, int index,
+                                         String now) {
+        StoredDbInstance instance = new StoredDbInstance();
+        instance.setId(Ocids.generate("postgresqldbinstance", ociContext.realm(), ociContext.regionCode()));
+        instance.setDisplayName(PsqlRequests.string(details, "displayName"));
+        instance.setDescription(PsqlRequests.string(details, "description"));
+        Object availabilityDomain = storage.get("availabilityDomain");
+        instance.setAvailabilityDomain(availabilityDomain != null ? availabilityDomain.toString()
+                : ociContext.region().toUpperCase(Locale.ROOT) + "-AD-" + (index % 3 + 1));
+        instance.setTimeCreated(now);
+        return instance;
     }
 
     /** Every name the endpoint can be reached by, so verify-full works against any of them. */
@@ -1185,7 +1505,7 @@ public class PsqlService implements Resettable, CompartmentUsage {
 
     /** Only a fresh DB system is supported; creating from a backup or another system is not. */
     /** A create's {@code source}, as echoed back on GET, and the backup it restores, if any. */
-    private record RestoreSource(Map<String, Object> wire, String backupId) {
+    private record RestoreSource(Map<String, Object> wire, String backupId, StoredDbSystem primary) {
     }
 
     /**
@@ -1200,7 +1520,12 @@ public class PsqlService implements Resettable, CompartmentUsage {
         StoredBackup backup;
         switch (sourceType) {
             case "NONE" -> {
-                return new RestoreSource(wire, null);
+                return new RestoreSource(wire, null, null);
+            }
+            case "DB_SYSTEM" -> {
+                String primaryId = PsqlRequests.requireString(requested, "primaryDbSystemId");
+                wire.put("primaryDbSystemId", primaryId);
+                return new RestoreSource(wire, null, requirePrimary(primaryId, major, null));
             }
             case "BACKUP" -> {
                 String backupId = PsqlRequests.requireString(requested, "backupId");
@@ -1217,15 +1542,14 @@ public class PsqlService implements Resettable, CompartmentUsage {
                 wire.put("dbSystemId", dbSystemId);
                 wire.put("timeToRestore", timeToRestore);
             }
-            default -> throw OciException.notImplemented("Creating a DB system from source " + sourceType
-                    + " is not supported by floci-oci");
+            default -> throw OciException.invalidParameter("Unknown source.sourceType: " + sourceType);
         }
         Object backupMajor = backup.getDbSystemDetails().get("dbVersion");
         if (!major.equals(backupMajor)) {
             throw OciException.invalidParameter("Backup " + backup.getId() + " is of PostgreSQL " + backupMajor
                     + ", not " + major);
         }
-        return new RestoreSource(wire, backup.getDumpId());
+        return new RestoreSource(wire, backup.getDumpId(), null);
     }
 
     /** The response always carries a maintenance window and a backup policy; fill in what is missing. */
