@@ -15,6 +15,8 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -40,11 +42,13 @@ class PsqlContainerManagerTest {
 
     private static final String ID = "ocid1.postgresqldbsystem.oc1.iad.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabcdefghijklmnop";
     private static final String PASSWORD = "BEstrO0ng_#11";
+    private static final String READ_ONLY_PATH = "/read-only/data";
 
     private EmulatorConfig config;
     private ContainerLifecycleManager lifecycleManager;
     private ImageCacheService imageCacheService;
     private PortAllocator portAllocator;
+    private ServiceConfigAccess serviceConfigAccess;
     private PsqlContainerManager manager;
 
     @BeforeEach
@@ -63,8 +67,11 @@ class PsqlContainerManagerTest {
         imageCacheService = mock(ImageCacheService.class);
         portAllocator = mock(PortAllocator.class);
         lenient().when(portAllocator.allocate(15432, 15531)).thenReturn(15440);
+        serviceConfigAccess = mock(ServiceConfigAccess.class);
+        lenient().when(serviceConfigAccess.storageMode("psql")).thenReturn("persistent");
+        lenient().when(config.storage().persistentPath()).thenReturn(READ_ONLY_PATH);
         manager = new PsqlContainerManager(new ContainerBuilder(config, mock(DockerHostResolver.class), null),
-                lifecycleManager, imageCacheService, portAllocator, config, mock(ServiceConfigAccess.class));
+                lifecycleManager, imageCacheService, portAllocator, config, serviceConfigAccess);
     }
 
     private StoredDbSystem system(String dbVersion) {
@@ -229,5 +236,35 @@ class PsqlContainerManagerTest {
         assertTrue(entrypoint.get(2).contains("\"$@\""));
         assertEquals(List.of("sh", "-c", "max_connections=300", "-c", "shared_buffers=256MB"),
                 entrypoint.subList(3, entrypoint.size()));
+    }
+
+    private Path storedDumpOfANewBackup() {
+        when(lifecycleManager.exec(any(), anyList(), anyList(), any())).thenReturn(new ExecResult(0, "5", ""));
+        StoredDbSystem system = system("16");
+        system.setContainerName("db");
+        system.setAdminUsername("admin");
+
+        manager.dump(system, "dump-1");
+
+        ArgumentCaptor<Path> archive = ArgumentCaptor.forClass(Path.class);
+        verify(lifecycleManager).copyFromContainer(eq("db"), eq("/tmp/dump-1.sql"), archive.capture());
+        return archive.getValue();
+    }
+
+    @Test
+    void persistedBackupsKeepTheirDumpsInThePersistentPath() {
+        assertEquals(Path.of(READ_ONLY_PATH, "psql-backups", "dump-1.tar"), storedDumpOfANewBackup());
+    }
+
+    @Test
+    void inMemoryBackupsNeedNoWritablePersistentPath() {
+        when(serviceConfigAccess.storageMode("psql")).thenReturn("memory");
+
+        Path store = storedDumpOfANewBackup().getParent();
+
+        assertFalse(store.startsWith(READ_ONLY_PATH));
+        assertTrue(Files.isWritable(store));
+        manager.removeTemporaryDumps();
+        assertFalse(Files.exists(store), "the dumps go when the emulator stops");
     }
 }

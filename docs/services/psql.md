@@ -146,10 +146,10 @@ an `etag`; delete and change-compartment answer `204` with no work request.
 ## Backups and recovery
 
 A backup is a `pg_dumpall` of the running DB system: every database and role, without role
-passwords. Dumps are kept by the emulator, under `psql-backups` in its persistent path, and not in
-any DB system container: the admin of a DB system is a PostgreSQL superuser who can read any file
+passwords. Dumps are kept by the emulator, under `psql-backups` in its persistent path, or in a
+temporary directory with `memory` storage, and not in any DB system container: the admin of a DB system is a PostgreSQL superuser who can read any file
 its container can see. A dump is copied into a container only while it loads there, and removed
-afterwards. With `memory` storage the dumps are removed when the emulator stops.
+afterwards. The temporary directory is removed when the emulator stops.
 
 - **Create.** `CreateBackup` needs an `ACTIVE` DB system and answers `202` with a work request.
   The backup is `CREATING` while the dump runs in the background, then `ACTIVE` with

@@ -97,6 +97,7 @@ public class PsqlContainerManager {
     private final PortAllocator portAllocator;
     private final EmulatorConfig config;
     private final ServiceConfigAccess serviceConfigAccess;
+    private Path temporaryDumps;
 
     @Inject
     public PsqlContainerManager(ContainerBuilder containerBuilder,
@@ -368,7 +369,7 @@ public class PsqlContainerManager {
     }
 
     /** Removes every stored dump: for a state reset. */
-    public void removeBackups() {
+    public synchronized void removeBackups() {
         Path store = dumpsStore();
         if (!Files.exists(store)) {
             return;
@@ -381,17 +382,19 @@ public class PsqlContainerManager {
         } catch (IOException e) {
             throw new IllegalStateException("Could not remove " + store + ": " + e.getMessage(), e);
         }
+        temporaryDumps = null;
     }
 
     /** With in-memory storage the backup records die with the emulator, so their dumps do too. */
     @PreDestroy
-    void removeDumpsThatWouldOutliveTheirBackups() {
-        if ("memory".equals(serviceConfigAccess.storageMode("psql"))) {
-            try {
-                removeBackups();
-            } catch (RuntimeException e) {
-                LOG.warnv("Could not remove the PostgreSQL dumps: {0}", e.getMessage());
-            }
+    synchronized void removeTemporaryDumps() {
+        if (temporaryDumps == null) {
+            return;
+        }
+        try {
+            removeBackups();
+        } catch (RuntimeException e) {
+            LOG.warnv("Could not remove the PostgreSQL dumps: {0}", e.getMessage());
         }
     }
 
@@ -404,8 +407,23 @@ public class PsqlContainerManager {
         return dumpsStore().resolve(dumpId + ".tar");
     }
 
-    private Path dumpsStore() {
-        return Path.of(config.storage().persistentPath(), DUMPS_STORE);
+    /**
+     * The persistent path when backups are persisted. With in-memory storage it is a temporary
+     * directory, since the persistent path need not be writable then and dumps need not survive.
+     */
+    private synchronized Path dumpsStore() {
+        if (!"memory".equals(serviceConfigAccess.storageMode("psql"))) {
+            return Path.of(config.storage().persistentPath(), DUMPS_STORE);
+        }
+        if (temporaryDumps == null) {
+            try {
+                temporaryDumps = Files.createTempDirectory("floci-oci-" + DUMPS_STORE);
+            } catch (IOException e) {
+                throw new IllegalStateException("Could not create a directory for the PostgreSQL dumps: "
+                        + e.getMessage(), e);
+            }
+        }
+        return temporaryDumps;
     }
 
     /** Best effort: the container may be gone, and a dump left in it holds only its own data. */
