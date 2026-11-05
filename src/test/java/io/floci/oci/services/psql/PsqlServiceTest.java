@@ -1155,4 +1155,62 @@ class PsqlServiceTest {
         assertEquals(Map.of("isRpoEnforced", true, "rpoInSeconds", 60L),
                 mock.getDbSystem(system.getId()).getReplicationConfig());
     }
+
+    @Test
+    void aDeleteWaitsForAReplicaBeingAttachedAndThenSeesIt() throws Exception {
+        StoredDbSystem primary = mock.createDbSystem(createDetails()).system();
+        CountDownLatch attaching = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        ExecutorService threads = Executors.newFixedThreadPool(2);
+        try {
+            Future<StoredDbSystem> attach = threads.submit(() -> configurations.attachingConfiguration(() -> {
+                attaching.countDown();
+                await(release);
+                return replicaOf(primary);
+            }));
+            assertTrue(attaching.await(5, TimeUnit.SECONDS));
+
+            Future<String> delete = threads.submit(() -> mock.deleteDbSystem(primary.getId(), null));
+
+            assertThrows(TimeoutException.class, () -> delete.get(300, TimeUnit.MILLISECONDS),
+                    "the delete waits while the replica is being recorded");
+            release.countDown();
+            assertEquals(primary.getId(), attach.get(5, TimeUnit.SECONDS).getSource().get("primaryDbSystemId"));
+            ExecutionException failure = assertThrows(ExecutionException.class, () -> delete.get(5, TimeUnit.SECONDS));
+            assertEquals("Conflict", ((OciException) failure.getCause()).getCode());
+            assertEquals("ACTIVE", mock.getDbSystem(primary.getId()).getLifecycleState());
+        } finally {
+            release.countDown();
+            threads.shutdownNow();
+        }
+    }
+
+    @Test
+    void aRoleChangeToReplicaTakesTheLockADeleteHolds() throws Exception {
+        StoredDbSystem primary = mock.createDbSystem(createDetails()).system();
+        StoredDbSystem standalone = mock.createDbSystem(createDetails()).system();
+        CountDownLatch holding = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        ExecutorService threads = Executors.newFixedThreadPool(2);
+        try {
+            Future<?> holder = threads.submit(() -> configurations.attachingConfiguration(() -> {
+                holding.countDown();
+                await(release);
+                return null;
+            }));
+            assertTrue(holding.await(5, TimeUnit.SECONDS));
+
+            Future<String> change = threads.submit(() -> mock.changeRoleToReplica(standalone.getId(),
+                    Map.of("primaryDbSystemId", primary.getId()), null));
+
+            assertThrows(TimeoutException.class, () -> change.get(300, TimeUnit.MILLISECONDS));
+            release.countDown();
+            holder.get(5, TimeUnit.SECONDS);
+            change.get(5, TimeUnit.SECONDS);
+            assertEquals("WARM_STANDBY_DB_SYSTEM", mock.getDbSystem(standalone.getId()).getSystemRole());
+        } finally {
+            release.countDown();
+            threads.shutdownNow();
+        }
+    }
 }

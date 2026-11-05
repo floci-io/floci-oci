@@ -538,21 +538,30 @@ public class PsqlService implements Resettable, CompartmentUsage {
                 compartmentId, resources(system, "UPDATED"));
     }
 
+    /**
+     * Holds the lock a replica takes to attach to its primary, so the check for replicas sees
+     * either the finished replica or none, and the replica sees the primary as this left it.
+     */
     public String deleteDbSystem(String dbSystemId, String ifMatch) {
+        return configurations.attachingConfiguration(() -> delete(dbSystemId, ifMatch));
+    }
+
+    private String delete(String dbSystemId, String ifMatch) {
         StoredDbSystem system = getDbSystem(dbSystemId);
         Etags.checkIfMatch(ifMatch, system.getEtag());
         if ("DELETED".equals(system.getLifecycleState()) || "DELETING".equals(system.getLifecycleState())) {
             throw incorrectState(system, "deleted");
         }
-        if (PRIMARY.equals(system.getSystemRole()) && !replicas(system).isEmpty()) {
-            throw OciException.conflict("DB system " + dbSystemId
-                    + " has replicas; delete them, or make them standalone, first");
-        }
         String workRequestId;
         // An operation still under way is abandoned: its work request ends CANCELED, and its
         // step is skipped, or its outcome dropped, because the system has moved on to another
-        // work request. The lock keeps a step from recording its outcome in between.
+        // work request. The lock keeps a step from recording its outcome in between, and a
+        // switchover from changing which system is the primary.
         synchronized (this) {
+            if (PRIMARY.equals(system.getSystemRole()) && !replicas(system).isEmpty()) {
+                throw OciException.conflict("DB system " + dbSystemId
+                        + " has replicas; delete them, or make them standalone, first");
+            }
             pending.remove(dbSystemId);
             finishWorkRequest(system, "CANCELED", null);
             String primaryId = WARM_STANDBY.equals(system.getSystemRole()) ? primaryIdOf(system) : null;
@@ -713,7 +722,11 @@ public class PsqlService implements Resettable, CompartmentUsage {
     }
 
     /** Makes a standalone DB system a warm-standby replica of {@code primaryDbSystemId}. */
-    public synchronized String changeRoleToReplica(String dbSystemId, Map<String, Object> details, String ifMatch) {
+    public String changeRoleToReplica(String dbSystemId, Map<String, Object> details, String ifMatch) {
+        return configurations.attachingConfiguration(() -> becomeReplica(dbSystemId, details, ifMatch));
+    }
+
+    private synchronized String becomeReplica(String dbSystemId, Map<String, Object> details, String ifMatch) {
         StoredDbSystem system = mutable(dbSystemId, ifMatch, "ACTIVE");
         String primaryId = PsqlRequests.requireString(details, "primaryDbSystemId");
         if (!STANDALONE.equals(system.getSystemRole())) {
