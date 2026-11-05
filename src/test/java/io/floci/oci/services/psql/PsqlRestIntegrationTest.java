@@ -268,9 +268,16 @@ class PsqlRestIntegrationTest {
                 .header("opc-request-id", notNullValue())
                 .body("code", equalTo("NotAuthorizedOrNotFound"));
 
-        Map<String, Object> fromBackup = createDetails("it-from-backup");
-        fromBackup.put("source", Map.of("sourceType", "BACKUP", "backupId", "ocid1.postgresqlbackup.oc1.iad.x"));
-        given().contentType("application/json").body(fromBackup)
+        Map<String, Object> fromUnknownBackup = createDetails("it-from-backup");
+        fromUnknownBackup.put("source", Map.of("sourceType", "BACKUP", "backupId", "ocid1.postgresqlbackup.oc1.iad.x"));
+        given().contentType("application/json").body(fromUnknownBackup)
+            .when().post("/20220915/dbSystems")
+            .then().statusCode(400).body("code", equalTo("RelatedResourceNotAuthorizedOrNotFound"));
+
+        Map<String, Object> fromDbSystem = createDetails("it-from-db-system");
+        fromDbSystem.put("source", Map.of("sourceType", "DB_SYSTEM",
+                "primaryDbSystemId", "ocid1.postgresqldbsystem.oc1.iad.x"));
+        given().contentType("application/json").body(fromDbSystem)
             .when().post("/20220915/dbSystems")
             .then().statusCode(501);
     }

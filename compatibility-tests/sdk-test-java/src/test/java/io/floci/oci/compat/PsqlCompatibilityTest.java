@@ -1,9 +1,11 @@
 package io.floci.oci.compat;
 
 import com.oracle.bmc.psql.PostgresqlClient;
+import com.oracle.bmc.psql.model.Backup;
 import com.oracle.bmc.psql.model.ConfigOverrides;
 import com.oracle.bmc.psql.model.Configuration;
 import com.oracle.bmc.psql.model.ConnectionDetails;
+import com.oracle.bmc.psql.model.CreateBackupDetails;
 import com.oracle.bmc.psql.model.CreateConfigurationDetails;
 import com.oracle.bmc.psql.model.CreateDbSystemDetails;
 import com.oracle.bmc.psql.model.Credentials;
@@ -14,19 +16,25 @@ import com.oracle.bmc.psql.model.OciOptimizedStorageDetails;
 import com.oracle.bmc.psql.model.OperationStatus;
 import com.oracle.bmc.psql.model.PlainTextPasswordDetails;
 import com.oracle.bmc.psql.model.ResetMasterUserPasswordDetails;
+import com.oracle.bmc.psql.model.RestoreDbSystemDetails;
 import com.oracle.bmc.psql.model.WorkRequest;
+import com.oracle.bmc.psql.requests.CreateBackupRequest;
 import com.oracle.bmc.psql.requests.CreateConfigurationRequest;
 import com.oracle.bmc.psql.requests.CreateDbSystemRequest;
+import com.oracle.bmc.psql.requests.DeleteBackupRequest;
 import com.oracle.bmc.psql.requests.DeleteConfigurationRequest;
 import com.oracle.bmc.psql.requests.DeleteDbSystemRequest;
+import com.oracle.bmc.psql.requests.GetBackupRequest;
 import com.oracle.bmc.psql.requests.GetConfigurationRequest;
 import com.oracle.bmc.psql.requests.GetConnectionDetailsRequest;
 import com.oracle.bmc.psql.requests.GetDbSystemRequest;
 import com.oracle.bmc.psql.requests.GetWorkRequestRequest;
+import com.oracle.bmc.psql.requests.ListBackupsRequest;
 import com.oracle.bmc.psql.requests.ListDbSystemsRequest;
 import com.oracle.bmc.psql.requests.ListDefaultConfigurationsRequest;
 import com.oracle.bmc.psql.requests.ListShapesRequest;
 import com.oracle.bmc.psql.requests.ResetMasterUserPasswordRequest;
+import com.oracle.bmc.psql.requests.RestoreDbSystemRequest;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -138,12 +146,57 @@ class PsqlCompatibilityTest {
             assertThat(awaitWorkRequest(reset.getOpcWorkRequestId()).getStatus())
                     .isEqualTo(OperationStatus.Succeeded);
             connect(url, NEW_PASSWORD).close();
+
+            backupAndRestoreInPlace(id, url);
         } finally {
             var deleted = postgresql.deleteDbSystem(DeleteDbSystemRequest.builder().dbSystemId(id).build());
             awaitWorkRequest(deleted.getOpcWorkRequestId());
         }
         assertThat(postgresql.getDbSystem(GetDbSystemRequest.builder().dbSystemId(id).build())
                 .getDbSystem().getLifecycleState()).isEqualTo(DbSystem.LifecycleState.Deleted);
+    }
+
+    /** A backup is a real dump: rows written after it are gone once it is restored. */
+    private static void backupAndRestoreInPlace(String dbSystemId, String url) throws Exception {
+        try (Connection jdbc = connect(url, NEW_PASSWORD); Statement statement = jdbc.createStatement()) {
+            statement.execute("CREATE TABLE compat_orders (id int primary key)");
+            statement.execute("INSERT INTO compat_orders VALUES (1)");
+        }
+        var backup = postgresql.createBackup(CreateBackupRequest.builder()
+                .createBackupDetails(CreateBackupDetails.builder()
+                        .compartmentId(TENANCY)
+                        .displayName("java-sdk-backup")
+                        .dbSystemId(dbSystemId)
+                        .build())
+                .build());
+        WorkRequest created = awaitWorkRequest(backup.getOpcWorkRequestId());
+        assertThat(created.getStatus()).isEqualTo(OperationStatus.Succeeded);
+        String backupId = created.getResources().get(0).getIdentifier();
+        try {
+            Backup active = postgresql.getBackup(GetBackupRequest.builder().backupId(backupId).build()).getBackup();
+            assertThat(active.getLifecycleState()).isEqualTo(Backup.LifecycleState.Active);
+            assertThat(active.getSourceType()).isEqualTo(Backup.SourceType.Manual);
+            assertThat(active.getDbSystemDetails().getDbVersion()).isEqualTo("16");
+            assertThat(postgresql.listBackups(ListBackupsRequest.builder().id(dbSystemId).build())
+                    .getBackupCollection().getItems()).extracting(summary -> summary.getId()).contains(backupId);
+
+            try (Connection jdbc = connect(url, NEW_PASSWORD); Statement statement = jdbc.createStatement()) {
+                statement.execute("INSERT INTO compat_orders VALUES (2)");
+            }
+            var restored = postgresql.restoreDbSystem(RestoreDbSystemRequest.builder()
+                    .dbSystemId(dbSystemId)
+                    .restoreDbSystemDetails(RestoreDbSystemDetails.builder().backupId(backupId).build())
+                    .build());
+            assertThat(awaitWorkRequest(restored.getOpcWorkRequestId()).getStatus())
+                    .isEqualTo(OperationStatus.Succeeded);
+            try (Connection jdbc = connect(url, NEW_PASSWORD); Statement statement = jdbc.createStatement();
+                 ResultSet count = statement.executeQuery("SELECT count(*) FROM compat_orders")) {
+                assertThat(count.next()).isTrue();
+                assertThat(count.getInt(1)).isEqualTo(1);
+            }
+        } finally {
+            postgresql.deleteBackup(DeleteBackupRequest.builder().backupId(backupId).build());
+        }
     }
 
     private static WorkRequest awaitWorkRequest(String workRequestId) throws InterruptedException {

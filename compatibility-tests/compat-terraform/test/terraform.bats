@@ -18,7 +18,7 @@ setup() {
 @test "apply creates identity and object storage resources" {
     run "$TF_BIN" apply -auto-approve -input=false -no-color
     [ "$status" -eq 0 ]
-    [[ "$output" == *"Apply complete! Resources: 15 added"* ]]
+    [[ "$output" == *"Apply complete! Resources: 16 added"* ]]
 }
 
 @test "outputs reflect emulator state" {
@@ -69,6 +69,12 @@ setup() {
 
     run "$TF_BIN" output -raw configuration_shape
     [ "$output" = "VM.Standard.E4.Flex" ]
+
+    run "$TF_BIN" output -raw backup_state
+    [ "$output" = "ACTIVE" ]
+
+    run "$TF_BIN" output -raw backup_source_type
+    [ "$output" = "MANUAL" ]
 }
 
 @test "object content is readable through the plain API" {
@@ -87,7 +93,7 @@ setup() {
 @test "destroy removes every resource" {
     run "$TF_BIN" destroy -auto-approve -input=false -no-color
     [ "$status" -eq 0 ]
-    [[ "$output" == *"Destroy complete! Resources: 15 destroyed"* ]]
+    [[ "$output" == *"Destroy complete! Resources: 16 destroyed"* ]]
 
     run curl -s -o /dev/null -w '%{http_code}' \
         "${FLOCI_OCI_ENDPOINT:-http://localhost:4599}/n/floci-local/b/tf-compat-bucket"

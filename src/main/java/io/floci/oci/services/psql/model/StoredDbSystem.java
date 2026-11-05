@@ -56,6 +56,8 @@ public class StoredDbSystem {
     private int endpointPort;
     /** The settings its configuration overrides, resolved when the configuration is set. */
     private Map<String, String> configOverrides;
+    /** The backup to load once the server is ready: a create from a backup, or a restore. */
+    private String restoreBackupId;
 
     /** The DbSystem body: every mandatory field, and each optional one that has a value. */
     public Map<String, Object> toWire() {
@@ -419,5 +421,13 @@ public class StoredDbSystem {
 
     public void setConfigOverrides(Map<String, String> configOverrides) {
         this.configOverrides = configOverrides;
+    }
+
+    public String getRestoreBackupId() {
+        return restoreBackupId;
+    }
+
+    public void setRestoreBackupId(String restoreBackupId) {
+        this.restoreBackupId = restoreBackupId;
     }
 }
