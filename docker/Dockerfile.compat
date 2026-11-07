@@ -25,8 +25,8 @@ ENV OCI_CONFIG_FILE=/etc/floci-oci/oci/config
 
 # Pinned to the versions of the local/oracle/oci-cli and local/oracle/oci-python-sdk reference
 # clones; bump the pins whenever `make refs` fast-forwards them.
-ARG OCI_CLI_VERSION=3.94.1
-ARG OCI_SDK_VERSION=2.187.1
+ARG OCI_CLI_VERSION=3.96.0
+ARG OCI_SDK_VERSION=2.190.0
 
 # No `pip install --upgrade pip`: the RPM's pip is current enough for these wheels
 # and upgrading leaves a second, shadowing copy of pip in /usr/local.

@@ -4,7 +4,7 @@ terraform {
       source = "oracle/oci"
       # Pinned to the version of the local/oracle/terraform-provider-oci reference
       # clone; bump the pin whenever `make refs` fast-forwards it.
-      version = "9.8.0"
+      version = "9.12.1"
     }
   }
 }
