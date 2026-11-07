@@ -1,6 +1,7 @@
 package io.floci.oci.services.oke.model;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import io.quarkus.runtime.annotations.RegisterForReflection;
 
 import java.time.Instant;
@@ -111,5 +112,15 @@ public class StoredNodePool {
 
     public void setDefinedTags(Map<String, Map<String, Object>> definedTags) {
         this.definedTags = definedTags;
+    }
+
+    /**
+     * Always present on the wire, as on the cluster: the oracle/oci provider (9.12+) declares
+     * {@code system_tags} computed and reads it back only when the response carries it, so an
+     * absent field plans an in-place update after every apply. Never read from storage.
+     */
+    @JsonProperty(access = JsonProperty.Access.READ_ONLY)
+    public Map<String, Map<String, Object>> getSystemTags() {
+        return Map.of();
     }
 }
