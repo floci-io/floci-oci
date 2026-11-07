@@ -5,7 +5,6 @@ import io.quarkus.test.junit.QuarkusTest;
 import io.quarkus.test.junit.QuarkusTestProfile;
 import io.quarkus.test.junit.TestProfile;
 import io.restassured.http.ContentType;
-import io.restassured.path.json.JsonPath;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -36,29 +35,27 @@ class OkeTokenKubeconfigRestIntegrationTest {
 
     @Test
     void kubeconfigTokenIsRandomAndNeverInClusterResponses() {
-        String createBody = createCluster("token-cluster-a");
-        String clusterId = JsonPath.from(createBody).getString("id");
+        String clusterId = createCluster("token-cluster-a");
         String apiToken = kubeconfigToken(clusterId);
 
         assertFalse(apiToken.contains(clusterId), "token must not be derivable from the cluster OCID");
-        assertNotEquals(apiToken, kubeconfigToken(JsonPath.from(createCluster("token-cluster-b")).getString("id")));
+        assertNotEquals(apiToken, kubeconfigToken(createCluster("token-cluster-b")));
 
         String getBody = given().when().get("/20180222/clusters/{id}", clusterId)
             .then().statusCode(200).body("apiToken", nullValue()).extract().asString();
         String listBody = given().queryParam("compartmentId", compartment).when().get("/20180222/clusters")
             .then().statusCode(200).extract().asString();
-        assertFalse(createBody.contains(apiToken));
         assertFalse(getBody.contains(apiToken));
         assertFalse(listBody.contains(apiToken));
     }
 
     private static String createCluster(String name) {
-        return given()
+        return OkeWorkRequests.createdId(given()
             .contentType(ContentType.JSON)
             .body(Map.of("compartmentId", compartment, "name", name, "vcnId", VCN))
             .when().post("/20180222/clusters")
             .then().statusCode(202)
-            .extract().asString();
+            .extract().header("opc-work-request-id"));
     }
 
     private static String kubeconfigToken(String clusterId) {

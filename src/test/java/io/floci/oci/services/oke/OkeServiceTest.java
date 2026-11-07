@@ -557,8 +557,48 @@ class OkeServiceTest {
         StoredOkeCluster cluster = service.getCluster(result.cluster().getId());
         assertEquals("FAILED", cluster.getLifecycleState());
         assertNotNull(cluster.getLifecycleDetails());
-        assertEquals("FAILED", realWorkRequests.get(result.workRequestId()).getStatus());
-        assertNotNull(realWorkRequests.get(result.workRequestId()).getTimeFinished());
+        StoredWorkRequest workRequest = realWorkRequests.get(result.workRequestId());
+        assertEquals("FAILED", workRequest.getStatus());
+        assertNotNull(workRequest.getTimeFinished());
+        assertEquals(1, workRequest.getErrors().size(), "Terraform reads the failure from the work request's errors");
+        assertEquals("InternalServerError", workRequest.getErrors().get(0).getCode());
+        assertEquals(cluster.getLifecycleDetails(), workRequest.getErrors().get(0).getMessage());
+    }
+
+    @Test
+    void aSucceededCreateHasNoWorkRequestErrors() {
+        OkeService service = realModeService();
+        OkeService.CreateClusterResult result = service.createCluster(COMPARTMENT, "fine", VCN, null, null, null, null);
+        when(readinessManager.probeReady(any())).thenReturn(Optional.of("Q0FEQVRB"));
+
+        service.pollReadiness();
+
+        assertTrue(realWorkRequests.get(result.workRequestId()).getErrors().isEmpty());
+    }
+
+    @Test
+    void aNodePoolNeedsAnActiveCluster() {
+        OkeService service = realModeService();
+        String creating = service.createCluster(COMPARTMENT, "creating", VCN, null, null, null, null).cluster().getId();
+
+        OciException notYet = assertThrows(OciException.class, () -> service.createNodePool(COMPARTMENT, creating,
+                "early", "v1.30.1", "VM.Standard.E4.Flex", 1, null, null));
+        assertEquals(409, notYet.getHttpStatus());
+        assertEquals("IncorrectState", notYet.getCode(), "retryable: the cluster may still become ACTIVE");
+
+        when(readinessManager.probeReady(any())).thenReturn(Optional.empty());
+        when(readinessManager.isClusterRunning(any())).thenReturn(false);
+        service.pollReadiness();
+        OciException never = assertThrows(OciException.class, () -> service.createNodePool(COMPARTMENT, creating,
+                "late", "v1.30.1", "VM.Standard.E4.Flex", 1, null, null));
+        assertEquals(409, never.getHttpStatus());
+        assertEquals("Conflict", never.getCode(), "not retryable: a FAILED cluster stays FAILED");
+
+        String active = service.createCluster(COMPARTMENT, "active", VCN, null, null, null, null).cluster().getId();
+        when(readinessManager.probeReady(any())).thenReturn(Optional.of("Q0FEQVRB"));
+        service.pollReadiness();
+        assertEquals("ACTIVE", service.createNodePool(COMPARTMENT, active, "pool", "v1.30.1", "VM.Standard.E4.Flex",
+                1, null, null).nodePool().getLifecycleState());
     }
 
     @Test

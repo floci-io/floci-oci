@@ -3,9 +3,10 @@ package io.floci.oci.services.oke;
 import io.floci.oci.config.EmulatorConfig;
 import io.floci.oci.testing.TestCompartments;
 import io.floci.oci.testing.TestRegions;
+import io.floci.oci.core.workrequest.StoredWorkRequest;
+import io.floci.oci.core.workrequest.WorkRequestService;
 import io.quarkus.test.junit.QuarkusTest;
 import io.restassured.http.ContentType;
-import io.restassured.path.json.JsonPath;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -17,11 +18,13 @@ import java.util.Map;
 
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.emptyString;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.hasItem;
+import static org.hamcrest.Matchers.hasKey;
+import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.notNullValue;
 import static org.hamcrest.Matchers.nullValue;
-import static org.hamcrest.Matchers.startsWith;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -36,6 +39,9 @@ class OkeRestIntegrationTest {
     @Inject
     EmulatorConfig config;
 
+    @Inject
+    WorkRequestService workRequests;
+
     @BeforeEach
     void createTestCompartment() {
         if (compartment == null) {
@@ -46,7 +52,7 @@ class OkeRestIntegrationTest {
     @Test
     void testOkeClusterAndNodePoolLifecycle() {
         // 1. Create Cluster
-        String clusterId = given()
+        String createWorkRequest = given()
             .contentType(ContentType.JSON)
             .body(Map.of(
                 "compartmentId", compartment,
@@ -59,8 +65,9 @@ class OkeRestIntegrationTest {
                 .statusCode(202)
                 .header("opc-request-id", notNullValue())
                 .header("opc-work-request-id", notNullValue())
-                .body("name", equalTo("rest-cluster"))
-                .extract().path("id");
+                .body(emptyString())
+                .extract().header("opc-work-request-id");
+        String clusterId = OkeWorkRequests.createdId(createWorkRequest);
 
         assertNotNull(clusterId);
 
@@ -96,7 +103,7 @@ class OkeRestIntegrationTest {
                 .body(containsString("- " + clusterId));
 
         // 5. Create Node Pool
-        String nodePoolId = given()
+        String createPoolWorkRequest = given()
             .contentType(ContentType.JSON)
             .body(Map.of(
                 "compartmentId", compartment,
@@ -110,8 +117,9 @@ class OkeRestIntegrationTest {
             .then()
                 .statusCode(202)
                 .header("opc-work-request-id", notNullValue())
-                .body("name", equalTo("pool-rest"))
-                .extract().path("id");
+                .body(emptyString())
+                .extract().header("opc-work-request-id");
+        String nodePoolId = OkeWorkRequests.createdId(createPoolWorkRequest);
 
         // 6. Get Node Pool
         given()
@@ -147,7 +155,7 @@ class OkeRestIntegrationTest {
 
     @Test
     void kubeconfigIsTheRealOkeExecShapeByDefault() {
-        String clusterId = JsonPath.from(createCluster("exec-cluster")).getString("id");
+        String clusterId = createCluster("exec-cluster");
 
         String kubeconfig = given()
             .contentType(ContentType.JSON)
@@ -171,7 +179,7 @@ class OkeRestIntegrationTest {
 
     @Test
     void createKubeconfigAcceptsTheSdkRequestModel() {
-        String clusterId = JsonPath.from(createCluster("dto-cluster")).getString("id");
+        String clusterId = createCluster("dto-cluster");
 
         given()
             .contentType(ContentType.JSON)
@@ -195,7 +203,7 @@ class OkeRestIntegrationTest {
 
     @Test
     void tokenWebhookAuthenticatesAGenerateTokenTokenForTheCluster() {
-        String clusterId = JsonPath.from(createCluster("webhook-cluster")).getString("id");
+        String clusterId = createCluster("webhook-cluster");
         String tenancy = config.defaultTenancyId();
         String token = ClusterTokenMinter.mint(config.defaultRegion(), clusterId, tenancy, USER, Instant.now());
 
@@ -214,7 +222,7 @@ class OkeRestIntegrationTest {
 
     @Test
     void tokenWebhookEchoesV1beta1AndRejectsWithAuthenticatedFalse() {
-        String clusterId = JsonPath.from(createCluster("webhook-reject")).getString("id");
+        String clusterId = createCluster("webhook-reject");
         String tenancy = config.defaultTenancyId();
         String otherCluster = ClusterTokenMinter.mint(config.defaultRegion(),
                 "ocid1.cluster.oc1.iad.notthisone", tenancy, USER, Instant.now());
@@ -241,14 +249,16 @@ class OkeRestIntegrationTest {
     @Test
     void tokenWebhookAuthenticatesATokenForAClusterInAnotherRegion() {
         TestRegions.subscribe(config.defaultTenancyId(), "PHX");
-        String clusterId = given()
-            .header("Host", "containerengine.us-phoenix-1.oci.oraclecloud.com")
+        String phoenix = "containerengine.us-phoenix-1.oci.oraclecloud.com";
+        String createWorkRequest = given()
+            .header("Host", phoenix)
             .contentType(ContentType.JSON)
             .body(Map.of("compartmentId", compartment, "name", "phoenix-cluster", "vcnId", VCN))
             .when().post("/20180222/clusters")
             .then().statusCode(202)
-                .body("id", startsWith("ocid1.cluster.oc1.phx."))
-            .extract().path("id");
+            .extract().header("opc-work-request-id");
+        String clusterId = OkeWorkRequests.createdId(phoenix, createWorkRequest);
+        assertTrue(clusterId.startsWith("ocid1.cluster.oc1.phx."), clusterId);
         String tenancy = config.defaultTenancyId();
         String token = ClusterTokenMinter.mint("us-phoenix-1", clusterId, tenancy, USER, Instant.now());
 
@@ -262,17 +272,40 @@ class OkeRestIntegrationTest {
                 .body("status.user.username", equalTo(USER));
     }
 
+    @Test
+    void aFailedWorkRequestServesItsErrorsAndKeepsThemOffTheWorkRequest() {
+        String workRequestId = workRequests.inProgress("oke", "CLUSTER_CREATE", compartment, List.of());
+        workRequests.finish(config.defaultTenancyId(), config.defaultRegion(), workRequestId, "FAILED",
+                List.of(new StoredWorkRequest.ErrorEntry("InternalServerError", "The k3s sidecar exited")));
+
+        given()
+            .when().get("/20180222/workRequests/{id}/errors", workRequestId)
+            .then()
+                .statusCode(200)
+                .header("opc-request-id", notNullValue())
+                .body("size()", equalTo(1))
+                .body("[0].code", equalTo("InternalServerError"))
+                .body("[0].message", equalTo("The k3s sidecar exited"))
+                .body("[0].timestamp", notNullValue());
+        given()
+            .when().get("/20180222/workRequests/{id}", workRequestId)
+            .then()
+                .statusCode(200)
+                .body("status", equalTo("FAILED"))
+                .body("$", not(hasKey("errors")));
+    }
+
     private static Map<String, Object> tokenReview(String apiVersion, String token) {
         return Map.of("apiVersion", apiVersion, "kind", "TokenReview", "spec", Map.of("token", token));
     }
 
     private static String createCluster(String name) {
-        return given()
+        return OkeWorkRequests.createdId(given()
             .contentType(ContentType.JSON)
             .body(Map.of("compartmentId", compartment, "name", name, "vcnId", VCN))
             .when().post("/20180222/clusters")
             .then().statusCode(202)
-            .extract().asString();
+            .extract().header("opc-work-request-id"));
     }
 
     @Test
@@ -289,9 +322,9 @@ class OkeRestIntegrationTest {
                 Map.of("podsCidr", "10.244.0.0/16", "servicesCidr", "10.96.0.0/16"),
                 "serviceLbSubnetIds", List.of("ocid1.subnet.oc1.iad.restlb")));
         details.put("imagePolicyConfig", Map.of("isPolicyEnabled", false));
-        String clusterId = given().contentType(ContentType.JSON).body(details)
+        String clusterId = OkeWorkRequests.createdId(given().contentType(ContentType.JSON).body(details)
             .when().post("/20180222/clusters")
-            .then().statusCode(202).extract().path("id");
+            .then().statusCode(202).extract().header("opc-work-request-id"));
 
         String etag = given().when().get("/20180222/clusters/{id}", clusterId)
             .then()
