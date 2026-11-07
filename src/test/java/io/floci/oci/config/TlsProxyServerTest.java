@@ -8,12 +8,14 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
 import java.io.IOException;
+import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -105,7 +107,7 @@ class TlsProxyServerTest {
     @Timeout(20)
     void tlsConnectionWaitsForALateBackend() throws Exception {
         int httpBe = freePort();
-        int httpsBe = freePort();
+        int httpsBe = freePortOutsideTheEphemeralRange();
         int publicPort = freePort();
         httpBackend = startMarkerBackend(httpBe, "PLAIN");
         proxy = new TlsProxyServer(vertx, configWith(true, publicPort, 0), httpBe, httpsBe);
@@ -131,8 +133,8 @@ class TlsProxyServerTest {
     @Timeout(20)
     void connectionClosesWhenTheBackendNeverListens() throws Exception {
         int publicPort = freePort();
-        proxy = new TlsProxyServer(vertx, configWith(true, publicPort, 0), freePort(), freePort(),
-                Duration.ofMillis(200));
+        proxy = new TlsProxyServer(vertx, configWith(true, publicPort, 0), freePortOutsideTheEphemeralRange(),
+                freePortOutsideTheEphemeralRange(), Duration.ofMillis(200));
         awaitListening(publicPort);
 
         try (Socket sock = new Socket("127.0.0.1", publicPort)) {
@@ -210,6 +212,26 @@ class TlsProxyServerTest {
         if (server != null) {
             server.close();
         }
+    }
+
+    /**
+     * A free port for a backend the proxy waits on, chosen below the ephemeral ranges (Linux
+     * 32768 and up, macOS and Windows 49152 and up). While nothing listens on a port, each of
+     * the proxy's connection attempts takes a random ephemeral source port; when that equals the
+     * destination, TCP connects the socket to itself and holds the port, so the late backend can
+     * no longer bind it. A port outside the range cannot be taken that way.
+     */
+    private static int freePortOutsideTheEphemeralRange() throws IOException {
+        for (int attempt = 0; attempt < 200; attempt++) {
+            int port = 20000 + ThreadLocalRandom.current().nextInt(10000);
+            try (ServerSocket s = new ServerSocket()) {
+                s.bind(new InetSocketAddress("127.0.0.1", port));
+                return port;
+            } catch (IOException expected) {
+                // Taken by something else: try another one.
+            }
+        }
+        throw new IOException("no free port between 20000 and 29999");
     }
 
     private static int freePort() throws IOException {
