@@ -27,6 +27,10 @@ quarkus:
       - --initialize-at-run-time=org.bouncycastle.jcajce.provider.asymmetric.x509.CertificateFactory
       - --initialize-at-run-time=io.floci.oci.core.common.BouncyCastleInitializer
       - --initialize-at-run-time=io.floci.oci.config.TlsConfigSource
+      # commons-compress (via docker-java) references zstd-jni from these two; floci-oci never
+      # reads or writes a zstd stream, so the jar is left out and the classes are never initialized.
+      - --initialize-at-run-time=org.apache.commons.compress.compressors.zstandard.ZstdCompressorInputStream
+      - --initialize-at-run-time=org.apache.commons.compress.compressors.zstandard.ZstdCompressorOutputStream
       # Classes holding a static SecureRandom: GraalVM refuses to bake a seeded
       # RNG into the image heap, so their initializers must run at image runtime.
       - --initialize-at-run-time=io.floci.oci.core.common.Ocids
