@@ -269,8 +269,8 @@ outright, so they are not re-researched:
 - **OCI declares no per-operation error lists.** Nothing anywhere maps an operation to the
   codes it can throw, so the check inverts: a code must exist in Oracle's *global* catalog
   ([apierrors.htm](https://docs.oracle.com/en-us/iaas/Content/API/References/apierrors.htm),
-  31 `(status, code)` pairs). Never claim an operation "declares" an error. Retryability is
-  in `oci-go-sdk/common/retry.go`.
+  32 `(status, code)` pairs in its summary table). Never claim an operation "declares" an
+  error. Retryability is in `oci-go-sdk/common/retry.go`.
 - **IAM policy verbs and resource-types exist only as HTML.** There is no machine-readable
   OCI policy vocabulary, official or otherwise; the source is
   [policyreference](https://docs.oracle.com/en-us/iaas/Content/Identity/Reference/policyreference.htm).
