@@ -43,6 +43,7 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -58,6 +59,8 @@ public class OkeClusterManager implements Resettable {
     static final String TLS_SAN_ENV = "FLOCI_OKE_TLS_SAN";
     static final String ENDPOINT_MODE_HOST = "host";
     static final String ENDPOINT_MODE_NETWORK = "network";
+    /** Docker's built-in networks, which have no container-name lookup. */
+    private static final Set<String> NETWORKS_WITHOUT_NAME_LOOKUP = Set.of("bridge", "host", "none");
     static final String TOKEN_DIR = "/var/lib/rancher/k3s/floci";
     static final String TOKEN_FILE = TOKEN_DIR + "/tokens.csv";
     static final String WEBHOOK_FILE = TOKEN_DIR + "/token-webhook.yaml";
@@ -141,8 +144,11 @@ public class OkeClusterManager implements Resettable {
 
         activeClusters.put(cluster.getId(), new ActiveClusterRef(containerName, volumeName, hostPort));
 
+        // A volume from an earlier start holds the cluster's data and CA: a failed recreate keeps it.
+        boolean volumeExisted = false;
         try {
             if (!lifecycleManager.isContainerRunning(containerName) || !createdForThisCluster(containerName, cluster)) {
+                volumeExisted = lifecycleManager.volumeExists(volumeName);
                 lifecycleManager.removeIfExists(containerName);
                 // Created up front so it carries the floci labels; a mount alone creates it bare.
                 lifecycleManager.ensureVolume(volumeName);
@@ -170,7 +176,9 @@ public class OkeClusterManager implements Resettable {
             activeClusters.remove(cluster.getId());
             try {
                 lifecycleManager.removeIfExists(containerName);
-                lifecycleManager.removeVolume(volumeName);
+                if (!volumeExisted) {
+                    lifecycleManager.removeVolume(volumeName);
+                }
             } catch (Exception cleanupEx) {
                 LOG.warnf(cleanupEx, "Failed to clean up container '%s' or volume '%s' after startup failure", containerName, volumeName);
             }
@@ -192,12 +200,20 @@ public class OkeClusterManager implements Resettable {
      * The API server address {@code endpoints.kubernetes} and the kubeconfig advertise. In
      * {@code endpoint-mode=network}, when floci-oci itself runs in a container, it is the sidecar's
      * container name on the Docker network they share, so other containers on that network reach it;
-     * otherwise, and always when floci-oci runs on the host, it is the published host port.
+     * otherwise, and always when floci-oci runs on the host, it is the published host port. A name
+     * needs a user-defined network to resolve: on Docker's default {@code bridge} (or {@code host},
+     * {@code none}) peers cannot look it up, so network mode falls back to the host port there too.
      */
     String kubernetesEndpoint(String containerName, int hostPort) {
         if (containerDetector.isRunningInContainer()
                 && ENDPOINT_MODE_NETWORK.equalsIgnoreCase(config.services().oke().endpointMode())) {
-            return "https://" + containerName + ":" + K3S_CONTAINER_PORT;
+            Optional<String> network = sidecarNetwork();
+            if (network.isPresent() && !NETWORKS_WITHOUT_NAME_LOOKUP.contains(network.get())) {
+                return "https://" + containerName + ":" + K3S_CONTAINER_PORT;
+            }
+            LOG.warnv("endpoint-mode=network needs floci-oci on a user-defined Docker network so other containers"
+                    + " can resolve {0}, but its sidecar network is {1}; advertising the host port instead",
+                    containerName, network.orElse("unknown"));
         }
         return "https://127.0.0.1:" + hostPort;
     }

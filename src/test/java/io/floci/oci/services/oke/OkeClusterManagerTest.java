@@ -123,7 +123,7 @@ class OkeClusterManagerTest {
     }
 
     @Test
-    void startClusterFailureRemovesVolumeUnconditionally() {
+    void startClusterFailureRemovesTheVolumeItCreatedWhateverThePrunePolicy() {
         lenient().when(config.storage().mode()).thenReturn("file");
         lenient().when(config.storage().pruneVolumesOnDelete()).thenReturn(false);
         when(portAllocator.allocate(6443, 6543)).thenReturn(6443);
@@ -138,6 +138,36 @@ class OkeClusterManagerTest {
 
         String expectedVolume = ContainerStorageHelper.dockerName(config, "oke-vol-" + cluster.getId());
         verify(lifecycleManager).removeVolume(expectedVolume);
+    }
+
+    @Test
+    void startClusterFailureKeepsAVolumeFromAnEarlierStart() {
+        // A restart or a sidecar upgrade that fails must not take the cluster's data and CA with it.
+        when(lifecycleManager.volumeExists(anyString())).thenReturn(true);
+        when(lifecycleManager.createAndStart(any())).thenThrow(new RuntimeException("Docker failure"));
+        StoredOkeCluster cluster = adoptableCluster("ocid1.cluster.oc1.iad.keepvolume001");
+
+        assertThrows(RuntimeException.class, () -> manager.startCluster(cluster));
+
+        verify(lifecycleManager, never()).removeVolume(anyString());
+        verify(portAllocator).release(6460);
+        assertEquals("FAILED", cluster.getLifecycleState());
+    }
+
+    @Test
+    void aFailedUpgradeOfARunningSidecarWithoutTheSanKeepsItsVolume() {
+        StoredOkeCluster cluster = adoptableCluster("ocid1.cluster.oc1.iad.keepvolume002");
+        String webhookKubeconfig = manager.webhookKubeconfig(cluster);
+        when(lifecycleManager.isContainerRunning(anyString())).thenReturn(true);
+        when(lifecycleManager.containerEnv(anyString())).thenReturn(List.of(
+                OkeClusterManager.API_TOKEN_ENV + "=" + cluster.getApiToken(),
+                OkeClusterManager.WEBHOOK_KUBECONFIG_ENV + "=" + webhookKubeconfig));
+        when(lifecycleManager.volumeExists(anyString())).thenReturn(true);
+        when(lifecycleManager.createAndStart(any())).thenThrow(new RuntimeException("Docker failure"));
+
+        assertThrows(RuntimeException.class, () -> manager.startCluster(cluster));
+
+        verify(lifecycleManager, never()).removeVolume(anyString());
     }
 
     @Test
@@ -516,10 +546,34 @@ class OkeClusterManagerTest {
     void networkModeAdvertisesTheSidecarContainerNameWhenFlociRunsInDocker() {
         when(config.services().oke().endpointMode()).thenReturn("network");
         when(containerDetector.isRunningInContainer()).thenReturn(true);
+        lenient().when(config.services().dockerNetwork()).thenReturn(Optional.empty());
+        when(networkResolver.resolveNetworkName()).thenReturn(Optional.of("floci_oci_default"));
         StoredOkeCluster cluster = startedCluster("ocid1.cluster.oc1.iad.netmode001", 6470);
 
         assertEquals("https://" + containerName(cluster) + ":6443", cluster.getEndpoints().get("kubernetes"));
         assertEquals("10.0.0.10:6470", cluster.getEndpoints().get("privateEndpoint"));
+    }
+
+    @Test
+    void networkModeFallsBackToTheHostPortOnANetworkWithoutNameLookup() {
+        when(config.services().oke().endpointMode()).thenReturn("network");
+        when(containerDetector.isRunningInContainer()).thenReturn(true);
+        lenient().when(config.services().dockerNetwork()).thenReturn(Optional.empty());
+        when(networkResolver.resolveNetworkName()).thenReturn(Optional.of("bridge"));
+        StoredOkeCluster cluster = startedCluster("ocid1.cluster.oc1.iad.netmode003", 6473);
+
+        assertEquals("https://127.0.0.1:6473", cluster.getEndpoints().get("kubernetes"));
+    }
+
+    @Test
+    void networkModeUsesTheConfiguredDockerNetworkWhenItHasNameLookup() {
+        when(config.services().oke().endpointMode()).thenReturn("network");
+        when(containerDetector.isRunningInContainer()).thenReturn(true);
+        when(config.services().dockerNetwork()).thenReturn(Optional.of("shared-net"));
+        lenient().when(networkResolver.resolveNetworkName()).thenReturn(Optional.of("bridge"));
+        StoredOkeCluster cluster = startedCluster("ocid1.cluster.oc1.iad.netmode004", 6474);
+
+        assertEquals("https://" + containerName(cluster) + ":6443", cluster.getEndpoints().get("kubernetes"));
     }
 
     @Test
