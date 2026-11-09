@@ -1,6 +1,6 @@
 # Pinned to the version of the local/oracle/oci-python-sdk reference clone, which is also the
 # oci release that sdk-test-cli's pinned oci-cli requires; bump both, and the pins in
 # docker/Dockerfile.compat, whenever `make refs` fast-forwards the clones.
-oci==2.187.1
+oci==2.190.0
 pytest>=8.0
 cryptography>=42.0
