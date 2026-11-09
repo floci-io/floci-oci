@@ -327,6 +327,17 @@ public interface EmulatorConfig {
             String kubeconfigAuth();
 
             /**
+             * The API server address {@code endpoints.kubernetes} and the kubeconfig advertise.
+             * {@code host} is {@code https://127.0.0.1:<hostPort>}, for clients on the Docker host;
+             * {@code network} is the k3s sidecar's container name on floci-oci's Docker network, for
+             * clients in other containers on it. {@code network} applies only when floci-oci itself
+             * runs in a container, and falls back to {@code host} otherwise.
+             * Env: FLOCI_OCI_SERVICES_OKE_ENDPOINT_MODE
+             */
+            @WithDefault("host")
+            String endpointMode();
+
+            /**
              * How long a real-mode cluster may stay CREATING before the k3s API answers; past it
              * the cluster and its work request go FAILED.
              * Env: FLOCI_OCI_SERVICES_OKE_READY_TIMEOUT_SECONDS

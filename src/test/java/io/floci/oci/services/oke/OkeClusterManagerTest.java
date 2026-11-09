@@ -102,6 +102,7 @@ class OkeClusterManagerTest {
 
     @Test
     void startClusterFailureReleasesPortAndCleansUpState() {
+        when(lifecycleManager.volumeConfirmedAbsent(anyString())).thenReturn(true);
         when(portAllocator.allocate(6443, 6543)).thenReturn(6443);
         when(lifecycleManager.createAndStart(any())).thenThrow(new RuntimeException("Docker failure"));
 
@@ -123,7 +124,8 @@ class OkeClusterManagerTest {
     }
 
     @Test
-    void startClusterFailureRemovesVolumeUnconditionally() {
+    void startClusterFailureRemovesTheVolumeItCreatedWhateverThePrunePolicy() {
+        when(lifecycleManager.volumeConfirmedAbsent(anyString())).thenReturn(true);
         lenient().when(config.storage().mode()).thenReturn("file");
         lenient().when(config.storage().pruneVolumesOnDelete()).thenReturn(false);
         when(portAllocator.allocate(6443, 6543)).thenReturn(6443);
@@ -138,6 +140,46 @@ class OkeClusterManagerTest {
 
         String expectedVolume = ContainerStorageHelper.dockerName(config, "oke-vol-" + cluster.getId());
         verify(lifecycleManager).removeVolume(expectedVolume);
+    }
+
+    @Test
+    void startClusterFailureKeepsAVolumeFromAnEarlierStart() {
+        // A restart or a sidecar upgrade that fails must not take the cluster's data and CA with it.
+        when(lifecycleManager.volumeConfirmedAbsent(anyString())).thenReturn(false);
+        when(lifecycleManager.createAndStart(any())).thenThrow(new RuntimeException("Docker failure"));
+        StoredOkeCluster cluster = adoptableCluster("ocid1.cluster.oc1.iad.keepvolume001");
+
+        assertThrows(RuntimeException.class, () -> manager.startCluster(cluster));
+
+        verify(lifecycleManager, never()).removeVolume(anyString());
+        verify(portAllocator).release(6460);
+        assertEquals("FAILED", cluster.getLifecycleState());
+    }
+
+    @Test
+    void startClusterFailureKeepsTheVolumeWhenItCouldNotBeInspected() {
+        when(lifecycleManager.volumeConfirmedAbsent(anyString())).thenThrow(new RuntimeException("daemon gone"));
+        StoredOkeCluster cluster = adoptableCluster("ocid1.cluster.oc1.iad.keepvolume003");
+
+        assertThrows(RuntimeException.class, () -> manager.startCluster(cluster));
+
+        verify(lifecycleManager, never()).removeVolume(anyString());
+    }
+
+    @Test
+    void aFailedUpgradeOfARunningSidecarWithoutTheSanKeepsItsVolume() {
+        StoredOkeCluster cluster = adoptableCluster("ocid1.cluster.oc1.iad.keepvolume002");
+        String webhookKubeconfig = manager.webhookKubeconfig(cluster);
+        when(lifecycleManager.isContainerRunning(anyString())).thenReturn(true);
+        when(lifecycleManager.containerEnv(anyString())).thenReturn(List.of(
+                OkeClusterManager.API_TOKEN_ENV + "=" + cluster.getApiToken(),
+                OkeClusterManager.WEBHOOK_KUBECONFIG_ENV + "=" + webhookKubeconfig));
+        when(lifecycleManager.volumeConfirmedAbsent(anyString())).thenReturn(false);
+        when(lifecycleManager.createAndStart(any())).thenThrow(new RuntimeException("Docker failure"));
+
+        assertThrows(RuntimeException.class, () -> manager.startCluster(cluster));
+
+        verify(lifecycleManager, never()).removeVolume(anyString());
     }
 
     @Test
@@ -350,6 +392,8 @@ class OkeClusterManagerTest {
                 "--kube-apiserver-arg=authentication-token-webhook-cache-ttl=30s"));
         verify(specBuilder).withEnv(OkeClusterManager.API_TOKEN_ENV, "token-servermode001");
         verify(specBuilder).withEnv(OkeClusterManager.WEBHOOK_KUBECONFIG_ENV, manager.webhookKubeconfig(cluster));
+        verify(specBuilder).withEnv(OkeClusterManager.TLS_SAN_ENV,
+                ContainerStorageHelper.dockerName(config, "oke-" + cluster.getId()));
         verify(specBuilder).withDockerNetwork(Optional.empty());
         verify(specBuilder).withHostDockerInternalOnLinux();
         assertNull(cluster.getLifecycleState(), "real mode leaves ACTIVE to the readiness poller");
@@ -363,7 +407,7 @@ class OkeClusterManagerTest {
         assertTrue(script.contains("\"$" + OkeClusterManager.WEBHOOK_KUBECONFIG_ENV + "\" > "
                 + OkeClusterManager.WEBHOOK_FILE));
         assertTrue(script.contains("system:masters"));
-        assertTrue(script.endsWith("exec /bin/k3s \"$@\""));
+        assertTrue(script.endsWith("exec /bin/k3s \"$@\" --tls-san=\"$" + OkeClusterManager.TLS_SAN_ENV + "\""));
     }
 
     @Test
@@ -444,10 +488,12 @@ class OkeClusterManagerTest {
     void startClusterAdoptsARunningSidecarCreatedForThisCluster() {
         StoredOkeCluster cluster = adoptableCluster("ocid1.cluster.oc1.iad.adopt001");
         String webhookKubeconfig = manager.webhookKubeconfig(cluster);
+        String tlsSan = containerName(cluster);
         when(lifecycleManager.isContainerRunning(anyString())).thenReturn(true);
         when(lifecycleManager.containerEnv(anyString())).thenReturn(List.of(
                 OkeClusterManager.API_TOKEN_ENV + "=" + cluster.getApiToken(),
-                OkeClusterManager.WEBHOOK_KUBECONFIG_ENV + "=" + webhookKubeconfig));
+                OkeClusterManager.WEBHOOK_KUBECONFIG_ENV + "=" + webhookKubeconfig,
+                OkeClusterManager.TLS_SAN_ENV + "=" + tlsSan));
         when(lifecycleManager.containerLabels(anyString())).thenReturn(
                 Map.of(ContainerStorageHelper.REGION_LABEL, "us-ashburn-1"));
 
@@ -461,10 +507,12 @@ class OkeClusterManagerTest {
         StoredOkeCluster cluster = adoptableCluster("ocid1.cluster.oc1.phx.adopt003");
         cluster.setRegion("us-phoenix-1");
         String webhookKubeconfig = manager.webhookKubeconfig(cluster);
+        String tlsSan = containerName(cluster);
         when(lifecycleManager.isContainerRunning(anyString())).thenReturn(true);
         when(lifecycleManager.containerEnv(anyString())).thenReturn(List.of(
                 OkeClusterManager.API_TOKEN_ENV + "=" + cluster.getApiToken(),
-                OkeClusterManager.WEBHOOK_KUBECONFIG_ENV + "=" + webhookKubeconfig));
+                OkeClusterManager.WEBHOOK_KUBECONFIG_ENV + "=" + webhookKubeconfig,
+                OkeClusterManager.TLS_SAN_ENV + "=" + tlsSan));
         when(lifecycleManager.containerLabels(anyString())).thenReturn(
                 Map.of(ContainerStorageHelper.REGION_LABEL, "us-ashburn-1"));
         when(lifecycleManager.createAndStart(any())).thenReturn(new ContainerLifecycleManager.ContainerInfo("c-new", Map.of()));
@@ -487,6 +535,97 @@ class OkeClusterManagerTest {
 
         verify(lifecycleManager).removeIfExists(anyString());
         verify(lifecycleManager).createAndStart(any());
+    }
+
+    @Test
+    void startClusterRecreatesARunningSidecarWithoutTheContainerNameSan() {
+        // Created by a floci-oci that did not add the SAN: its certificate cannot serve network mode.
+        StoredOkeCluster cluster = adoptableCluster("ocid1.cluster.oc1.iad.adopt004");
+        String webhookKubeconfig = manager.webhookKubeconfig(cluster);
+        when(lifecycleManager.isContainerRunning(anyString())).thenReturn(true);
+        when(lifecycleManager.containerEnv(anyString())).thenReturn(List.of(
+                OkeClusterManager.API_TOKEN_ENV + "=" + cluster.getApiToken(),
+                OkeClusterManager.WEBHOOK_KUBECONFIG_ENV + "=" + webhookKubeconfig));
+        when(lifecycleManager.createAndStart(any())).thenReturn(new ContainerLifecycleManager.ContainerInfo("c-new", Map.of()));
+
+        manager.startCluster(cluster);
+
+        verify(lifecycleManager).removeIfExists(anyString());
+        verify(lifecycleManager).createAndStart(any());
+    }
+
+    @Test
+    void networkModeAdvertisesTheSidecarContainerNameWhenFlociRunsInDocker() {
+        when(config.services().oke().endpointMode()).thenReturn("network");
+        when(containerDetector.isRunningInContainer()).thenReturn(true);
+        lenient().when(config.services().dockerNetwork()).thenReturn(Optional.empty());
+        when(networkResolver.resolveNetworkName()).thenReturn(Optional.of("floci_oci_default"));
+        StoredOkeCluster cluster = startedCluster("ocid1.cluster.oc1.iad.netmode001", 6470);
+
+        assertEquals("https://" + containerName(cluster) + ":6443", cluster.getEndpoints().get("kubernetes"));
+        assertEquals("10.0.0.10:6470", cluster.getEndpoints().get("privateEndpoint"));
+    }
+
+    @Test
+    void networkModeFallsBackToTheHostPortOnANetworkWithoutNameLookup() {
+        when(config.services().oke().endpointMode()).thenReturn("network");
+        when(containerDetector.isRunningInContainer()).thenReturn(true);
+        lenient().when(config.services().dockerNetwork()).thenReturn(Optional.empty());
+        when(networkResolver.resolveNetworkName()).thenReturn(Optional.of("bridge"));
+        StoredOkeCluster cluster = startedCluster("ocid1.cluster.oc1.iad.netmode003", 6473);
+
+        assertEquals("https://127.0.0.1:6473", cluster.getEndpoints().get("kubernetes"));
+    }
+
+    @Test
+    void networkModeUsesTheConfiguredDockerNetworkWhenItHasNameLookup() {
+        when(config.services().oke().endpointMode()).thenReturn("network");
+        when(containerDetector.isRunningInContainer()).thenReturn(true);
+        when(config.services().dockerNetwork()).thenReturn(Optional.of("shared-net"));
+        lenient().when(networkResolver.resolveNetworkName()).thenReturn(Optional.of("bridge"));
+        StoredOkeCluster cluster = startedCluster("ocid1.cluster.oc1.iad.netmode004", 6474);
+
+        assertEquals("https://" + containerName(cluster) + ":6443", cluster.getEndpoints().get("kubernetes"));
+    }
+
+    @Test
+    void networkModeFallsBackToTheHostPortWhenFlociRunsOnTheHost() {
+        lenient().when(config.services().oke().endpointMode()).thenReturn("NETWORK");
+        when(containerDetector.isRunningInContainer()).thenReturn(false);
+        StoredOkeCluster cluster = startedCluster("ocid1.cluster.oc1.iad.netmode002", 6471);
+
+        assertEquals("https://127.0.0.1:6471", cluster.getEndpoints().get("kubernetes"));
+    }
+
+    @Test
+    void hostModeAdvertisesTheHostPortEvenWhenFlociRunsInDocker() {
+        when(config.services().oke().endpointMode()).thenReturn("host");
+        lenient().when(containerDetector.isRunningInContainer()).thenReturn(true);
+        StoredOkeCluster cluster = startedCluster("ocid1.cluster.oc1.iad.hostmode001", 6472);
+
+        assertEquals("https://127.0.0.1:6472", cluster.getEndpoints().get("kubernetes"));
+    }
+
+    @Test
+    void endpointModeAcceptsHostAndNetworkInAnyCaseAndRejectsTheRest() {
+        OkeClusterManager.validateEndpointMode("host");
+        OkeClusterManager.validateEndpointMode("Network");
+        IllegalStateException e = assertThrows(IllegalStateException.class,
+                () -> OkeClusterManager.validateEndpointMode("public"));
+        assertTrue(e.getMessage().contains("floci-oci.services.oke.endpoint-mode"), e.getMessage());
+    }
+
+    private StoredOkeCluster startedCluster(String id, int hostPort) {
+        StoredOkeCluster cluster = adoptableCluster(id);
+        cluster.setHostPort(hostPort);
+        when(lifecycleManager.isContainerRunning(anyString())).thenReturn(false);
+        when(lifecycleManager.createAndStart(any())).thenReturn(new ContainerLifecycleManager.ContainerInfo("c-" + hostPort, Map.of()));
+        manager.startCluster(cluster);
+        return cluster;
+    }
+
+    private String containerName(StoredOkeCluster cluster) {
+        return ContainerStorageHelper.dockerName(config, "oke-" + cluster.getId());
     }
 
     private StoredOkeCluster adoptableCluster(String id) {

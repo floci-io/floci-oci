@@ -30,14 +30,19 @@ import java.net.URI;
 import java.security.KeyStore;
 import java.security.cert.Certificate;
 import java.security.cert.CertificateFactory;
+import java.security.cert.X509Certificate;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLSocket;
+import javax.net.ssl.TrustManagerFactory;
 
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.equalTo;
@@ -177,6 +182,30 @@ class OkeDockerTest {
 
         assertEquals(401, kubeApi("Bearer not-a-token", "/api/v1/namespaces"),
                 "TLS must verify against the kubeconfig CA with no relaxed validation");
+
+        String containerName = ContainerStorageHelper.dockerName(config, "oke-" + clusterId);
+        List<String> dnsNames = servingCertificateDnsNames();
+        assertTrue(dnsNames.contains(containerName),
+                () -> "endpoint-mode=network needs the container name in the serving certificate: " + dnsNames);
+    }
+
+    /** The DNS SANs of the certificate the API server presents, verified against the cluster CA. */
+    private List<String> servingCertificateDnsNames() throws Exception {
+        TrustManagerFactory trust = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+        trust.init(clusterCa);
+        SSLContext context = SSLContext.getInstance("TLS");
+        context.init(null, trust.getTrustManagers(), null);
+        try (SSLSocket socket = (SSLSocket) context.getSocketFactory().createSocket("127.0.0.1", apiPort)) {
+            socket.startHandshake();
+            X509Certificate serving = (X509Certificate) socket.getSession().getPeerCertificates()[0];
+            List<String> names = new ArrayList<>();
+            for (List<?> san : serving.getSubjectAlternativeNames()) {
+                if (Integer.valueOf(2).equals(san.get(0))) {
+                    names.add((String) san.get(1));
+                }
+            }
+            return names;
+        }
     }
 
     @Test

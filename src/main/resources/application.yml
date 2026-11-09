@@ -120,6 +120,7 @@ floci-oci:
       api-server-base-port: 6443
       api-server-max-port: 6543
       kubeconfig-auth: exec  # exec = real OKE `oci ce cluster generate-token`; token = static bearer token
+      endpoint-mode: host    # host = https://127.0.0.1:<hostPort>; network = sidecar container name (floci-oci in a container)
       ready-timeout-seconds: 300
     psql:
       enabled: true

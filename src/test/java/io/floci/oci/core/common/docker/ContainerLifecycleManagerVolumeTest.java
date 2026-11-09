@@ -116,6 +116,23 @@ class ContainerLifecycleManagerVolumeTest {
     }
 
     @Test
+    void volumeConfirmedAbsent_onlyOnADefiniteNotFound() {
+        InspectVolumeCmd missing = mock(InspectVolumeCmd.class);
+        when(dockerClient.inspectVolumeCmd("missing")).thenReturn(missing);
+        when(missing.exec()).thenThrow(new NotFoundException("No such volume"));
+        InspectVolumeCmd present = mock(InspectVolumeCmd.class);
+        when(dockerClient.inspectVolumeCmd("present")).thenReturn(present);
+        when(present.exec()).thenReturn(mock(InspectVolumeResponse.class));
+        InspectVolumeCmd unreachable = mock(InspectVolumeCmd.class);
+        when(dockerClient.inspectVolumeCmd("unreachable")).thenReturn(unreachable);
+        when(unreachable.exec()).thenThrow(new DockerException("Connection refused", 500));
+
+        assertTrue(manager.volumeConfirmedAbsent("missing"));
+        assertFalse(manager.volumeConfirmedAbsent("present"));
+        assertFalse(manager.volumeConfirmedAbsent("unreachable"), "a failed inspection must not read as absent");
+    }
+
+    @Test
     void ensureSharedVolume_noOwnershipConfig_createsVolumeButNoHelperContainer() {
         InspectVolumeCmd cmd = mock(InspectVolumeCmd.class);
         when(dockerClient.inspectVolumeCmd("shared")).thenReturn(cmd);
