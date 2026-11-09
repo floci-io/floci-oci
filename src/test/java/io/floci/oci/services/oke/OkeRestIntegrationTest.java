@@ -128,7 +128,17 @@ class OkeRestIntegrationTest {
                 .statusCode(200)
                 .body("id", equalTo(nodePoolId))
                 .body("quantityPerSubnet", equalTo(2))
+                .body("systemTags", equalTo(Map.of()))
                 .body("timeCreated", nullValue());
+
+        given()
+            .queryParam("compartmentId", compartment)
+            .queryParam("clusterId", clusterId)
+            .when().get("/20180222/nodePools")
+            .then()
+                .statusCode(200)
+                .body("[0].id", equalTo(nodePoolId))
+                .body("[0].systemTags", equalTo(Map.of()));
 
         // 7. Cluster and Node Pool Options
         given()
