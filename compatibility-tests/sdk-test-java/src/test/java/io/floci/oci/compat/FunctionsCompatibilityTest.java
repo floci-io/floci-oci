@@ -64,21 +64,34 @@ class FunctionsCompatibilityTest {
                         .subnetIds(List.of("ocid1.subnet.oc1.iad.javasubnet"))
                         .build())
                 .build()).getApplication();
-        assertThat(app.getLifecycleState()).isEqualTo(Application.LifecycleState.Active);
-        assertThat(app.getShape()).isEqualTo(Application.Shape.GenericX86);
+        try {
+            assertThat(app.getLifecycleState()).isEqualTo(Application.LifecycleState.Active);
+            assertThat(app.getShape()).isEqualTo(Application.Shape.GenericX86);
 
-        CreateFunctionResponse created = functions.createFunction(CreateFunctionRequest.builder()
-                .createFunctionDetails(CreateFunctionDetails.builder()
-                        .applicationId(app.getId())
-                        .displayName("java-fn-" + System.nanoTime())
-                        .sourceDetails(CreateContainerImageFunctionSourceDetails.builder()
-                                .image("iad.ocir.io/tenant/java-hello:0.0.1")
-                                .build())
-                        .memoryInMBs(256L)
-                        .build())
-                .build());
-        assertThat(created.getOpcWorkRequestId()).isNotBlank();
-        Function fn = created.getFunction();
+            CreateFunctionResponse created = functions.createFunction(CreateFunctionRequest.builder()
+                    .createFunctionDetails(CreateFunctionDetails.builder()
+                            .applicationId(app.getId())
+                            .displayName("java-fn-" + System.nanoTime())
+                            .sourceDetails(CreateContainerImageFunctionSourceDetails.builder()
+                                    .image("iad.ocir.io/tenant/java-hello:0.0.1")
+                                    .build())
+                            .memoryInMBs(256L)
+                            .build())
+                    .build());
+            Function fn = created.getFunction();
+            try {
+                assertThat(created.getOpcWorkRequestId()).isNotBlank();
+                exerciseFunction(app, fn);
+            } finally {
+                functions.deleteFunction(DeleteFunctionRequest.builder().functionId(fn.getId()).build());
+            }
+        } finally {
+            functions.deleteApplication(
+                    DeleteApplicationRequest.builder().applicationId(app.getId()).build());
+        }
+    }
+
+    private void exerciseFunction(Application app, Function fn) {
         assertThat(fn.getLifecycleState()).isEqualTo(Function.LifecycleState.Active);
         assertThat(fn.getMemoryInMBs()).isEqualTo(256L);
         assertThat(fn.getInvokeEndpoint()).isNotBlank();
@@ -101,9 +114,6 @@ class FunctionsCompatibilityTest {
         assertThat(workRequest.getResources().get(0).getIdentifier()).isEqualTo(fn.getId());
         assertThat(functions.getFunction(GetFunctionRequest.builder().functionId(fn.getId()).build())
                 .getFunction().getMemoryInMBs()).isEqualTo(512L);
-
-        functions.deleteFunction(DeleteFunctionRequest.builder().functionId(fn.getId()).build());
-        functions.deleteApplication(DeleteApplicationRequest.builder().applicationId(app.getId()).build());
     }
 
     @Test

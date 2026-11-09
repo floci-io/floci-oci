@@ -37,7 +37,14 @@ def test_cluster_and_node_pool_lifecycle(container_engine):
     assert created.status == 202
     assert created.data is None
     cluster_id = created_id(container_engine, created)
+    try:
+        exercise_cluster(container_engine, cluster_id, name)
+    finally:
+        # Deleting the cluster stops its k3s sidecar and frees its port, even when a step failed.
+        assert container_engine.delete_cluster(cluster_id).headers["opc-work-request-id"]
 
+
+def exercise_cluster(container_engine, cluster_id, name):
     cluster = oci.wait_until(
         container_engine,
         container_engine.get_cluster(cluster_id),
@@ -71,19 +78,18 @@ def test_cluster_and_node_pool_lifecycle(container_engine):
     )
     assert pool_created.status == 202
     node_pool_id = created_id(container_engine, pool_created)
+    try:
+        node_pool = container_engine.get_node_pool(node_pool_id).data
+        assert node_pool.name == pool_name
+        assert node_pool.cluster_id == cluster_id
+        assert node_pool.quantity_per_subnet == 2
+        assert node_pool.system_tags == {}
 
-    node_pool = container_engine.get_node_pool(node_pool_id).data
-    assert node_pool.name == pool_name
-    assert node_pool.cluster_id == cluster_id
-    assert node_pool.quantity_per_subnet == 2
-    assert node_pool.system_tags == {}
-
-    pools = container_engine.list_node_pools(TENANCY, cluster_id=cluster_id).data
-    summary = next(item for item in pools if item.id == node_pool_id)
-    assert summary.system_tags == {}
-
-    assert container_engine.delete_node_pool(node_pool_id).headers["opc-work-request-id"]
-    assert container_engine.delete_cluster(cluster_id).headers["opc-work-request-id"]
+        pools = container_engine.list_node_pools(TENANCY, cluster_id=cluster_id).data
+        summary = next(item for item in pools if item.id == node_pool_id)
+        assert summary.system_tags == {}
+    finally:
+        assert container_engine.delete_node_pool(node_pool_id).headers["opc-work-request-id"]
 
 
 def test_get_missing_cluster_is_not_authorized_or_not_found(container_engine):
