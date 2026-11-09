@@ -55,6 +55,9 @@ public class OkeClusterManager implements Resettable {
     private static final int K3S_CONTAINER_PORT = 6443;
     static final String API_TOKEN_ENV = "FLOCI_OKE_API_TOKEN";
     static final String WEBHOOK_KUBECONFIG_ENV = "FLOCI_OKE_WEBHOOK_KUBECONFIG";
+    static final String TLS_SAN_ENV = "FLOCI_OKE_TLS_SAN";
+    static final String ENDPOINT_MODE_HOST = "host";
+    static final String ENDPOINT_MODE_NETWORK = "network";
     static final String TOKEN_DIR = "/var/lib/rancher/k3s/floci";
     static final String TOKEN_FILE = TOKEN_DIR + "/tokens.csv";
     static final String WEBHOOK_FILE = TOKEN_DIR + "/token-webhook.yaml";
@@ -63,7 +66,10 @@ public class OkeClusterManager implements Resettable {
 
     /**
      * Writes the k3s static token file from {@link #API_TOKEN_ENV} and the token-webhook
-     * kubeconfig from {@link #WEBHOOK_KUBECONFIG_ENV}, then execs k3s with the container CMD.
+     * kubeconfig from {@link #WEBHOOK_KUBECONFIG_ENV}, then execs k3s with the container CMD plus a
+     * serving-certificate SAN for the container name in {@link #TLS_SAN_ENV}, so
+     * {@code endpoint-mode=network} endpoints verify. k3s adds a new SAN to the certificate it keeps
+     * on the volume when it restarts, so a recreated sidecar keeps its CA.
      * Both files are rewritten from the container's env on every start; the webhook address in
      * that env is fixed when the container is created. The image's own CMD is {@code agent}, which needs a server to join
      * and exits at once, so {@link #buildCmd} always supplies {@code server}. Values travel as env
@@ -75,7 +81,7 @@ public class OkeClusterManager implements Resettable {
                     + " > " + TOKEN_FILE
                     + " && printf '%s\\n' \"$" + WEBHOOK_KUBECONFIG_ENV + "\""
                     + " > " + WEBHOOK_FILE
-                    + " && exec /bin/k3s \"$@\"");
+                    + " && exec /bin/k3s \"$@\" --tls-san=\"$" + TLS_SAN_ENV + "\"");
 
     public record ActiveClusterRef(String containerName, String volumeName, int hostPort) {}
 
@@ -148,6 +154,7 @@ public class OkeClusterManager implements Resettable {
                         .withEnv("K3S_KUBECONFIG_MODE", "644")
                         .withEnv(API_TOKEN_ENV, cluster.getApiToken())
                         .withEnv(WEBHOOK_KUBECONFIG_ENV, webhookKubeconfig(cluster))
+                        .withEnv(TLS_SAN_ENV, containerName)
                         .withPortBinding(K3S_CONTAINER_PORT, hostPort)
                         .withNamedVolume(volumeName, "/var/lib/rancher/k3s")
                         .withDockerNetwork(Optional.empty())
@@ -175,16 +182,38 @@ public class OkeClusterManager implements Resettable {
         }
 
         cluster.setEndpoints(Map.of(
-            "kubernetes", "https://127.0.0.1:" + hostPort,
+            "kubernetes", kubernetesEndpoint(containerName, hostPort),
             "privateEndpoint", "10.0.0.10:" + hostPort
         ));
         LOG.infof("Started k3s sidecar container '%s' bound to host port %d", containerName, hostPort);
     }
 
     /**
+     * The API server address {@code endpoints.kubernetes} and the kubeconfig advertise. In
+     * {@code endpoint-mode=network}, when floci-oci itself runs in a container, it is the sidecar's
+     * container name on the Docker network they share, so other containers on that network reach it;
+     * otherwise, and always when floci-oci runs on the host, it is the published host port.
+     */
+    String kubernetesEndpoint(String containerName, int hostPort) {
+        if (containerDetector.isRunningInContainer()
+                && ENDPOINT_MODE_NETWORK.equalsIgnoreCase(config.services().oke().endpointMode())) {
+            return "https://" + containerName + ":" + K3S_CONTAINER_PORT;
+        }
+        return "https://127.0.0.1:" + hostPort;
+    }
+
+    static void validateEndpointMode(String mode) {
+        if (!ENDPOINT_MODE_HOST.equalsIgnoreCase(mode) && !ENDPOINT_MODE_NETWORK.equalsIgnoreCase(mode)) {
+            throw new IllegalStateException("Invalid floci-oci.services.oke.endpoint-mode value '" + mode
+                    + "': allowed values are " + ENDPOINT_MODE_HOST + " and " + ENDPOINT_MODE_NETWORK);
+        }
+    }
+
+    /**
      * Tokens k3s does not know (the {@code oci ce cluster generate-token} ones) go to
      * floci-oci's token webhook. {@code 127.0.0.1} and {@code localhost} are already in k3s's
-     * default certificate SANs, which covers the kubeconfig's endpoint.
+     * default certificate SANs, which covers the host-mode endpoint; {@link #K3S_ENTRYPOINT} adds the
+     * container name for network mode.
      */
     static List<String> buildServerArgs() {
         return List.of("server",
@@ -208,14 +237,16 @@ public class OkeClusterManager implements Resettable {
 
     /**
      * A running sidecar is adopted only when it was created with this cluster's token, current
-     * webhook address and region label. One left by an older floci-oci, or by one reachable at
-     * another address, would reject the exec credentials or stay labelled with the wrong region,
-     * so it is recreated on the same volume, keeping its CA.
+     * webhook address, container-name SAN and region label. One left by an older floci-oci, or by
+     * one reachable at another address, would reject the exec credentials, serve a certificate
+     * without the network-mode name, or stay labelled with the wrong region, so it is recreated on
+     * the same volume, keeping its CA.
      */
     private boolean createdForThisCluster(String containerName, StoredOkeCluster cluster) {
         List<String> env = lifecycleManager.containerEnv(containerName);
         return env.contains(API_TOKEN_ENV + "=" + cluster.getApiToken())
                 && env.contains(WEBHOOK_KUBECONFIG_ENV + "=" + webhookKubeconfig(cluster))
+                && env.contains(TLS_SAN_ENV + "=" + containerName)
                 && clusterRegion(cluster).equals(
                         lifecycleManager.containerLabels(containerName).get(ContainerStorageHelper.REGION_LABEL));
     }
