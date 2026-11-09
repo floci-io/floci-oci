@@ -1,5 +1,6 @@
 package io.floci.oci.core.auth;
 
+import io.floci.oci.testing.SecurityTokens;
 import io.quarkus.test.junit.QuarkusTest;
 import io.quarkus.test.junit.QuarkusTestProfile;
 import io.quarkus.test.junit.TestProfile;
@@ -24,6 +25,13 @@ class SignatureRequiredIntegrationTest {
 
     private static String signed() {
         return "Signature version=\"1\",keyId=\"" + TENANCY + "/ocid1.user.oc1..siguser/aa:bb\","
+                + "algorithm=\"rsa-sha256\",headers=\"date (request-target) host\","
+                + "signature=\"ZmFrZXNpZ25hdHVyZQ==\"";
+    }
+
+    private static String sessionSigned(String tenancyId) {
+        return "Signature version=\"1\",keyId=\"ST$"
+                + SecurityTokens.session(tenancyId, "ocid1.user.oc1..sessionuser") + "\","
                 + "algorithm=\"rsa-sha256\",headers=\"date (request-target) host\","
                 + "signature=\"ZmFrZXNpZ25hdHVyZQ==\"";
     }
@@ -83,6 +91,45 @@ class SignatureRequiredIntegrationTest {
             .queryParam("compartmentId", TENANCY)
             .when().get("/20160918/compartments")
             .then().statusCode(200);
+    }
+
+    @Test
+    void aSessionTokenSignedServiceRequestIsServedForTheTokensTenancy() {
+        String name = "session-visible-" + System.nanoTime();
+        String compartmentId = given()
+            .header("Authorization", signed())
+            .contentType("application/json")
+            .body(Map.of("compartmentId", TENANCY, "name", name, "description", "seen through a session token"))
+            .when().post("/20160918/compartments")
+            .then().statusCode(200)
+                .extract().path("id");
+
+        given()
+            .header("Authorization", sessionSigned(TENANCY))
+            .when().get("/20160918/compartments/{id}", compartmentId)
+            .then()
+                .statusCode(200)
+                .body("name", equalTo(name));
+
+        given()
+            .header("Authorization", sessionSigned("ocid1.tenancy.oc1..sessionothertenancy"))
+            .when().get("/20160918/compartments/{id}", compartmentId)
+            .then()
+                .statusCode(404)
+                .body("code", equalTo("NotAuthorizedOrNotFound"));
+    }
+
+    @Test
+    void aSecurityTokenWithoutACallerIsNotAuthenticated() {
+        given()
+            .header("Authorization", "Signature version=\"1\",keyId=\"ST$eyJhbGciOi\","
+                    + "algorithm=\"rsa-sha256\",headers=\"date (request-target) host\","
+                    + "signature=\"ZmFrZXNpZ25hdHVyZQ==\"")
+            .queryParam("compartmentId", TENANCY)
+            .when().get("/20160918/compartments")
+            .then()
+                .statusCode(401)
+                .body("code", equalTo("NotAuthenticated"));
     }
 
     public static class RequireSignatureProfile implements QuarkusTestProfile {

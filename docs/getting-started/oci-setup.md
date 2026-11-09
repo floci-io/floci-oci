@@ -63,8 +63,10 @@ print(client.get_namespace().data)
 ## Multi-tenancy
 
 The tenancy OCID in your signing key's `keyId` is the storage partition — requests signed
-with different tenancy OCIDs see isolated resources. Unsigned requests fall back to the
-configured `floci-oci.default-tenancy-id`.
+with different tenancy OCIDs see isolated resources. Session auth (`--auth security_token`)
+signs with a `ST$<token>` keyId instead; its tenancy is the token's `tenant` claim, read
+without verifying the token. Unsigned requests fall back to the configured
+`floci-oci.default-tenancy-id`.
 
 ## Regions
 

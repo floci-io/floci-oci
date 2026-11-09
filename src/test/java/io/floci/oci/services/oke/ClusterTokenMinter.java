@@ -31,10 +31,19 @@ final class ClusterTokenMinter {
     }
 
     static String mint(String region, String clusterId, String tenancyId, String userId, Instant signedAt) {
+        return mintWithKeyId(region, clusterId, tenancyId + "/" + userId + "/aa:bb:cc", signedAt);
+    }
+
+    /** {@code oci ce cluster generate-token --auth security_token}: the keyId is {@code ST$<jwt>}. */
+    static String mintWithSecurityToken(String region, String clusterId, String securityToken, Instant signedAt) {
+        return mintWithKeyId(region, clusterId, "ST$" + securityToken, signedAt);
+    }
+
+    static String mintWithKeyId(String region, String clusterId, String keyId, Instant signedAt) {
         String host = "containerengine." + region + ".oraclecloud.com";
         String path = "/cluster_request/" + clusterId;
         String date = RFC_1123.format(signedAt);
-        String authorization = authorization(tenancyId + "/" + userId + "/aa:bb:cc", signature(date, path, host));
+        String authorization = authorization(keyId, signature(date, path, host));
         return encode("https://" + host + path
                 + "?authorization=" + URLEncoder.encode(authorization, StandardCharsets.UTF_8)
                 + "&date=" + URLEncoder.encode(date, StandardCharsets.UTF_8));

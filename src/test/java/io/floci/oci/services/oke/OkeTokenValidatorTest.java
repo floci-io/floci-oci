@@ -2,6 +2,7 @@ package io.floci.oci.services.oke;
 
 import io.floci.oci.core.auth.AuthContext;
 import io.floci.oci.services.oke.model.StoredOkeCluster;
+import io.floci.oci.testing.SecurityTokens;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -123,12 +124,30 @@ class OkeTokenValidatorTest {
     }
 
     @Test
-    void rejectsSecurityTokenKeyIdsItCannotBindToATenancy() {
-        String minted = decoded(ClusterTokenMinter.mint(REGION, CLUSTER_ID, TENANCY, USER, NOW));
-        String keyId = "keyId%3D%22" + TENANCY + "%2F" + USER + "%2Faa%3Abb%3Acc%22";
-        assertTrue(minted.contains(keyId), minted);
+    void acceptsASessionTokenFromTheClustersTenancy() {
+        String token = ClusterTokenMinter.mintWithSecurityToken(
+                REGION, CLUSTER_ID, SecurityTokens.session(TENANCY, USER), NOW);
 
-        assertRejected(ClusterTokenMinter.encode(minted.replace(keyId, "keyId%3D%22ST%24eyJhbGciOi%22")));
+        Optional<AuthContext> caller = validator.validate(token, cluster);
+
+        assertTrue(caller.isPresent(), () -> "rejected: " + decoded(token));
+        assertEquals(TENANCY, caller.get().tenancyId());
+        assertEquals(USER, caller.get().userId());
+        assertTrue(token.length() <= OkeTokenValidator.MAX_TOKEN_LENGTH,
+                () -> "a session-auth token is " + token.length() + " characters");
+    }
+
+    @Test
+    void rejectsASessionTokenFromAnotherTenancy() {
+        assertRejected(ClusterTokenMinter.mintWithSecurityToken(
+                REGION, CLUSTER_ID, SecurityTokens.session("ocid1.tenancy.oc1..someoneelse", USER), NOW));
+    }
+
+    @Test
+    void rejectsSecurityTokenKeyIdsItCannotBindToATenancy() {
+        assertRejected(ClusterTokenMinter.mintWithKeyId(REGION, CLUSTER_ID, "ST$eyJhbGciOi", NOW));
+        assertRejected(ClusterTokenMinter.mintWithSecurityToken(
+                REGION, CLUSTER_ID, SecurityTokens.jwt("{\"sub\":\"" + USER + "\"}"), NOW));
     }
 
     @Test

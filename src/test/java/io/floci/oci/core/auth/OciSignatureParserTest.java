@@ -1,5 +1,6 @@
 package io.floci.oci.core.auth;
 
+import io.floci.oci.testing.SecurityTokens;
 import org.junit.jupiter.api.Test;
 
 import java.util.Optional;
@@ -48,9 +49,29 @@ class OciSignatureParserTest {
     }
 
     @Test
-    void rejectsInstancePrincipalKeyIds() {
-        // "ST$<token>" keyIds carry no tenancy triple.
+    void parsesTheTenantAndSubjectOfASecurityTokenKeyId() {
+        Optional<AuthContext> auth =
+                OciSignatureParser.parse(header("ST$" + SecurityTokens.session(TENANCY, USER)));
+        assertTrue(auth.isPresent());
+        assertEquals(TENANCY, auth.get().tenancyId());
+        assertEquals(USER, auth.get().userId());
+        assertNull(auth.get().fingerprint());
+    }
+
+    @Test
+    void rejectsSecurityTokensItCannotReadACallerFrom() {
         assertTrue(OciSignatureParser.parse(header("ST$eyJhbGciOi")).isEmpty());
+        assertTrue(OciSignatureParser.parse(header("ST$a.!!!.c")).isEmpty());
+        assertTrue(OciSignatureParser.parse(header("ST$a.e30.c.d")).isEmpty());
+        assertTrue(OciSignatureParser.parse(
+                header("ST$" + SecurityTokens.jwt("{\"sub\":\"" + USER + "\"}"))).isEmpty());
+        assertTrue(OciSignatureParser.parse(
+                header("ST$" + SecurityTokens.jwt("{\"tenant\":\"" + TENANCY + "\",\"sub\":\"\"}"))).isEmpty());
+        assertTrue(OciSignatureParser.parse(
+                header("ST$" + SecurityTokens.jwt("{\"tenant\":42,\"sub\":\"" + USER + "\"}"))).isEmpty());
+        // Resource principal tokens name their tenancy res_tenant, so they stay unidentified.
+        assertTrue(OciSignatureParser.parse(header("ST$" + SecurityTokens.jwt(
+                "{\"res_tenant\":\"" + TENANCY + "\",\"sub\":\"ocid1.fnfunc.oc1..fn\"}"))).isEmpty());
     }
 
     @Test

@@ -30,8 +30,9 @@ import java.util.Set;
  *
  * <p>Following floci-oci's rule that request signatures are parsed but never verified, this
  * checks the token's shape and binds it to the cluster: the URL must name this cluster and its
- * region, the Signature must cover {@code date (request-target) host}, its keyId tenancy must own
- * the cluster, and the date must be recent. A well-formed forged token therefore passes, which is
+ * region, the Signature must cover {@code date (request-target) host}, its keyId tenancy (or, for
+ * {@code --auth security_token}, the security token's {@code tenant} claim) must own the cluster,
+ * and the date must be recent. A well-formed forged token therefore passes, which is
  * the same trust floci-oci gives every other signed request.
  */
 @ApplicationScoped
