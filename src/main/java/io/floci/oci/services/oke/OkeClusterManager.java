@@ -144,11 +144,12 @@ public class OkeClusterManager implements Resettable {
 
         activeClusters.put(cluster.getId(), new ActiveClusterRef(containerName, volumeName, hostPort));
 
-        // A volume from an earlier start holds the cluster's data and CA: a failed recreate keeps it.
-        boolean volumeExisted = false;
+        // A volume from an earlier start holds the cluster's data and CA: a failed start removes the
+        // volume only when it was confirmed absent before this start created it.
+        boolean createdVolume = false;
         try {
             if (!lifecycleManager.isContainerRunning(containerName) || !createdForThisCluster(containerName, cluster)) {
-                volumeExisted = lifecycleManager.volumeExists(volumeName);
+                createdVolume = lifecycleManager.volumeConfirmedAbsent(volumeName);
                 lifecycleManager.removeIfExists(containerName);
                 // Created up front so it carries the floci labels; a mount alone creates it bare.
                 lifecycleManager.ensureVolume(volumeName);
@@ -176,7 +177,7 @@ public class OkeClusterManager implements Resettable {
             activeClusters.remove(cluster.getId());
             try {
                 lifecycleManager.removeIfExists(containerName);
-                if (!volumeExisted) {
+                if (createdVolume) {
                     lifecycleManager.removeVolume(volumeName);
                 }
             } catch (Exception cleanupEx) {

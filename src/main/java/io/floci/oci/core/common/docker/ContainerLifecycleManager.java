@@ -686,6 +686,23 @@ public class ContainerLifecycleManager {
         }
     }
 
+    /**
+     * Whether the runtime confirms no volume named {@code name} exists. Unlike {@link #volumeExists},
+     * which reads a failed inspection as absent, this is true only on a definite not-found, so a
+     * caller deciding whether a volume is safe to delete never deletes one it could not inspect.
+     */
+    public boolean volumeConfirmedAbsent(String name) {
+        try {
+            dockerClient.inspectVolumeCmd(name).exec();
+            return false;
+        } catch (NotFoundException e) {
+            return true;
+        } catch (DockerException e) {
+            LOG.warnv("Failed to inspect volume ''{0}'', treating it as present: {1}", name, e.getMessage());
+            return false;
+        }
+    }
+
     private HostConfig buildHostConfig(ContainerSpec spec) {
         HostConfig hostConfig = HostConfig.newHostConfig();
 

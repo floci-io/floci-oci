@@ -102,6 +102,7 @@ class OkeClusterManagerTest {
 
     @Test
     void startClusterFailureReleasesPortAndCleansUpState() {
+        when(lifecycleManager.volumeConfirmedAbsent(anyString())).thenReturn(true);
         when(portAllocator.allocate(6443, 6543)).thenReturn(6443);
         when(lifecycleManager.createAndStart(any())).thenThrow(new RuntimeException("Docker failure"));
 
@@ -124,6 +125,7 @@ class OkeClusterManagerTest {
 
     @Test
     void startClusterFailureRemovesTheVolumeItCreatedWhateverThePrunePolicy() {
+        when(lifecycleManager.volumeConfirmedAbsent(anyString())).thenReturn(true);
         lenient().when(config.storage().mode()).thenReturn("file");
         lenient().when(config.storage().pruneVolumesOnDelete()).thenReturn(false);
         when(portAllocator.allocate(6443, 6543)).thenReturn(6443);
@@ -143,7 +145,7 @@ class OkeClusterManagerTest {
     @Test
     void startClusterFailureKeepsAVolumeFromAnEarlierStart() {
         // A restart or a sidecar upgrade that fails must not take the cluster's data and CA with it.
-        when(lifecycleManager.volumeExists(anyString())).thenReturn(true);
+        when(lifecycleManager.volumeConfirmedAbsent(anyString())).thenReturn(false);
         when(lifecycleManager.createAndStart(any())).thenThrow(new RuntimeException("Docker failure"));
         StoredOkeCluster cluster = adoptableCluster("ocid1.cluster.oc1.iad.keepvolume001");
 
@@ -155,6 +157,16 @@ class OkeClusterManagerTest {
     }
 
     @Test
+    void startClusterFailureKeepsTheVolumeWhenItCouldNotBeInspected() {
+        when(lifecycleManager.volumeConfirmedAbsent(anyString())).thenThrow(new RuntimeException("daemon gone"));
+        StoredOkeCluster cluster = adoptableCluster("ocid1.cluster.oc1.iad.keepvolume003");
+
+        assertThrows(RuntimeException.class, () -> manager.startCluster(cluster));
+
+        verify(lifecycleManager, never()).removeVolume(anyString());
+    }
+
+    @Test
     void aFailedUpgradeOfARunningSidecarWithoutTheSanKeepsItsVolume() {
         StoredOkeCluster cluster = adoptableCluster("ocid1.cluster.oc1.iad.keepvolume002");
         String webhookKubeconfig = manager.webhookKubeconfig(cluster);
@@ -162,7 +174,7 @@ class OkeClusterManagerTest {
         when(lifecycleManager.containerEnv(anyString())).thenReturn(List.of(
                 OkeClusterManager.API_TOKEN_ENV + "=" + cluster.getApiToken(),
                 OkeClusterManager.WEBHOOK_KUBECONFIG_ENV + "=" + webhookKubeconfig));
-        when(lifecycleManager.volumeExists(anyString())).thenReturn(true);
+        when(lifecycleManager.volumeConfirmedAbsent(anyString())).thenReturn(false);
         when(lifecycleManager.createAndStart(any())).thenThrow(new RuntimeException("Docker failure"));
 
         assertThrows(RuntimeException.class, () -> manager.startCluster(cluster));
