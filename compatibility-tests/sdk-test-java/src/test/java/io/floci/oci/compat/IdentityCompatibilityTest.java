@@ -243,6 +243,34 @@ class IdentityCompatibilityTest {
         assertThat(created.getIsHomeRegion()).isFalse();
     }
 
+    @Test
+    void aRetryTokenMakesARepeatedCreateReturnTheFirstCompartment() {
+        String name = "sdk-retry-" + System.nanoTime();
+        String retryToken = "sdk-retry-token-" + System.nanoTime();
+
+        Compartment first = createCompartment(TENANCY, name, retryToken);
+        Compartment retried = createCompartment(TENANCY, name, retryToken);
+
+        assertThat(retried.getId()).isEqualTo(first.getId());
+        List<Compartment> named = identity.listCompartments(ListCompartmentsRequest.builder()
+                .compartmentId(TENANCY).name(name).build()).getItems();
+        assertThat(named).hasSize(1);
+
+        assertThatThrownBy(() -> createCompartment(TENANCY, name + "-changed", retryToken))
+                .isInstanceOfSatisfying(BmcException.class, e -> {
+                    assertThat(e.getStatusCode()).isEqualTo(409);
+                    assertThat(e.getServiceCode()).isEqualTo("Conflict");
+                });
+    }
+
+    private static Compartment createCompartment(String parentId, String name, String retryToken) {
+        return identity.createCompartment(CreateCompartmentRequest.builder()
+                .createCompartmentDetails(CreateCompartmentDetails.builder()
+                        .compartmentId(parentId).name(name).description("sdk").build())
+                .opcRetryToken(retryToken)
+                .build()).getCompartment();
+    }
+
     private static Compartment createCompartment(String parentId, String name) {
         return identity.createCompartment(CreateCompartmentRequest.builder()
                 .createCompartmentDetails(CreateCompartmentDetails.builder()

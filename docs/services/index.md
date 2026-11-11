@@ -24,6 +24,15 @@ Every service follows the OCI wire contract:
 - Lists paginate via `limit`/`page` query parameters and the **`opc-next-page`**
   response header. Identity lists return bare JSON arrays.
 - Mutations carry **`etag`** headers and honour `if-match` / `if-none-match`.
+- Writes honour **`opc-retry-token`**: a repeat of a successful request with the same token, within
+  24 hours, returns the first response (status, headers and body, with a request id of its own) instead
+  of running the action again, so an SDK retry after a lost response never makes a second resource.
+  A token is scoped to the tenancy, region, method and path. Reusing it with a different request is
+  `409 Conflict` (OCI does not document this case for these services; that answer is floci-oci's
+  choice), field order in the body does not count as different, and a request that fails does not use
+  its token up. Object Storage, Functions and Secrets declare no retry token, and their binary uploads
+  are never replayed. `409 InvalidatedRetryToken`, which OCI returns once the resource a token created
+  has been deleted, is not emulated yet: such a retry replays the original response.
 - Async operations return **202 + `opc-work-request-id`**, pollable via the
   work-request endpoints.
 
