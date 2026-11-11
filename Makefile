@@ -94,7 +94,7 @@ test-opentofu-compat: ## Run the OpenTofu IaC suite against a locally running em
 	cd compatibility-tests/compat-opentofu && FLOCI_OCI_ENDPOINT=$(LOCAL_ENDPOINT) TF_BIN=tofu bats test/
 
 compat-docker: ## Build the emulator + suite images and run every suite on a shared network
-	docker compose up -d --build
+	FLOCI_OCI_SERVICES_OKE_ENDPOINT_MODE=network docker compose up -d --build
 	@set -e; for suite in $(COMPAT_SUITES); do \
 		echo "=== $$suite ==="; \
 		docker build -t floci-oci-compat-$$suite compatibility-tests/$$suite; \

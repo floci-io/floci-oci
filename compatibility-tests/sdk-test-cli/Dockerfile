@@ -11,6 +11,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN pip install --no-cache-dir "oci-cli==${OCI_CLI_VERSION}"
 
+# kubectl drives the OKE exec kubeconfig end to end. Pinned to the Kubernetes version of
+# floci-oci's default k3s sidecar image (rancher/k3s:v1.30.1-k3s1); bump them together.
+ARG KUBECTL_VERSION=1.30.1
+RUN arch="$(dpkg --print-architecture)" \
+    && base="https://dl.k8s.io/release/v${KUBECTL_VERSION}/bin/linux/${arch}" \
+    && curl -fsSLo /usr/local/bin/kubectl "${base}/kubectl" \
+    && echo "$(curl -fsSL "${base}/kubectl.sha256")  /usr/local/bin/kubectl" | sha256sum -c - \
+    && chmod +x /usr/local/bin/kubectl
+
 RUN git clone --depth 1 --branch "v${BATS_VERSION}" https://github.com/bats-core/bats-core.git /tmp/bats \
     && /tmp/bats/install.sh /usr/local && rm -rf /tmp/bats
 

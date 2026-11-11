@@ -65,6 +65,21 @@ teardown_file() {
     [ -n "$(json_get '.status.token')" ]
 }
 
+@test "ce: kubectl authenticates through the exec kubeconfig" {
+    # The suite image installs kubectl; only a host-local run (make test-cli-compat) can lack it.
+    command -v kubectl > /dev/null || skip "kubectl is not installed"
+    local kubeconfig="$BATS_FILE_TMPDIR/kubeconfig"
+    run oci_cmd ce cluster create-kubeconfig --cluster-id "$CLUSTER_ID" --file "$kubeconfig"
+    [ "$status" -eq 0 ]
+
+    # kubectl runs `oci ce cluster generate-token` from the kubeconfig, and k3s sends that
+    # token to floci-oci's webhook. The server is reachable here because the compat stack
+    # runs floci-oci with endpoint-mode=network.
+    run env KUBECONFIG="$kubeconfig" kubectl get namespaces -o name --request-timeout=60s
+    [ "$status" -eq 0 ]
+    [[ "$output" == *namespace/default* ]]
+}
+
 @test "ce: node-pool list succeeds" {
     run oci_cmd ce node-pool list --compartment-id "$TENANCY"
     [ "$status" -eq 0 ]

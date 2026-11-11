@@ -12,6 +12,9 @@ services:
     environment:
       FLOCI_OCI_SERVICES_DOCKER_NETWORK: floci_oci_default
       FLOCI_OCI_HOSTNAME: floci-oci
+      # host: OKE clusters are reached from the Docker host; network: from other containers
+      # on floci_oci_default (make compat-docker sets it).
+      FLOCI_OCI_SERVICES_OKE_ENDPOINT_MODE: ${FLOCI_OCI_SERVICES_OKE_ENDPOINT_MODE:-host}
       FLOCI_OCI_BASE_URL: http://floci-oci:4599
     networks:
       floci_oci_default:

@@ -117,6 +117,7 @@ jobs:
             --group-add "$DOCKER_GID" \
             -e FLOCI_OCI_BASE_URL=http://floci-oci:4599 \
             -e FLOCI_OCI_SERVICES_DOCKER_NETWORK=compat-net \
+            -e FLOCI_OCI_SERVICES_OKE_ENDPOINT_MODE=network \
             -e FLOCI_OCI_HOSTNAME=floci-oci \
             floci-oci:test-native
 

@@ -27,6 +27,16 @@ TF_VAR_CLIENT_HOST_OVERRIDES="oci_identity.IdentityClient=http://localhost:4599;
 Each new service exercised by the IaC suites needs its client key added to that list
 (keys are the `RegisterOracleClient` names in the provider's `internal/client/*.go`).
 
+## How the CLI suite reaches OKE clusters
+
+The CLI suite runs `kubectl get namespaces` through the exec kubeconfig that
+`oci ce cluster create-kubeconfig` returns, so the cluster's API server must be reachable
+from the suite's container. `compatibility.yml` and `make compat-docker` therefore run
+floci-oci with `FLOCI_OCI_SERVICES_OKE_ENDPOINT_MODE=network`, which makes the kubeconfig
+point at the k3s sidecar's container name on the shared network. `docker-compose.yml` keeps
+`host` unless that variable is set. On a host-local run (`make test-cli-compat`), the case
+skips when `kubectl` is not installed.
+
 ## Running locally
 
 Against a locally running emulator (`make run` in the repo root):
