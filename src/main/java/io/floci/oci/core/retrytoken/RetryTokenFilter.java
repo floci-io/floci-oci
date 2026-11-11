@@ -7,6 +7,8 @@ import com.fasterxml.jackson.databind.SerializationFeature;
 import io.floci.oci.core.common.OciContext;
 import io.floci.oci.core.common.OciErrorResponse;
 import io.floci.oci.core.common.OpcRequestIdFilter;
+import io.floci.oci.core.common.ServiceDescriptor;
+import io.floci.oci.core.common.ServiceRegistry;
 import jakarta.annotation.Priority;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.HttpMethod;
@@ -15,6 +17,8 @@ import jakarta.ws.rs.container.ContainerRequestContext;
 import jakarta.ws.rs.container.ContainerRequestFilter;
 import jakarta.ws.rs.container.ContainerResponseContext;
 import jakarta.ws.rs.container.ContainerResponseFilter;
+import jakarta.ws.rs.container.ResourceInfo;
+import jakarta.ws.rs.core.Context;
 import jakarta.ws.rs.core.HttpHeaders;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.MultivaluedMap;
@@ -110,7 +114,14 @@ public class RetryTokenFilter implements ContainerRequestFilter, ContainerRespon
     @Inject
     jakarta.inject.Provider<ObjectMapper> objectMapper;
 
-    private record Pending(String key, String inFlightKey, String fingerprint, CompletableFuture<Void> done) {
+    @Inject
+    jakarta.inject.Provider<ServiceRegistry> serviceRegistry;
+
+    @Context
+    ResourceInfo resourceInfo;
+
+    private record Pending(String storageKey, String key, String inFlightKey, long generation,
+                           String fingerprint, CompletableFuture<Void> done) {
     }
 
     @Override
@@ -125,28 +136,47 @@ public class RetryTokenFilter implements ContainerRequestFilter, ContainerRespon
         }
         String key = sha256(ociContext.get().region() + "\n" + ctx.getMethod() + "\n"
                 + ctx.getUriInfo().getPath() + "\n" + token);
-        String inFlightKey = ociContext.get().tenancyId() + "/" + key;
+        String storageKey = storageKey();
+        String inFlightKey = storageKey + "/" + ociContext.get().tenancyId() + "/" + key;
         String fingerprint = fingerprint(body.get(), ctx.getUriInfo().getQueryParameters());
+        long generation = store.get().generation();
 
-        while (true) {
-            Optional<StoredRetryReceipt> receipt = store.get().find(key);
-            if (receipt.isPresent()) {
-                ctx.abortWith(receipt.get().fingerprint().equals(fingerprint)
-                        ? replay(receipt.get())
-                        : conflict("The opc-retry-token was already used with a different request."));
-                return;
-            }
-            CompletableFuture<Void> mine = new CompletableFuture<>();
-            CompletableFuture<Void> running = IN_FLIGHT.putIfAbsent(inFlightKey, mine);
-            if (running == null) {
-                ctx.setProperty(PENDING, new Pending(key, inFlightKey, fingerprint, mine));
-                return;
-            }
+        // Ownership first, then the receipt: a request records its receipt before it gives up
+        // ownership, so whoever owns the token next is sure to see it.
+        CompletableFuture<Void> mine = new CompletableFuture<>();
+        CompletableFuture<Void> running;
+        while ((running = IN_FLIGHT.putIfAbsent(inFlightKey, mine)) != null) {
             if (!awaitCompletion(running)) {
                 ctx.abortWith(conflict("A request with this opc-retry-token is still in progress."));
                 return;
             }
         }
+        Optional<StoredRetryReceipt> receipt = store.get().find(storageKey, key);
+        if (receipt.isPresent()) {
+            release(inFlightKey, mine);
+            ctx.abortWith(receipt.get().fingerprint().equals(fingerprint)
+                    ? replay(receipt.get())
+                    : conflict("The opc-retry-token was already used with a different request."));
+            return;
+        }
+        ctx.setProperty(PENDING, new Pending(storageKey, key, inFlightKey, generation, fingerprint, mine));
+    }
+
+    /** The storage key of the service serving the request, so receipts sit beside its resources. */
+    private String storageKey() {
+        Class<?> resourceClass = resourceInfo == null ? null : resourceInfo.getResourceClass();
+        if (resourceClass == null) {
+            return RetryTokenStore.DEFAULT_STORAGE_KEY;
+        }
+        return serviceRegistry.get().byResourceClass(resourceClass)
+                .map(ServiceDescriptor::storageKey)
+                .filter(key -> !key.isBlank())
+                .orElse(RetryTokenStore.DEFAULT_STORAGE_KEY);
+    }
+
+    private static void release(String inFlightKey, CompletableFuture<Void> owned) {
+        IN_FLIGHT.remove(inFlightKey, owned);
+        owned.complete(null);
     }
 
     @Override
@@ -160,8 +190,7 @@ public class RetryTokenFilter implements ContainerRequestFilter, ContainerRespon
                 record(pending, responseContext);
             }
         } finally {
-            IN_FLIGHT.remove(pending.inFlightKey(), pending.done());
-            pending.done().complete(null);
+            release(pending.inFlightKey(), pending.done());
         }
     }
 
@@ -179,7 +208,8 @@ public class RetryTokenFilter implements ContainerRequestFilter, ContainerRespon
             }
         }
         MediaType type = response.getMediaType();
-        store.get().save(pending.key(), pending.fingerprint(), response.getStatus(),
+        store.get().save(pending.storageKey(), pending.key(), pending.generation(), pending.fingerprint(),
+                response.getStatus(),
                 type == null ? null : type.toString(), headers,
                 body.get().length == 0 ? null : Base64.getEncoder().encodeToString(body.get()));
     }
