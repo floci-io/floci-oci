@@ -27,7 +27,7 @@ class RetryTokenStoreTest {
     void setUp() {
         clock = new MutableClock();
         store = new RetryTokenStore(storageKey -> backends.computeIfAbsent(storageKey, k -> new InMemoryStorage<>()),
-                clock);
+                () -> List.of(QUEUE, "psql"), clock);
     }
 
     private Optional<StoredRetryReceipt> save(String storageKey, String key) {
@@ -95,6 +95,16 @@ class RetryTokenStoreTest {
         assertTrue(store.find(QUEUE, "k1").isPresent());
         assertFalse(store.find("psql", "k1").isPresent());
         assertFalse(backends.containsKey(RetryTokenStore.DEFAULT_STORAGE_KEY));
+    }
+
+    @Test
+    void aResetOpensEveryServicesStoreSoTheStorageWipeReachesIt() {
+        assertTrue(backends.isEmpty(), "stores open lazily");
+
+        store.clear();
+
+        assertTrue(backends.keySet().containsAll(List.of(QUEUE, "psql", RetryTokenStore.DEFAULT_STORAGE_KEY)),
+                () -> "opened " + backends.keySet());
     }
 
     @Test

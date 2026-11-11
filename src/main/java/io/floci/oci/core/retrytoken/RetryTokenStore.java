@@ -2,6 +2,8 @@ package io.floci.oci.core.retrytoken;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import io.floci.oci.core.common.Resettable;
+import io.floci.oci.core.common.ServiceDescriptor;
+import io.floci.oci.core.common.ServiceRegistry;
 import io.floci.oci.core.storage.StorageBackend;
 import io.floci.oci.core.storage.StorageFactory;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -13,8 +15,11 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
+import java.util.function.Supplier;
+import java.util.stream.Stream;
 
 /**
  * Receipts of requests that carried an {@code opc-retry-token}. OCI: "Retry tokens expire after
@@ -27,9 +32,12 @@ import java.util.function.Function;
  * tenancy; keys already carry the region. Requests outside a registered service use
  * {@link #DEFAULT_STORAGE_KEY}.
  *
- * <p>{@code POST /_floci-oci/state/reset} empties the stores through {@code StorageFactory.clearAll()}
- * and, through {@link #clear()}, starts a new generation: a request that began before the reset cannot
- * record its receipt after it, so a retry never replays a response for a resource the reset removed.
+ * <p>{@code POST /_floci-oci/state/reset} runs {@link #clear()} and then {@code StorageFactory.clearAll()}.
+ * {@link #clear()} opens every service's store first, because stores open lazily and {@code clearAll()}
+ * only empties stores already open: after a restart with persistent storage, receipt files not yet
+ * touched would otherwise survive the reset. It also starts a new generation, so a request that began
+ * before the reset cannot record its receipt after it. Either way, a retry never replays a response for
+ * a resource the reset removed.
  */
 @ApplicationScoped
 public class RetryTokenStore implements Resettable {
@@ -39,17 +47,26 @@ public class RetryTokenStore implements Resettable {
 
     private final Function<String, StorageBackend<String, StoredRetryReceipt>> backendFor;
     private final Map<String, StorageBackend<String, StoredRetryReceipt>> backends = new ConcurrentHashMap<>();
+    private final Supplier<List<String>> serviceStorageKeys;
     private final Clock clock;
     private long generation;
 
     @Inject
-    public RetryTokenStore(StorageFactory storageFactory, Clock clock) {
+    public RetryTokenStore(StorageFactory storageFactory, ServiceRegistry serviceRegistry, Clock clock) {
         this(storageKey -> storageFactory.createGlobal(storageKey, storageKey + "-retrytokens.json",
-                new TypeReference<Map<String, StoredRetryReceipt>>() {}), clock);
+                        new TypeReference<Map<String, StoredRetryReceipt>>() {}),
+                () -> serviceRegistry.all().stream()
+                        .map(ServiceDescriptor::storageKey)
+                        .filter(Objects::nonNull)
+                        .filter(key -> !key.isBlank())
+                        .toList(),
+                clock);
     }
 
-    RetryTokenStore(Function<String, StorageBackend<String, StoredRetryReceipt>> backendFor, Clock clock) {
+    RetryTokenStore(Function<String, StorageBackend<String, StoredRetryReceipt>> backendFor,
+                    Supplier<List<String>> serviceStorageKeys, Clock clock) {
         this.backendFor = backendFor;
+        this.serviceStorageKeys = serviceStorageKeys;
         this.clock = clock;
     }
 
@@ -90,11 +107,14 @@ public class RetryTokenStore implements Resettable {
     }
 
     /**
-     * Starts a new generation. The receipts themselves are emptied by {@code StorageFactory.clearAll()},
-     * which the reset runs after every {@link Resettable}.
+     * Opens every service's store, so the {@code StorageFactory.clearAll()} the reset runs next empties
+     * receipt files this process never touched, and starts a new generation.
      */
     @Override
     public synchronized void clear() {
+        Stream.concat(Stream.of(DEFAULT_STORAGE_KEY), serviceStorageKeys.get().stream())
+                .distinct()
+                .forEach(this::receipts);
         generation++;
     }
 
