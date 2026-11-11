@@ -94,6 +94,7 @@ jobs:
           - sdk-test-cli
           - compat-terraform
           - compat-opentofu
+          - sdk-test-go
 
     steps:
       - name: Download native floci-oci image
