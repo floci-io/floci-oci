@@ -10,10 +10,10 @@ protocol adherence.
 | `sdk-test-cli` | oci-cli (official CLI) + bats | Smoke CRUD across Identity, Object Storage, Queue, Streaming, KMS, Vault and Secrets, Functions, OKE, PostgreSQL and Organizations, incl. error codes and PAR access |
 | `compat-terraform` | Terraform + oracle/oci provider + bats | Full apply → no-drift plan → destroy cycle over Identity, Object Storage, Queue, Streaming, KMS, Vault, OKE and PostgreSQL resources, plus an Organizations data source. No Functions: see the note in `main.tf` |
 | `compat-opentofu` | OpenTofu + oracle/oci provider + bats | Same cycle as Terraform |
-| `sdk-test-go` | oci-go-sdk | OKE cluster lifecycle. Has no Dockerfile and is not in CI or `make compat-docker`: run it with `make test-go-compat` |
+| `sdk-test-go` | oci-go-sdk + gotestsum | OKE cluster lifecycle |
 
-The Java, Python and CLI suites pin their client versions in `sdk-test-java/pom.xml`,
-`sdk-test-python/requirements.txt` and `sdk-test-cli/Dockerfile`.
+The Java, Python, CLI and Go suites pin their client versions in `sdk-test-java/pom.xml`,
+`sdk-test-python/requirements.txt`, `sdk-test-cli/Dockerfile` and `sdk-test-go/go.mod`.
 
 ## How the IaC suites reach the emulator
 

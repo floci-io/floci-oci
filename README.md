@@ -430,15 +430,15 @@ The [`compatibility-tests`](./compatibility-tests/) directory validates floci-oc
 
 | Module | Language / Tool | SDK / Client | Tests |
 |---|---|---|---:|
-| `sdk-test-java` | Java | oci-java-sdk (incl. OKE integration, Organizations child tenancies, invitations, domains and subscriptions, governance rules, and a JDBC connection to a PostgreSQL DB system, custom configurations and an in-place restore) | 36 |
-| `sdk-test-python` | Python 3 | oci (incl. `UploadManager` streaming, Organizations invitations, domains, subscriptions and orders, governance rules, PostgreSQL custom configurations, backups and instance patches) | 34 |
+| `sdk-test-java` | Java | oci-java-sdk (incl. OKE integration, Organizations child tenancies, invitations, domains and subscriptions, governance rules, the Functions management plane, and a JDBC connection to a PostgreSQL DB system, custom configurations and an in-place restore) | 38 |
+| `sdk-test-python` | Python 3 | oci (incl. `UploadManager` streaming, Organizations invitations, domains, subscriptions and orders, governance rules, OKE clusters and node pools, PostgreSQL custom configurations, backups and instance patches) | 36 |
 | `sdk-test-go` | Go | oci-go-sdk (OKE container engine) | 1 |
-| `sdk-test-cli` | Bash / BATS | OCI CLI 3.89.3 (all 10 services, incl. error codes and PAR access) | 68 |
+| `sdk-test-cli` | Bash / BATS | OCI CLI 3.96.0 (all 10 services, incl. error codes, PAR access and kubectl through the OKE exec kubeconfig) | 69 |
 | `compat-terraform` | Terraform | oracle/oci provider (14 resources, zero-drift plan) | 6 |
 | `compat-opentofu` | OpenTofu | oracle/oci provider (14 resources, zero-drift plan) | 6 |
 
 > [!NOTE]
-> `sdk-test-go` currently focuses on OKE (Container Engine for Kubernetes) compatibility verification; coverage for additional OCI services will be added in future releases.
+> `sdk-test-go` currently covers OKE (Container Engine for Kubernetes) only.
 
 Run everything in Docker against a compose-built emulator:
 
@@ -446,7 +446,7 @@ Run everything in Docker against a compose-built emulator:
 make compat-docker
 ```
 
-Or a single suite against a locally running emulator: `make test-java-compat`, `make test-python-compat`, `make test-terraform-compat`, `make test-opentofu-compat`.
+Or a single suite against a locally running emulator: `make test-java-compat`, `make test-python-compat`, `make test-cli-compat`, `make test-go-compat`, `make test-terraform-compat`, `make test-opentofu-compat`.
 
 ## Image Tags
 

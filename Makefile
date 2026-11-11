@@ -69,7 +69,7 @@ refs: ## Download/refresh the OCI reference checkouts into local/oracle/
 # already listening on localhost:4599 (e.g. `make run`).
 
 COMPAT_NETWORK ?= floci_oci_default
-COMPAT_SUITES  ?= sdk-test-java sdk-test-python sdk-test-cli compat-terraform compat-opentofu
+COMPAT_SUITES  ?= sdk-test-java sdk-test-python sdk-test-cli compat-terraform compat-opentofu sdk-test-go
 LOCAL_ENDPOINT ?= http://localhost:4599
 HOST_OVERRIDES = oci_identity.IdentityClient=$(LOCAL_ENDPOINT);oci_object_storage.ObjectStorageClient=$(LOCAL_ENDPOINT);oci_containerengine.ContainerEngineClient=$(LOCAL_ENDPOINT)
 
