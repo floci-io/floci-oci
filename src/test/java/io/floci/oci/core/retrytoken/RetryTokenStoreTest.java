@@ -31,13 +31,13 @@ class RetryTokenStoreTest {
     }
 
     private Optional<StoredRetryReceipt> save(String storageKey, String key) {
-        return store.save(storageKey, key, store.generation(), "fp", 200, null, Map.of(), null);
+        return store.save(storageKey, key, store.generation(), "fp", 200, null, Map.of(), null, null);
     }
 
     @Test
     void aSavedReceiptIsFoundWithEverythingItRecorded() {
         store.save(QUEUE, "k1", store.generation(), "fp", 202, null,
-                Map.of("opc-work-request-id", List.of("ocid1.wr")), null);
+                Map.of("opc-work-request-id", List.of("ocid1.wr")), null, "ocid1.queue.oc1.iad.q1");
 
         StoredRetryReceipt receipt = store.find(QUEUE, "k1").orElseThrow();
         assertEquals("fp", receipt.fingerprint());
@@ -98,6 +98,30 @@ class RetryTokenStoreTest {
     }
 
     @Test
+    void deletingTheCreatedResourceInvalidatesOnlyTheReceiptsThatCreatedIt() {
+        store.save(QUEUE, "created-q1", store.generation(), "fp", 202, null, Map.of(), null, "ocid1.queue.oc1.iad.q1");
+        store.save(QUEUE, "created-q2", store.generation(), "fp", 202, null, Map.of(), null, "ocid1.queue.oc1.iad.q2");
+
+        store.invalidateCreatedBy(QUEUE, "ocid1.queue.oc1.iad.q1");
+
+        assertTrue(store.find(QUEUE, "created-q1").orElseThrow().invalidated());
+        assertFalse(store.find(QUEUE, "created-q2").orElseThrow().invalidated());
+        assertEquals("ocid1.queue.oc1.iad.q1", store.find(QUEUE, "created-q1").orElseThrow().createdId());
+    }
+
+    @Test
+    void anInvalidatedReceiptStaysUntilItExpires() {
+        store.save(QUEUE, "k1", store.generation(), "fp", 202, null, Map.of(), null, "ocid1.queue.oc1.iad.q1");
+        store.invalidateCreatedBy(QUEUE, "ocid1.queue.oc1.iad.q1");
+
+        clock.advance(Duration.ofHours(23));
+        assertTrue(store.find(QUEUE, "k1").orElseThrow().invalidated());
+
+        clock.advance(Duration.ofHours(2));
+        assertFalse(store.find(QUEUE, "k1").isPresent(), "an expired token behaves as new again");
+    }
+
+    @Test
     void aResetOpensEveryServicesStoreSoTheStorageWipeReachesIt() {
         assertTrue(backends.isEmpty(), "stores open lazily");
 
@@ -112,7 +136,7 @@ class RetryTokenStoreTest {
         long startedIn = store.generation();
         store.clear();
 
-        Optional<StoredRetryReceipt> saved = store.save(QUEUE, "k1", startedIn, "fp", 200, null, Map.of(), null);
+        Optional<StoredRetryReceipt> saved = store.save(QUEUE, "k1", startedIn, "fp", 200, null, Map.of(), null, null);
 
         assertFalse(saved.isPresent());
         assertFalse(store.find(QUEUE, "k1").isPresent());

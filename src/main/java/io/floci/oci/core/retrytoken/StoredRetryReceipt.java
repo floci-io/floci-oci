@@ -16,6 +16,10 @@ import java.util.Map;
  * @param headers     the response headers worth replaying ({@code etag}, {@code Location},
  *                    {@code opc-work-request-id}, ...), never {@code opc-request-id}
  * @param body        the serialized response body, base64-encoded, or null when there was none
+ * @param createdId   the OCID the request created (its body's {@code id}, or its work request's CREATED
+ *                    resource), or null when it created none that floci-oci can name
+ * @param invalidated true once that resource was deleted: a retry is then
+ *                    {@code 409 InvalidatedRetryToken} instead of a replay
  * @param expiresAt   24 hours after the first use; the deadline does not slide
  */
 @RegisterForReflection
@@ -25,7 +29,14 @@ public record StoredRetryReceipt(
         String contentType,
         Map<String, List<String>> headers,
         String body,
+        String createdId,
+        boolean invalidated,
         Instant createdAt,
         Instant expiresAt
 ) {
+
+    StoredRetryReceipt invalidate() {
+        return new StoredRetryReceipt(fingerprint, status, contentType, headers, body, createdId, true,
+                createdAt, expiresAt);
+    }
 }

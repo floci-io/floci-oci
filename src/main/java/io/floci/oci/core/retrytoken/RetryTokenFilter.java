@@ -6,9 +6,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import io.floci.oci.core.common.OciContext;
 import io.floci.oci.core.common.OciErrorResponse;
+import io.floci.oci.core.common.OciException;
 import io.floci.oci.core.common.OpcRequestIdFilter;
 import io.floci.oci.core.common.ServiceDescriptor;
 import io.floci.oci.core.common.ServiceRegistry;
+import io.floci.oci.core.workrequest.StoredWorkRequest;
+import io.floci.oci.core.workrequest.WorkRequestService;
 import jakarta.annotation.Priority;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.HttpMethod;
@@ -22,6 +25,7 @@ import jakarta.ws.rs.core.Context;
 import jakarta.ws.rs.core.HttpHeaders;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.MultivaluedMap;
+import jakarta.ws.rs.core.PathSegment;
 import jakarta.ws.rs.core.Response;
 import jakarta.ws.rs.core.StreamingOutput;
 import jakarta.ws.rs.ext.Provider;
@@ -72,8 +76,12 @@ import java.util.concurrent.TimeoutException;
  *       retries create one resource.</li>
  * </ul>
  *
- * <p>Not emulated: {@code 409 InvalidatedRetryToken}, which real OCI returns when the resource the token
- * created has since been deleted. A replay within 24 hours returns the recorded response.
+ * <p>Once the resource a token created is deleted, a retry with that token is
+ * {@code 409 InvalidatedRetryToken} (Oracle's error catalog: "a subsequent operation invalidated the
+ * token"). The receipt records the OCID the request created, its body's {@code id} or its work request's
+ * CREATED resource, and any successful {@code DELETE} whose path ends in that OCID invalidates it, with or
+ * without a token of its own. Deletes that do not go through such a request (a cascade from a parent,
+ * KMS and Vault scheduled deletion) do not invalidate, and those retries keep replaying.
  *
  * <p>Post-matching, so it runs on the worker thread blocking endpoints use, after the body-free checks
  * (service enabled, home region) and before the body is deserialized; reading the body in a
@@ -86,6 +94,8 @@ public class RetryTokenFilter implements ContainerRequestFilter, ContainerRespon
     private static final Logger LOG = Logger.getLogger(RetryTokenFilter.class);
 
     static final String RETRY_TOKEN = "opc-retry-token";
+    private static final String OPC_WORK_REQUEST_ID = "opc-work-request-id";
+    private static final String OCID_PREFIX = "ocid1.";
     static final int MAX_BODY_BYTES = 1024 * 1024;
     static final long IN_FLIGHT_WAIT_SECONDS = 30;
     private static final String PENDING = RetryTokenFilter.class.getName() + ".pending";
@@ -116,6 +126,9 @@ public class RetryTokenFilter implements ContainerRequestFilter, ContainerRespon
 
     @Inject
     jakarta.inject.Provider<ServiceRegistry> serviceRegistry;
+
+    @Inject
+    jakarta.inject.Provider<WorkRequestService> workRequests;
 
     @Context
     ResourceInfo resourceInfo;
@@ -154,8 +167,8 @@ public class RetryTokenFilter implements ContainerRequestFilter, ContainerRespon
         Optional<StoredRetryReceipt> receipt = store.get().find(storageKey, key);
         if (receipt.isPresent()) {
             release(inFlightKey, mine);
-            ctx.abortWith(receipt.get().fingerprint().equals(fingerprint)
-                    ? replay(receipt.get())
+            ctx.abortWith(receipt.get().invalidated() ? invalidated()
+                    : receipt.get().fingerprint().equals(fingerprint) ? replay(receipt.get())
                     : conflict("The opc-retry-token was already used with a different request."));
             return;
         }
@@ -181,12 +194,14 @@ public class RetryTokenFilter implements ContainerRequestFilter, ContainerRespon
 
     @Override
     public void filter(ContainerRequestContext requestContext, ContainerResponseContext responseContext) {
+        if (HttpMethod.DELETE.equals(requestContext.getMethod()) && isSuccess(responseContext.getStatus())) {
+            invalidateTokensThatCreated(requestContext);
+        }
         if (!(requestContext.getProperty(PENDING) instanceof Pending pending)) {
             return;
         }
         try {
-            int status = responseContext.getStatus();
-            if (status >= 200 && status < 300) {
+            if (isSuccess(responseContext.getStatus())) {
                 record(pending, responseContext);
             }
         } finally {
@@ -211,7 +226,55 @@ public class RetryTokenFilter implements ContainerRequestFilter, ContainerRespon
         store.get().save(pending.storageKey(), pending.key(), pending.generation(), pending.fingerprint(),
                 response.getStatus(),
                 type == null ? null : type.toString(), headers,
-                body.get().length == 0 ? null : Base64.getEncoder().encodeToString(body.get()));
+                body.get().length == 0 ? null : Base64.getEncoder().encodeToString(body.get()),
+                createdId(body.get(), response).orElse(null));
+    }
+
+    /**
+     * The OCID a response created: the body's top-level {@code id}, or, for an async create without a
+     * body, the CREATED resource of the work request in its {@code opc-work-request-id} header.
+     */
+    private Optional<String> createdId(byte[] body, ContainerResponseContext response) {
+        if (body.length > 0) {
+            try {
+                JsonNode id = objectMapper.get().readTree(body).path("id");
+                if (id.isTextual() && id.asText().startsWith(OCID_PREFIX)) {
+                    return Optional.of(id.asText());
+                }
+            } catch (IOException notJson) {
+                LOG.debugv("Retry-token response body is not JSON: {0}", notJson.getMessage());
+            }
+        }
+        String workRequestId = response.getHeaderString(OPC_WORK_REQUEST_ID);
+        if (workRequestId == null || workRequestId.isBlank()) {
+            return Optional.empty();
+        }
+        try {
+            return workRequests.get().get(workRequestId).getResources().stream()
+                    .filter(resource -> "CREATED".equals(resource.getActionType()))
+                    .map(StoredWorkRequest.Resource::getIdentifier)
+                    .filter(identifier -> identifier != null && identifier.startsWith(OCID_PREFIX))
+                    .findFirst();
+        } catch (OciException e) {
+            LOG.debugv("No work request {0} to name the created resource: {1}", workRequestId, e.getMessage());
+            return Optional.empty();
+        }
+    }
+
+    /** A successful DELETE of an OCID invalidates the tokens whose requests created it. */
+    private void invalidateTokensThatCreated(ContainerRequestContext ctx) {
+        List<PathSegment> segments = ctx.getUriInfo().getPathSegments();
+        if (segments.isEmpty()) {
+            return;
+        }
+        String last = segments.get(segments.size() - 1).getPath();
+        if (last.startsWith(OCID_PREFIX)) {
+            store.get().invalidateCreatedBy(storageKey(), last);
+        }
+    }
+
+    private static boolean isSuccess(int status) {
+        return status >= 200 && status < 300;
     }
 
     /**
@@ -249,6 +312,15 @@ public class RetryTokenFilter implements ContainerRequestFilter, ContainerRespon
             }
         }
         return builder.build();
+    }
+
+    private static Response invalidated() {
+        return Response.status(409)
+                .type(MediaType.APPLICATION_JSON)
+                .entity(new OciErrorResponse("InvalidatedRetryToken",
+                        "The provided retry token was used in an earlier request that resulted in a system update,"
+                                + " but a subsequent operation invalidated the token."))
+                .build();
     }
 
     private static Response conflict(String message) {

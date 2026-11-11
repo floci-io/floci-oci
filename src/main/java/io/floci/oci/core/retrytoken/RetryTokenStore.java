@@ -12,6 +12,7 @@ import jakarta.inject.Inject;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -88,14 +89,15 @@ public class RetryTokenStore implements Resettable {
      */
     public synchronized Optional<StoredRetryReceipt> save(String storageKey, String key, long startedIn,
                                                           String fingerprint, int status, String contentType,
-                                                          Map<String, List<String>> headers, String body) {
+                                                          Map<String, List<String>> headers, String body,
+                                                          String createdId) {
         if (startedIn != generation) {
             return Optional.empty();
         }
         StorageBackend<String, StoredRetryReceipt> receipts = receipts(storageKey);
         Instant now = clock.instant();
         StoredRetryReceipt receipt = new StoredRetryReceipt(fingerprint, status, contentType, headers, body,
-                now, now.plus(TTL));
+                createdId, false, now, now.plus(TTL));
         List<String> expired = receipts.keys().stream()
                 .filter(existing -> !existing.equals(key))
                 .filter(existing -> receipts.get(existing)
@@ -104,6 +106,27 @@ public class RetryTokenStore implements Resettable {
                 .toList();
         receipts.putAllAndDelete(Map.of(key, receipt), expired);
         return Optional.of(receipt);
+    }
+
+    /**
+     * Marks every unexpired receipt in the caller's tenancy that created {@code resourceId} as invalidated:
+     * "The provided retry token was used in an earlier request that resulted in a system update, but a
+     * subsequent operation invalidated the token" ({@code 409 InvalidatedRetryToken}, Oracle's error
+     * catalog). The receipts stay until they expire, so the retry keeps getting that answer.
+     */
+    public synchronized void invalidateCreatedBy(String storageKey, String resourceId) {
+        StorageBackend<String, StoredRetryReceipt> receipts = receipts(storageKey);
+        Instant now = clock.instant();
+        Map<String, StoredRetryReceipt> invalidated = new LinkedHashMap<>();
+        for (String key : receipts.keys()) {
+            receipts.get(key)
+                    .filter(receipt -> resourceId.equals(receipt.createdId()) && !receipt.invalidated()
+                            && now.isBefore(receipt.expiresAt()))
+                    .ifPresent(receipt -> invalidated.put(key, receipt.invalidate()));
+        }
+        if (!invalidated.isEmpty()) {
+            receipts.putAllAndDelete(invalidated, List.of());
+        }
     }
 
     /**
