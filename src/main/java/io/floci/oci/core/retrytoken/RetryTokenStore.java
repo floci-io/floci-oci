@@ -15,8 +15,8 @@ import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -44,6 +44,17 @@ import java.util.stream.Stream;
 public class RetryTokenStore implements Resettable {
 
     static final Duration TTL = Duration.ofHours(24);
+    /**
+     * How long a deleted OCID is remembered, so a create whose receipt is saved after its resource was
+     * already deleted (the two raced) is saved invalidated. The race spans one request, not hours.
+     */
+    static final Duration DELETED_MEMORY = Duration.ofMinutes(10);
+
+    private record Deletion(String workRequestId, Instant forgetAt) {
+    }
+
+    /** Recently deleted OCIDs (globally unique), with the delete's work request when it had one. */
+    private final Map<String, Deletion> recentlyDeleted = new ConcurrentHashMap<>();
     static final String DEFAULT_STORAGE_KEY = "retrytokens";
 
     private final Function<String, StorageBackend<String, StoredRetryReceipt>> backendFor;
@@ -96,8 +107,12 @@ public class RetryTokenStore implements Resettable {
         }
         StorageBackend<String, StoredRetryReceipt> receipts = receipts(storageKey);
         Instant now = clock.instant();
-        StoredRetryReceipt receipt = new StoredRetryReceipt(fingerprint, status, contentType, headers, body,
-                createdId, false, now, now.plus(TTL));
+        StoredRetryReceipt fresh = new StoredRetryReceipt(fingerprint, status, contentType, headers, body,
+                createdId, false, null, now, now.plus(TTL));
+        Deletion deletion = createdId == null ? null : recentlyDeleted.get(createdId);
+        StoredRetryReceipt receipt = deletion != null && now.isBefore(deletion.forgetAt())
+                ? fresh.deleted(deletion.workRequestId())
+                : fresh;
         List<String> expired = receipts.keys().stream()
                 .filter(existing -> !existing.equals(key))
                 .filter(existing -> receipts.get(existing)
@@ -109,24 +124,50 @@ public class RetryTokenStore implements Resettable {
     }
 
     /**
-     * Marks every unexpired receipt in the caller's tenancy that created {@code resourceId} as invalidated:
+     * Records a delete of {@code resourceId} against every unexpired receipt in the caller's tenancy that
+     * created it. Without a work request the delete is complete and the receipts are invalidated:
      * "The provided retry token was used in an earlier request that resulted in a system update, but a
      * subsequent operation invalidated the token" ({@code 409 InvalidatedRetryToken}, Oracle's error
-     * catalog). The receipts stay until they expire, so the retry keeps getting that answer.
+     * catalog). With one, an accepted delete can still fail (a compartment that is not empty), so the
+     * receipts only remember it and {@link #resolveDeletion} settles it from the work request's outcome.
+     * The OCID is also remembered for {@link #DELETED_MEMORY}, for a receipt saved after the delete.
      */
-    public synchronized void invalidateCreatedBy(String storageKey, String resourceId) {
-        StorageBackend<String, StoredRetryReceipt> receipts = receipts(storageKey);
+    public synchronized void deletedResource(String storageKey, String resourceId, String workRequestId) {
         Instant now = clock.instant();
-        Map<String, StoredRetryReceipt> invalidated = new LinkedHashMap<>();
+        recentlyDeleted.values().removeIf(deletion -> !now.isBefore(deletion.forgetAt()));
+        recentlyDeleted.put(resourceId, new Deletion(workRequestId, now.plus(DELETED_MEMORY)));
+        StorageBackend<String, StoredRetryReceipt> receipts = receipts(storageKey);
+        Map<String, StoredRetryReceipt> updated = new LinkedHashMap<>();
         for (String key : receipts.keys()) {
             receipts.get(key)
                     .filter(receipt -> resourceId.equals(receipt.createdId()) && !receipt.invalidated()
                             && now.isBefore(receipt.expiresAt()))
-                    .ifPresent(receipt -> invalidated.put(key, receipt.invalidate()));
+                    .ifPresent(receipt -> updated.put(key, receipt.deleted(workRequestId)));
         }
-        if (!invalidated.isEmpty()) {
-            receipts.putAllAndDelete(invalidated, List.of());
+        if (!updated.isEmpty()) {
+            receipts.putAllAndDelete(updated, List.of());
         }
+    }
+
+    /**
+     * Settles a pending delete from its work request's terminal status: SUCCEEDED invalidates the
+     * receipt, FAILED or CANCELED forgets the delete. Any other status (still running) changes nothing.
+     */
+    public synchronized StoredRetryReceipt resolveDeletion(String storageKey, String key, String terminalStatus) {
+        StorageBackend<String, StoredRetryReceipt> receipts = receipts(storageKey);
+        Optional<StoredRetryReceipt> current = receipts.get(key);
+        if (current.isEmpty() || current.get().deletionWorkRequestId() == null) {
+            return current.orElse(null);
+        }
+        StoredRetryReceipt settled = switch (terminalStatus) {
+            case "SUCCEEDED" -> current.get().invalidate();
+            case "FAILED", "CANCELED" -> current.get().deletionPending(null);
+            default -> current.get();
+        };
+        if (settled != current.get()) {
+            receipts.put(key, settled);
+        }
+        return settled;
     }
 
     /**
@@ -135,6 +176,7 @@ public class RetryTokenStore implements Resettable {
      */
     @Override
     public synchronized void clear() {
+        recentlyDeleted.clear();
         Stream.concat(Stream.of(DEFAULT_STORAGE_KEY), serviceStorageKeys.get().stream())
                 .distinct()
                 .forEach(this::receipts);

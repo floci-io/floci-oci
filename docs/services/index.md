@@ -32,7 +32,9 @@ Every service follows the OCI wire contract:
   choice), field order in the body does not count as different, and a request that fails does not use
   its token up. Object Storage, Functions and Secrets declare no retry token, and their binary uploads
   are never replayed. Once the resource a token created is deleted (any successful `DELETE` of its
-  OCID), a retry with that token is `409 InvalidatedRetryToken`, as in real OCI. Deletes that do not go
+  OCID), a retry with that token is `409 InvalidatedRetryToken`, as in real OCI. A delete answered with a
+  work request counts once that work request has `SUCCEEDED`: while it runs, or if it `FAILED` (a
+  compartment that still holds resources), the token keeps replaying. Deletes that do not go
   through such a request, like a cascade from a parent or KMS and Vault scheduled deletion, do not
   invalidate the token, and those retries keep replaying.
 - Async operations return **202 + `opc-work-request-id`**, pollable via the

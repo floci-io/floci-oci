@@ -253,6 +253,25 @@ class RetryTokenIntegrationTest {
     }
 
     @Test
+    void aDeleteThatFailsLeavesTheTokenReplaying() {
+        String name = "retry-failed-delete-" + System.nanoTime();
+        String retryToken = token("failed-delete");
+        String id = createCompartment(name, retryToken).jsonPath().getString("id");
+        given().contentType("application/json")
+                .body(Map.of("compartmentId", id, "name", "child-" + System.nanoTime(), "description", "keeps it busy"))
+            .when().post("/20160918/compartments")
+            .then().statusCode(200);
+
+        String workRequestId = given().when().delete("/20160918/compartments/{id}", id)
+            .then().statusCode(202).extract().header("opc-work-request-id");
+        given().when().get("/20160918/workRequests/{id}", workRequestId)
+            .then().statusCode(200).body("status", equalTo("FAILED"));
+
+        assertEquals(id, createCompartment(name, retryToken).jsonPath().getString("id"),
+                "a compartment that could not be deleted still exists, so the token still replays");
+    }
+
+    @Test
     void deletingAnotherResourceLeavesATokenReplaying() {
         String name = "retry-unrelated-" + System.nanoTime();
         String retryToken = token("unrelated");
