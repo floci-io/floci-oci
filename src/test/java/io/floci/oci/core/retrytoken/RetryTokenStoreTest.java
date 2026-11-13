@@ -118,8 +118,8 @@ class RetryTokenStoreTest {
         assertFalse(pending.invalidated());
         assertEquals("ocid1.wr.delete", pending.deletionWorkRequestId());
 
-        assertFalse(store.resolveDeletion(QUEUE, "k1", "IN_PROGRESS").invalidated(), "still running");
-        assertTrue(store.resolveDeletion(QUEUE, "k1", "SUCCEEDED").invalidated());
+        assertFalse(store.resolveDeletion(QUEUE, "k1", "ocid1.wr.delete", "IN_PROGRESS").invalidated(), "still running");
+        assertTrue(store.resolveDeletion(QUEUE, "k1", "ocid1.wr.delete", "SUCCEEDED").invalidated());
     }
 
     @Test
@@ -127,10 +127,22 @@ class RetryTokenStoreTest {
         store.save(QUEUE, "k1", store.generation(), "fp", 202, null, Map.of(), null, "ocid1.queue.oc1.iad.q1");
         store.deletedResource(QUEUE, "ocid1.queue.oc1.iad.q1", "ocid1.wr.delete");
 
-        StoredRetryReceipt settled = store.resolveDeletion(QUEUE, "k1", "FAILED");
+        StoredRetryReceipt settled = store.resolveDeletion(QUEUE, "k1", "ocid1.wr.delete", "FAILED");
 
         assertFalse(settled.invalidated());
         assertEquals(null, settled.deletionWorkRequestId());
+    }
+
+    @Test
+    void anOlderDeletesOutcomeCannotOverwriteANewerDelete() {
+        store.save(QUEUE, "k1", store.generation(), "fp", 202, null, Map.of(), null, "ocid1.queue.oc1.iad.q1");
+        store.deletedResource(QUEUE, "ocid1.queue.oc1.iad.q1", "ocid1.wr.first");
+        store.deletedResource(QUEUE, "ocid1.queue.oc1.iad.q1", "ocid1.wr.second");
+
+        StoredRetryReceipt afterStale = store.resolveDeletion(QUEUE, "k1", "ocid1.wr.first", "FAILED");
+
+        assertEquals("ocid1.wr.second", afterStale.deletionWorkRequestId(), "the newer delete is still pending");
+        assertTrue(store.resolveDeletion(QUEUE, "k1", "ocid1.wr.second", "SUCCEEDED").invalidated());
     }
 
     @Test

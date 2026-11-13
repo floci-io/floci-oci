@@ -266,7 +266,11 @@ public class RetryTokenFilter implements ContainerRequestFilter, ContainerRespon
 
     /**
      * A successful DELETE of an OCID is recorded against the tokens whose requests created it. A delete
-     * answered with a work request (202) may still fail, so it is recorded as pending on that work request.
+     * answered with a work request (202) is only accepted, so its outcome is settled now when the work
+     * request has already finished (SUCCEEDED invalidates, FAILED or CANCELED records nothing), which is how
+     * nearly every floci-oci delete ends; only a delete still running is recorded as pending on it. That
+     * keeps the outcome from depending on the work request still being there later: work requests have a
+     * storage setting of their own and can be gone after a restart that kept the receipt.
      */
     private void invalidateTokensThatCreated(ContainerRequestContext ctx, ContainerResponseContext response) {
         List<PathSegment> segments = ctx.getUriInfo().getPathSegments();
@@ -274,31 +278,46 @@ public class RetryTokenFilter implements ContainerRequestFilter, ContainerRespon
             return;
         }
         String last = segments.get(segments.size() - 1).getPath();
-        if (last.startsWith(OCID_PREFIX)) {
-            String workRequestId = response.getHeaderString(OPC_WORK_REQUEST_ID);
-            store.get().deletedResource(storageKey(), last,
-                    workRequestId == null || workRequestId.isBlank() ? null : workRequestId);
+        if (!last.startsWith(OCID_PREFIX)) {
+            return;
+        }
+        String workRequestId = response.getHeaderString(OPC_WORK_REQUEST_ID);
+        if (workRequestId == null || workRequestId.isBlank()) {
+            store.get().deletedResource(storageKey(), last, null);
+            return;
+        }
+        switch (workRequestStatus(workRequestId).orElse("UNKNOWN")) {
+            case "SUCCEEDED" -> store.get().deletedResource(storageKey(), last, null);
+            case "FAILED", "CANCELED" -> LOG.debugv("Delete of {0} failed; its retry tokens stay valid", last);
+            default -> store.get().deletedResource(storageKey(), last, workRequestId);
+        }
+    }
+
+    private Optional<String> workRequestStatus(String workRequestId) {
+        try {
+            return Optional.ofNullable(workRequests.get().get(workRequestId).getStatus());
+        } catch (OciException missing) {
+            LOG.debugv("Delete work request {0} not found: {1}", workRequestId, missing.getMessage());
+            return Optional.empty();
         }
     }
 
     /**
-     * A receipt whose resource has a delete pending: SUCCEEDED invalidates the token, FAILED or CANCELED
-     * keeps it replaying, a delete still running leaves the resource in place and the replay stands. A
-     * work request that is gone (a reset removes it with its resource) counts as a completed delete.
+     * A receipt whose resource has a delete still running when it was recorded: SUCCEEDED invalidates the
+     * token, FAILED or CANCELED keeps it replaying, a delete still running leaves the resource in place and
+     * the replay stands. A work request that cannot be found leaves the outcome unknown, so nothing is
+     * assumed and the retry replays.
      */
     private StoredRetryReceipt settleDeletion(String storageKey, String key, StoredRetryReceipt receipt) {
-        if (receipt.deletionWorkRequestId() == null) {
+        String workRequestId = receipt.deletionWorkRequestId();
+        if (workRequestId == null) {
             return receipt;
         }
-        String status;
-        try {
-            status = workRequests.get().get(receipt.deletionWorkRequestId()).getStatus();
-        } catch (OciException gone) {
-            LOG.debugv("Delete work request {0} is gone; treating the delete as complete",
-                    receipt.deletionWorkRequestId());
-            status = "SUCCEEDED";
+        Optional<String> status = workRequestStatus(workRequestId);
+        if (status.isEmpty()) {
+            return receipt;
         }
-        return store.get().resolveDeletion(storageKey, key, status);
+        return store.get().resolveDeletion(storageKey, key, workRequestId, status.get());
     }
 
     private static boolean isSuccess(int status) {

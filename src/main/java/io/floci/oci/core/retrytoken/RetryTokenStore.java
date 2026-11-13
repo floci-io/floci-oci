@@ -150,13 +150,16 @@ public class RetryTokenStore implements Resettable {
     }
 
     /**
-     * Settles a pending delete from its work request's terminal status: SUCCEEDED invalidates the
-     * receipt, FAILED or CANCELED forgets the delete. Any other status (still running) changes nothing.
+     * Settles a pending delete from the status of {@code workRequestId}: SUCCEEDED invalidates the
+     * receipt, FAILED or CANCELED forgets the delete, any other status (still running) changes nothing.
+     * The status applies only while the receipt still names that work request: a later delete may have
+     * replaced it, and an older delete's outcome must not overwrite the newer one's.
      */
-    public synchronized StoredRetryReceipt resolveDeletion(String storageKey, String key, String terminalStatus) {
+    public synchronized StoredRetryReceipt resolveDeletion(String storageKey, String key, String workRequestId,
+                                                           String terminalStatus) {
         StorageBackend<String, StoredRetryReceipt> receipts = receipts(storageKey);
         Optional<StoredRetryReceipt> current = receipts.get(key);
-        if (current.isEmpty() || current.get().deletionWorkRequestId() == null) {
+        if (current.isEmpty() || !workRequestId.equals(current.get().deletionWorkRequestId())) {
             return current.orElse(null);
         }
         StoredRetryReceipt settled = switch (terminalStatus) {
