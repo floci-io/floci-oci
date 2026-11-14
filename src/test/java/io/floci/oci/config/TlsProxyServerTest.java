@@ -13,6 +13,8 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ThreadLocalRandom;
@@ -86,10 +88,11 @@ class TlsProxyServerTest {
     @Test
     @Timeout(20)
     void bindsBothPorts_andRoutesByFirstByte() throws Exception {
-        int httpBe = freePort();
-        int httpsBe = freePort();
-        int publicPort = freePort();
-        int awsHttpsPort = freePort();
+        int[] ports = freePorts(4);
+        int httpBe = ports[0];
+        int httpsBe = ports[1];
+        int publicPort = ports[2];
+        int awsHttpsPort = ports[3];
         httpBackend = startMarkerBackend(httpBe, "PLAIN");
         httpsBackend = startMarkerBackend(httpsBe, "TLS");
 
@@ -106,9 +109,10 @@ class TlsProxyServerTest {
     @Test
     @Timeout(20)
     void tlsConnectionWaitsForALateBackend() throws Exception {
-        int httpBe = freePort();
+        int[] ports = freePorts(2);
+        int httpBe = ports[0];
         int httpsBe = freePortOutsideTheEphemeralRange();
-        int publicPort = freePort();
+        int publicPort = ports[1];
         httpBackend = startMarkerBackend(httpBe, "PLAIN");
         proxy = new TlsProxyServer(vertx, configWith(true, publicPort, 0), httpBe, httpsBe);
         awaitListening(publicPort);
@@ -177,6 +181,7 @@ class TlsProxyServerTest {
     private String roundTrip(int proxyPort, byte firstByte) throws Exception {
         awaitListening(proxyPort);
         try (Socket sock = new Socket("127.0.0.1", proxyPort)) {
+            sock.setSoTimeout(5_000);
             sock.getOutputStream().write(new byte[]{firstByte});
             sock.getOutputStream().flush();
             byte[] buf = new byte[64];
@@ -235,8 +240,55 @@ class TlsProxyServerTest {
     }
 
     private static int freePort() throws IOException {
-        try (ServerSocket s = new ServerSocket(0)) {
-            return s.getLocalPort();
+        return freePorts(1)[0];
+    }
+
+    /**
+     * {@code count} distinct free ports, skipping any that another process already listens on at
+     * 127.0.0.1, the address every connection in this test uses. macOS can hand out such a port
+     * for a bind to port 0 (an IDE's built-in web server on 127.0.0.1:63342 is a real case), and
+     * the proxy's 0.0.0.0 bind then succeeds beside it; connections to 127.0.0.1 reach that process
+     * instead of the proxy or a marker backend. Every candidate stays bound until all are chosen,
+     * so the OS cannot hand the same port out twice.
+     */
+    private static int[] freePorts(int count) throws IOException {
+        List<ServerSocket> held = new ArrayList<>();
+        try {
+            int[] ports = new int[count];
+            int found = 0;
+            for (int attempt = 0; attempt < 100 && found < count; attempt++) {
+                ServerSocket candidate = new ServerSocket(0);
+                held.add(candidate);
+                if (loopbackReaches(candidate)) {
+                    ports[found++] = candidate.getLocalPort();
+                }
+            }
+            if (found < count) {
+                throw new IOException("every candidate port already had a listener on 127.0.0.1");
+            }
+            return ports;
+        } finally {
+            for (ServerSocket socket : held) {
+                socket.close();
+            }
+        }
+    }
+
+    /**
+     * Whether a connection to 127.0.0.1 on the candidate's port lands on the candidate itself. When
+     * another process listens on 127.0.0.1 at that port, the more specific listener takes the
+     * connection and the candidate's accept times out.
+     */
+    private static boolean loopbackReaches(ServerSocket candidate) {
+        try (Socket probe = new Socket()) {
+            probe.connect(new InetSocketAddress("127.0.0.1", candidate.getLocalPort()), 200);
+            candidate.setSoTimeout(200);
+            try (Socket accepted = candidate.accept()) {
+                return accepted.getPort() == probe.getLocalPort();
+            }
+        } catch (IOException expected) {
+            // Refused, or another listener took the connection: the port is not ours to use.
+            return false;
         }
     }
 }
