@@ -208,6 +208,83 @@ class RetryTokenIntegrationTest {
     }
 
     @Test
+    void deletingTheCreatedResourceInvalidatesItsToken() {
+        String name = "retry-invalidated-" + System.nanoTime();
+        String retryToken = token("invalidated");
+        String id = createCompartment(name, retryToken).jsonPath().getString("id");
+        assertEquals(id, createCompartment(name, retryToken).jsonPath().getString("id"),
+                "before the delete, a retry still replays");
+
+        given().when().delete("/20160918/compartments/{id}", id)
+            .then().statusCode(202);
+
+        given()
+                .contentType("application/json")
+                .header("opc-retry-token", retryToken)
+                .body(Map.of("compartmentId", config.defaultTenancyId(), "name", name, "description", "retry"))
+            .when().post("/20160918/compartments")
+            .then()
+                .statusCode(409)
+                .header("opc-request-id", notNullValue())
+                .body("code", equalTo("InvalidatedRetryToken"))
+                .body("message", equalTo("The provided retry token was used in an earlier request that resulted"
+                        + " in a system update, but a subsequent operation invalidated the token."));
+    }
+
+    @Test
+    void deletingAnAsyncCreatedResourceInvalidatesItsToken() {
+        String compartment = TestCompartments.create("retryinvalidq");
+        String retryToken = token("queue-invalidated");
+        Map<String, Object> body = Map.of("displayName", "retry-invalid-q-" + System.nanoTime(),
+                "compartmentId", compartment);
+        String workRequestId = given().contentType("application/json").header("opc-retry-token", retryToken)
+                .body(body)
+            .when().post("/20210201/queues")
+            .then().statusCode(202).extract().header("opc-work-request-id");
+        String queueId = given().when().get("/20210201/workRequests/{id}", workRequestId)
+            .then().statusCode(200).extract().jsonPath().getString("resources[0].identifier");
+
+        given().when().delete("/20210201/queues/{id}", queueId)
+            .then().statusCode(202);
+
+        given().contentType("application/json").header("opc-retry-token", retryToken).body(body)
+            .when().post("/20210201/queues")
+            .then().statusCode(409).body("code", equalTo("InvalidatedRetryToken"));
+    }
+
+    @Test
+    void aDeleteThatFailsLeavesTheTokenReplaying() {
+        String name = "retry-failed-delete-" + System.nanoTime();
+        String retryToken = token("failed-delete");
+        String id = createCompartment(name, retryToken).jsonPath().getString("id");
+        given().contentType("application/json")
+                .body(Map.of("compartmentId", id, "name", "child-" + System.nanoTime(), "description", "keeps it busy"))
+            .when().post("/20160918/compartments")
+            .then().statusCode(200);
+
+        String workRequestId = given().when().delete("/20160918/compartments/{id}", id)
+            .then().statusCode(202).extract().header("opc-work-request-id");
+        given().when().get("/20160918/workRequests/{id}", workRequestId)
+            .then().statusCode(200).body("status", equalTo("FAILED"));
+
+        assertEquals(id, createCompartment(name, retryToken).jsonPath().getString("id"),
+                "a compartment that could not be deleted still exists, so the token still replays");
+    }
+
+    @Test
+    void deletingAnotherResourceLeavesATokenReplaying() {
+        String name = "retry-unrelated-" + System.nanoTime();
+        String retryToken = token("unrelated");
+        String id = createCompartment(name, retryToken).jsonPath().getString("id");
+        String other = createCompartment(name + "-other", token("other")).jsonPath().getString("id");
+
+        given().when().delete("/20160918/compartments/{id}", other)
+            .then().statusCode(202);
+
+        assertEquals(id, createCompartment(name, retryToken).jsonPath().getString("id"));
+    }
+
+    @Test
     void concurrentRetriesCreateOneResource() throws Exception {
         String name = "retry-concurrent-" + System.nanoTime();
         String retryToken = token("concurrent");

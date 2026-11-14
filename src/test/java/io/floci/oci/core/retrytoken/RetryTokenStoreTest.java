@@ -31,13 +31,13 @@ class RetryTokenStoreTest {
     }
 
     private Optional<StoredRetryReceipt> save(String storageKey, String key) {
-        return store.save(storageKey, key, store.generation(), "fp", 200, null, Map.of(), null);
+        return store.save(storageKey, key, store.generation(), "fp", 200, null, Map.of(), null, null);
     }
 
     @Test
     void aSavedReceiptIsFoundWithEverythingItRecorded() {
         store.save(QUEUE, "k1", store.generation(), "fp", 202, null,
-                Map.of("opc-work-request-id", List.of("ocid1.wr")), null);
+                Map.of("opc-work-request-id", List.of("ocid1.wr")), null, "ocid1.queue.oc1.iad.q1");
 
         StoredRetryReceipt receipt = store.find(QUEUE, "k1").orElseThrow();
         assertEquals("fp", receipt.fingerprint());
@@ -98,6 +98,87 @@ class RetryTokenStoreTest {
     }
 
     @Test
+    void deletingTheCreatedResourceInvalidatesOnlyTheReceiptsThatCreatedIt() {
+        store.save(QUEUE, "created-q1", store.generation(), "fp", 202, null, Map.of(), null, "ocid1.queue.oc1.iad.q1");
+        store.save(QUEUE, "created-q2", store.generation(), "fp", 202, null, Map.of(), null, "ocid1.queue.oc1.iad.q2");
+
+        store.deletedResource(QUEUE, "ocid1.queue.oc1.iad.q1", null);
+
+        assertTrue(store.find(QUEUE, "created-q1").orElseThrow().invalidated());
+        assertFalse(store.find(QUEUE, "created-q2").orElseThrow().invalidated());
+        assertEquals("ocid1.queue.oc1.iad.q1", store.find(QUEUE, "created-q1").orElseThrow().createdId());
+    }
+
+    @Test
+    void aDeleteWithAWorkRequestInvalidatesOnlyOnceItSucceeded() {
+        store.save(QUEUE, "k1", store.generation(), "fp", 202, null, Map.of(), null, "ocid1.queue.oc1.iad.q1");
+
+        store.deletedResource(QUEUE, "ocid1.queue.oc1.iad.q1", "ocid1.wr.delete");
+        StoredRetryReceipt pending = store.find(QUEUE, "k1").orElseThrow();
+        assertFalse(pending.invalidated());
+        assertEquals("ocid1.wr.delete", pending.deletionWorkRequestId());
+
+        assertFalse(store.resolveDeletion(QUEUE, "k1", "ocid1.wr.delete", "IN_PROGRESS").invalidated(), "still running");
+        assertTrue(store.resolveDeletion(QUEUE, "k1", "ocid1.wr.delete", "SUCCEEDED").invalidated());
+    }
+
+    @Test
+    void aFailedDeleteLeavesTheTokenReplaying() {
+        store.save(QUEUE, "k1", store.generation(), "fp", 202, null, Map.of(), null, "ocid1.queue.oc1.iad.q1");
+        store.deletedResource(QUEUE, "ocid1.queue.oc1.iad.q1", "ocid1.wr.delete");
+
+        StoredRetryReceipt settled = store.resolveDeletion(QUEUE, "k1", "ocid1.wr.delete", "FAILED");
+
+        assertFalse(settled.invalidated());
+        assertEquals(null, settled.deletionWorkRequestId());
+    }
+
+    @Test
+    void anOlderDeletesOutcomeCannotOverwriteANewerDelete() {
+        store.save(QUEUE, "k1", store.generation(), "fp", 202, null, Map.of(), null, "ocid1.queue.oc1.iad.q1");
+        store.deletedResource(QUEUE, "ocid1.queue.oc1.iad.q1", "ocid1.wr.first");
+        store.deletedResource(QUEUE, "ocid1.queue.oc1.iad.q1", "ocid1.wr.second");
+
+        StoredRetryReceipt afterStale = store.resolveDeletion(QUEUE, "k1", "ocid1.wr.first", "FAILED");
+
+        assertEquals("ocid1.wr.second", afterStale.deletionWorkRequestId(), "the newer delete is still pending");
+        assertTrue(store.resolveDeletion(QUEUE, "k1", "ocid1.wr.second", "SUCCEEDED").invalidated());
+    }
+
+    @Test
+    void aReceiptSavedAfterItsResourceWasDeletedIsSavedInvalidated() {
+        store.deletedResource(QUEUE, "ocid1.queue.oc1.iad.raced", null);
+
+        StoredRetryReceipt late = store.save(QUEUE, "k1", store.generation(), "fp", 202, null, Map.of(), null,
+                "ocid1.queue.oc1.iad.raced").orElseThrow();
+
+        assertTrue(late.invalidated(), "the delete finished before the create recorded its receipt");
+    }
+
+    @Test
+    void aDeletedResourceIsRememberedOnlyBriefly() {
+        store.deletedResource(QUEUE, "ocid1.queue.oc1.iad.old", null);
+        clock.advance(RetryTokenStore.DELETED_MEMORY.plusSeconds(1));
+
+        StoredRetryReceipt later = store.save(QUEUE, "k1", store.generation(), "fp", 202, null, Map.of(), null,
+                "ocid1.queue.oc1.iad.old").orElseThrow();
+
+        assertFalse(later.invalidated());
+    }
+
+    @Test
+    void anInvalidatedReceiptStaysUntilItExpires() {
+        store.save(QUEUE, "k1", store.generation(), "fp", 202, null, Map.of(), null, "ocid1.queue.oc1.iad.q1");
+        store.deletedResource(QUEUE, "ocid1.queue.oc1.iad.q1", null);
+
+        clock.advance(Duration.ofHours(23));
+        assertTrue(store.find(QUEUE, "k1").orElseThrow().invalidated());
+
+        clock.advance(Duration.ofHours(2));
+        assertFalse(store.find(QUEUE, "k1").isPresent(), "an expired token behaves as new again");
+    }
+
+    @Test
     void aResetOpensEveryServicesStoreSoTheStorageWipeReachesIt() {
         assertTrue(backends.isEmpty(), "stores open lazily");
 
@@ -112,7 +193,7 @@ class RetryTokenStoreTest {
         long startedIn = store.generation();
         store.clear();
 
-        Optional<StoredRetryReceipt> saved = store.save(QUEUE, "k1", startedIn, "fp", 200, null, Map.of(), null);
+        Optional<StoredRetryReceipt> saved = store.save(QUEUE, "k1", startedIn, "fp", 200, null, Map.of(), null, null);
 
         assertFalse(saved.isPresent());
         assertFalse(store.find(QUEUE, "k1").isPresent());
