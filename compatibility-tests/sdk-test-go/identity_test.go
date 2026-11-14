@@ -213,5 +213,14 @@ func TestIdentityPaginationUsesOpcNextPage(t *testing.T) {
 		Page:          first.OpcNextPage,
 	})
 	require.NoError(t, err)
-	assert.NotEmpty(t, second.Items)
+	require.NotEmpty(t, second.Items)
+
+	// An ignored page token would return the first page again.
+	firstIds := map[string]bool{}
+	for _, group := range first.Items {
+		firstIds[*group.Id] = true
+	}
+	for _, group := range second.Items {
+		assert.Falsef(t, firstIds[*group.Id], "group %s is on both pages", *group.Id)
+	}
 }
