@@ -85,6 +85,17 @@ class ControlPlaneContractIntegrationTest {
                 .body("message", notNullValue());
     }
 
+    @Test
+    void tlsCertAnswersAClientThatAsksForPem() {
+        given()
+            .accept("application/x-pem-file")
+            .when().get("/_floci/tls-cert")
+            .then()
+                .statusCode(404)
+                .contentType("application/json")
+                .body("tlsEnabled", equalTo(false));
+    }
+
     @ParameterizedTest
     @ValueSource(strings = {"/_floci/nope", "/_floci/state/nope", "/_floci-oci/nope", "/_floci"})
     void anUnknownControlPlanePathIsTheControlPlaneNotFound(String path) {

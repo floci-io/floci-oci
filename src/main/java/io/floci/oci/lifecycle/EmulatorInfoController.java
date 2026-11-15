@@ -38,6 +38,7 @@ public class EmulatorInfoController {
     static final int MANIFEST_VERSION = 1;
     static final int CONSOLE_CONTRACT = 2;
     static final String CLOUD = "oci";
+    static final String PEM_FILE = "application/x-pem-file";
     private static final String CERT_FILES_PROPERTY = "quarkus.http.ssl.certificate.files";
     private static final Pattern PEM_CERTIFICATE = Pattern.compile(
             "-----BEGIN CERTIFICATE-----[A-Za-z0-9+/=\\s]+?-----END CERTIFICATE-----");
@@ -141,15 +142,17 @@ public class EmulatorInfoController {
 
     /**
      * The certificate clients must trust: the PEM certificates the HTTPS endpoint serves, never a private
-     * key the certificate file may also hold.
+     * key the certificate file may also hold. It answers both a client asking for PEM and one asking for
+     * JSON, since the 404 explaining why there is no certificate is JSON.
      */
     @GET
     @Path("/tls-cert")
+    @Produces({PEM_FILE, MediaType.APPLICATION_JSON})
     public Response tlsCert() {
         boolean tlsEnabled = config.tls().enabled();
         Optional<String> pem = tlsEnabled ? currentCertificatePem() : Optional.empty();
         if (pem.isPresent()) {
-            return Response.ok(pem.get()).type("application/x-pem-file").build();
+            return Response.ok(pem.get()).type(PEM_FILE).build();
         }
 
         Map<String, Object> body = new LinkedHashMap<>();
@@ -163,7 +166,7 @@ public class EmulatorInfoController {
             body.put("message", "TLS is enabled but no certificate is available. "
                     + "Check the startup logs for certificate generation or read errors.");
         }
-        return Response.status(Response.Status.NOT_FOUND).entity(body).build();
+        return Response.status(Response.Status.NOT_FOUND).type(MediaType.APPLICATION_JSON).entity(body).build();
     }
 
     private static Optional<String> currentCertificatePem() {
