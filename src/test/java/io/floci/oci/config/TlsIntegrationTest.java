@@ -14,16 +14,29 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLSocket;
+import javax.net.ssl.TrustManager;
+import javax.net.ssl.X509TrustManager;
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.Security;
+import java.security.cert.Certificate;
+import java.security.cert.CertificateFactory;
+import java.security.cert.X509Certificate;
 import java.util.List;
 import java.util.Map;
 
 import static io.restassured.RestAssured.given;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.is;
+import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.notNullValue;
+import static org.hamcrest.Matchers.startsWith;
 
 /**
  * Integration test verifying TLS/HTTPS support when enabled via configuration.
@@ -84,6 +97,63 @@ class TlsIntegrationTest {
         .then()
             .statusCode(200)
             .body("version", notNullValue());
+    }
+
+    @Test
+    void tlsCertServesTheCertificateTheHttpsEndpointPresents() throws Exception {
+        String pem = given()
+            .baseUri("http://localhost:" + testHttpPort)
+            .accept("application/x-pem-file")
+        .when()
+            .get("/_floci/tls-cert")
+        .then()
+            .statusCode(200)
+            .contentType("application/x-pem-file")
+            .body(startsWith("-----BEGIN CERTIFICATE-----"))
+            .body(not(containsString("PRIVATE KEY")))
+            .extract().asString();
+
+        Certificate served = CertificateFactory.getInstance("X.509")
+                .generateCertificate(new ByteArrayInputStream(pem.getBytes(StandardCharsets.US_ASCII)));
+        assertEquals(httpsPeerCertificate(), served);
+    }
+
+    /** The leaf certificate the HTTPS listener presents in its handshake. */
+    private Certificate httpsPeerCertificate() throws Exception {
+        SSLContext context = SSLContext.getInstance("TLS");
+        context.init(null, new TrustManager[] {new TrustEveryCertificate()}, null);
+        try (SSLSocket socket = (SSLSocket) context.getSocketFactory().createSocket("localhost", testSslPort)) {
+            socket.setSoTimeout(5_000);
+            socket.startHandshake();
+            return socket.getSession().getPeerCertificates()[0];
+        }
+    }
+
+    /** Accepts any server certificate, so the test can read the one presented and compare it itself. */
+    private static final class TrustEveryCertificate implements X509TrustManager {
+        @Override
+        public void checkClientTrusted(X509Certificate[] chain, String authType) {
+        }
+
+        @Override
+        public void checkServerTrusted(X509Certificate[] chain, String authType) {
+        }
+
+        @Override
+        public X509Certificate[] getAcceptedIssuers() {
+            return new X509Certificate[0];
+        }
+    }
+
+    @Test
+    void manifestReportsTlsEnabled() {
+        given()
+            .baseUri("http://localhost:" + testHttpPort)
+        .when()
+            .get("/_floci/info")
+        .then()
+            .statusCode(200)
+            .body("tls.enabled", is(true));
     }
 
     // ==================== Test Profile ====================

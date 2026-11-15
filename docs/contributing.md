@@ -26,7 +26,7 @@ io.floci.oci
 │   ├── auth/         OCI Signature parsing (never verified)
 │   ├── storage/      StorageBackend (memory/persistent/hybrid/wal), tenancy isolation
 │   └── workrequest/  Shared async-operation plane
-├── lifecycle/        Boot/shutdown, init hooks, /health + /_floci-oci/*
+├── lifecycle/        Boot/shutdown, init hooks, /health + /_floci/* (alias /_floci-oci/*)
 └── services/<svc>/   Controller (JAX-RS) → Service → model/Stored*.java
 ```
 

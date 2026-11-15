@@ -27,7 +27,7 @@ import java.util.Optional;
  *
  * <p>When {@code floci-oci.auth.require-signature=true}, requests whose Authorization
  * header is missing or structurally malformed are rejected with 401 NotAuthenticated.
- * Emulator-internal endpoints ({@code /health}, {@code /_floci-oci/…}) and Object Storage
+ * Emulator-internal endpoints ({@code /health}, {@code /_floci/…}, {@code /_floci-oci/…}) and Object Storage
  * pre-authenticated requests ({@code /p/…}) are always exempt.
  */
 @Provider
@@ -86,13 +86,14 @@ public class SignatureAuthFilter implements ContainerRequestFilter {
 
     /**
      * Whether {@code path} needs no signature: the health probe, the emulator's own
-     * {@code /_floci-oci} endpoints (which k3s and Docker health checks call unsigned), and Object
+     * {@code /_floci} and {@code /_floci-oci} endpoints (which k3s and Docker health checks call unsigned), and Object
      * Storage pre-authenticated requests, whose token is the credential. The request path
      * arrives with its leading slash.
      */
     static boolean isExempt(String path) {
         String relative = path.startsWith("/") ? path.substring(1) : path;
         return relative.equals("health")
+                || relative.equals("_floci") || relative.startsWith("_floci/")
                 || relative.equals("_floci-oci") || relative.startsWith("_floci-oci/")
                 || relative.startsWith("p/");
     }

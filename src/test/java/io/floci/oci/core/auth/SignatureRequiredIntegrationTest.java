@@ -54,6 +54,30 @@ class SignatureRequiredIntegrationTest {
     }
 
     @Test
+    void theSharedControlPlaneAnswersUnsigned() {
+        given()
+            .when().get("/_floci/health")
+            .then().statusCode(200);
+        given()
+            .when().get("/_floci/info")
+            .then().statusCode(200);
+        given()
+            .when().get("/_floci/nope")
+            .then()
+                .statusCode(404)
+                .body("error", equalTo("NotFound"));
+    }
+
+    @Test
+    void aLookalikeOfTheSharedControlPlaneStillNeedsASignature() {
+        given()
+            .when().get("/_flociX")
+            .then()
+                .statusCode(401)
+                .body("code", equalTo("NotAuthenticated"));
+    }
+
+    @Test
     void aPreAuthenticatedRequestIsNotRefusedForMissingASignature() {
         // An unknown token is the PAR controller's own 404, not the auth filter's 401.
         given()
