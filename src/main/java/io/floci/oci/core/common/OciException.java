@@ -104,4 +104,15 @@ public class OciException extends RuntimeException {
     public static OciException bucketAlreadyExists(String message) {
         return new OciException("BucketAlreadyExists", message, 409);
     }
+
+    /** A replication policy conflicts with another: the real code for a second policy on one source bucket. */
+    public static OciException replicationPolicyConflict(String message) {
+        return new OciException("ReplicationPolicyConflict", message, 409);
+    }
+
+    /** Deleting a bucket that is the source of a replication policy. */
+    public static OciException bucketReplicationEnabled(String bucketName) {
+        return new OciException("BucketReplicationEnabled",
+                "Bucket named '" + bucketName + "' has replication enabled. ", 403);
+    }
 }
