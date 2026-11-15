@@ -10,7 +10,7 @@ protocol adherence.
 | `sdk-test-cli` | oci-cli (official CLI) + bats | Smoke CRUD across Identity, Object Storage, Queue, Streaming, KMS, Vault and Secrets, Functions, OKE, PostgreSQL and Organizations, incl. error codes and PAR access |
 | `compat-terraform` | Terraform + oracle/oci provider + bats | Full apply → no-drift plan → destroy cycle over Identity, Object Storage, Queue, Streaming, KMS, Vault, OKE and PostgreSQL resources, plus an Organizations data source. No Functions: see the note in `main.tf` |
 | `compat-opentofu` | OpenTofu + oracle/oci provider + bats | Same cycle as Terraform |
-| `sdk-test-go` | oci-go-sdk + gotestsum | OKE cluster lifecycle |
+| `sdk-test-go` | oci-go-sdk + gotestsum | Identity, Object Storage (incl. multipart and work requests), Queue, Streaming, KMS, Vault and Secrets, the Functions management plane, OKE |
 
 The Java, Python, CLI and Go suites pin their client versions in `sdk-test-java/pom.xml`,
 `sdk-test-python/requirements.txt`, `sdk-test-cli/Dockerfile` and `sdk-test-go/go.mod`.
