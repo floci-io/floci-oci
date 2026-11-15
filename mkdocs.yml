@@ -63,6 +63,7 @@ nav:
     - Environment Variables: configuration/environment-variables.md
     - Storage Modes: configuration/storage.md
     - Initialization Hooks: configuration/initialization-hooks.md
+    - Emulator Endpoints: configuration/endpoints.md
   - Services:
     - Overview: services/index.md
     - Identity (IAM): services/identity.md

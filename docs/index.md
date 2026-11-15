@@ -40,7 +40,7 @@ It implements real OCI wire protocols so the official OCI SDKs, the OCI CLI, Ter
 
 ```bash
 docker compose up -d
-curl http://localhost:4599/_floci-oci/health
+curl http://localhost:4599/_floci/health
 oci os ns get --endpoint http://localhost:4599
 ```
 

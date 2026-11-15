@@ -9,6 +9,9 @@ class SignatureAuthFilterTest {
     @Test
     void emulatorEndpointsAndParsAreExemptWithTheirLeadingSlash() {
         assertTrue(SignatureAuthFilter.isExempt("/health"));
+        assertTrue(SignatureAuthFilter.isExempt("/_floci"));
+        assertTrue(SignatureAuthFilter.isExempt("/_floci/health"));
+        assertTrue(SignatureAuthFilter.isExempt("/_floci/state/reset"));
         assertTrue(SignatureAuthFilter.isExempt("/_floci-oci"));
         assertTrue(SignatureAuthFilter.isExempt("/_floci-oci/health"));
         assertTrue(SignatureAuthFilter.isExempt("/_floci-oci/state/reset"));
@@ -21,6 +24,7 @@ class SignatureAuthFilterTest {
         assertFalse(SignatureAuthFilter.isExempt("/20160918/compartments"));
         assertFalse(SignatureAuthFilter.isExempt("/n/ns/b/bucket"));
         assertFalse(SignatureAuthFilter.isExempt("/_floci-ociX"));
+        assertFalse(SignatureAuthFilter.isExempt("/_flociX"));
         assertFalse(SignatureAuthFilter.isExempt("/healthz"));
         assertFalse(SignatureAuthFilter.isExempt("/p"));
     }

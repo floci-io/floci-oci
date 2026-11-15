@@ -27,7 +27,7 @@ oci os bucket create --endpoint http://localhost:4599 \
   --namespace floci-local --name seeded-bucket
 ```
 
-Hook state is inspectable at `GET /_floci-oci/init`.
+Hook state is inspectable at `GET /_floci/init` (or the legacy alias `GET /_floci-oci/init`).
 
 ## Settings
 

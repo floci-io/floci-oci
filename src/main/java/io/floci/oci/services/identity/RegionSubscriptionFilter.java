@@ -68,7 +68,8 @@ public class RegionSubscriptionFilter implements ContainerRequestFilter {
         if (path.startsWith("/")) {
             path = path.substring(1);
         }
-        return path.equals("health") || path.startsWith("_floci-oci") || path.startsWith("p/")
+        return path.equals("health") || path.equals("_floci") || path.startsWith("_floci/")
+                || path.startsWith("_floci-oci") || path.startsWith("p/")
                 || (HttpMethod.POST.equals(ctx.getMethod()) && CREATE_SUBSCRIPTION.matcher(path).matches())
                 || (HttpMethod.OPTIONS.equals(ctx.getMethod()) && ctx.getHeaderString(CORS_REQUEST_METHOD) != null);
     }

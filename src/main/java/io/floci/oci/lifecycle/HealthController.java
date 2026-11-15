@@ -8,8 +8,6 @@ import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 
-import java.util.Map;
-
 @Path("/health")
 @Produces(MediaType.APPLICATION_JSON)
 public class HealthController {
@@ -25,11 +23,7 @@ public class HealthController {
 
     @GET
     public Response health() {
-        return Response.ok(Map.of(
-                "services", serviceRegistry.getServices(),
-                "edition", "community",
-                "original_edition", "floci-always-free",
-                "version", version)).build();
+        return Response.ok(EmulatorInfoController.healthBody(serviceRegistry.getServices(), version)).build();
     }
 
     static String resolveVersion() {

@@ -22,8 +22,11 @@ import java.util.List;
 import java.util.Map;
 
 import static io.restassured.RestAssured.given;
+import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.is;
+import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.notNullValue;
+import static org.hamcrest.Matchers.startsWith;
 
 /**
  * Integration test verifying TLS/HTTPS support when enabled via configuration.
@@ -84,6 +87,30 @@ class TlsIntegrationTest {
         .then()
             .statusCode(200)
             .body("version", notNullValue());
+    }
+
+    @Test
+    void tlsCertServesTheSelfSignedCertificate() {
+        given()
+            .baseUri("http://localhost:" + testHttpPort)
+        .when()
+            .get("/_floci/tls-cert")
+        .then()
+            .statusCode(200)
+            .contentType("application/x-pem-file")
+            .body(startsWith("-----BEGIN CERTIFICATE-----"))
+            .body(not(containsString("PRIVATE KEY")));
+    }
+
+    @Test
+    void manifestReportsTlsEnabled() {
+        given()
+            .baseUri("http://localhost:" + testHttpPort)
+        .when()
+            .get("/_floci/info")
+        .then()
+            .statusCode(200)
+            .body("tls.enabled", is(true));
     }
 
     // ==================== Test Profile ====================

@@ -17,7 +17,7 @@
 The emulator listens on **port 4599**. Verify it is up:
 
 ```bash
-curl http://localhost:4599/_floci-oci/health
+curl http://localhost:4599/_floci/health
 ```
 
 ## First requests
