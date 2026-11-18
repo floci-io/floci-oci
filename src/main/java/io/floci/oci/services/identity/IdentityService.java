@@ -179,7 +179,7 @@ public class IdentityService {
         serviceRegistry.register(ServiceDescriptor.builder("identity")
                 .enabled(config.services().identity().enabled())
                 .storageKey("identity")
-                .resourceClasses(IdentityController.class)
+                .resourceClasses(IdentityController.class, CustomerSecretKeyController.class)
                 .global(true)
                 .build());
         adoptLegacyRootRecords();
