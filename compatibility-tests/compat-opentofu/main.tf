@@ -140,6 +140,29 @@ output "stream_messages_endpoint" {
   value = oci_streaming_stream.tf_stream.messages_endpoint
 }
 
+# ── Container Registry (OCIR) ───────────────────────────────────────────────
+
+resource "oci_artifacts_container_configuration" "tf_container_configuration" {
+  compartment_id                      = var.tenancy_ocid
+  is_repository_created_on_first_push = true
+}
+
+resource "oci_artifacts_container_repository" "tf_repository" {
+  compartment_id = var.tenancy_ocid
+  display_name   = "tf-compat/app"
+  is_public      = false
+  is_immutable   = false
+
+  readme {
+    content = "# tf-compat"
+    format  = "TEXT_MARKDOWN"
+  }
+}
+
+output "container_repository_namespace" {
+  value = oci_artifacts_container_repository.tf_repository.namespace
+}
+
 # ── Container Engine for Kubernetes (OKE) ───────────────────────────────────
 
 # Every optional setting Terraform reads back is set, so the second plan in the bats suite
