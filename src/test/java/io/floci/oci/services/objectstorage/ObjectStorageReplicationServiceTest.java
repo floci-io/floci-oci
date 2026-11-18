@@ -15,10 +15,17 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.function.Executable;
 
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
+import java.util.stream.IntStream;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.lenient;
@@ -348,5 +355,111 @@ class ObjectStorageReplicationServiceTest {
     void makeBucketWritable_onABucketThatIsNotADestinationIsAConflict() {
         bucket(ASHBURN, "plain");
         assertError(409, "Conflict", () -> service.makeBucketWritable(NS, "plain"));
+    }
+
+    // ── Concurrency ────────────────────────────────────────────────────────────
+
+    /** Runs {@code calls} at once and returns how many succeeded; every failure must be a policy conflict. */
+    private static int succeededTogether(List<Runnable> calls) throws Exception {
+        ExecutorService pool = Executors.newFixedThreadPool(calls.size());
+        CountDownLatch start = new CountDownLatch(1);
+        try {
+            List<Future<Boolean>> results = new ArrayList<>();
+            for (Runnable call : calls) {
+                results.add(pool.submit(() -> {
+                    start.await();
+                    try {
+                        call.run();
+                        return true;
+                    } catch (OciException e) {
+                        assertEquals("ReplicationPolicyConflict", e.getCode(), e.getMessage());
+                        return false;
+                    }
+                }));
+            }
+            start.countDown();
+            int succeeded = 0;
+            for (Future<Boolean> result : results) {
+                if (result.get(10, TimeUnit.SECONDS)) {
+                    succeeded++;
+                }
+            }
+            return succeeded;
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
+    void concurrentCreates_onOneSourceLetExactlyOneThrough() throws Exception {
+        bucket(ASHBURN, "src");
+        List<Runnable> creates = new ArrayList<>();
+        for (int i = 0; i < 8; i++) {
+            String destination = "dst-" + i;
+            bucket(ASHBURN, destination);
+            creates.add(() -> service.createReplicationPolicy(NS, "src", "p", ASHBURN, destination));
+        }
+
+        assertEquals(1, succeededTogether(creates));
+        assertEquals(1, service.listReplicationPolicies(NS, "src").size());
+        long readOnly = IntStream.range(0, 8)
+                .filter(i -> service.getBucket(NS, "dst-" + i).getIsReadOnly()).count();
+        assertEquals(1, readOnly);
+    }
+
+    @Test
+    void concurrentCreates_intoOneDestinationLetExactlyOneThrough() throws Exception {
+        bucket(ASHBURN, "dst");
+        List<Runnable> creates = new ArrayList<>();
+        for (int i = 0; i < 8; i++) {
+            String source = "src-" + i;
+            bucket(ASHBURN, source);
+            creates.add(() -> service.createReplicationPolicy(NS, source, "p", ASHBURN, "dst"));
+        }
+
+        assertEquals(1, succeededTogether(creates));
+        assertEquals(1, service.listReplicationSources(NS, "dst").size());
+    }
+
+    @Test
+    void concurrentWrites_leaveTheReplicaEqualToTheSource() throws Exception {
+        replicateAshburnToPhoenix();
+        ExecutorService pool = Executors.newFixedThreadPool(8);
+        CountDownLatch start = new CountDownLatch(1);
+        try {
+            List<Future<?>> writes = new ArrayList<>();
+            for (int i = 0; i < 64; i++) {
+                String content = "version-" + i;
+                boolean delete = i % 5 == 4;
+                writes.add(pool.submit(() -> {
+                    start.await();
+                    if (delete) {
+                        try {
+                            service.deleteObject(NS, "src", "hot", null);
+                        } catch (OciException expected) {
+                            // Another writer may have deleted it already.
+                        }
+                    } else {
+                        put("src", "hot", content);
+                    }
+                    return null;
+                }));
+            }
+            start.countDown();
+            for (Future<?> write : writes) {
+                write.get(10, TimeUnit.SECONDS);
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+
+        boolean inSource = existsIn(ASHBURN, "src", "hot");
+        assertEquals(inSource, existsIn(PHOENIX, "dst", "hot"));
+        if (inSource) {
+            in(ASHBURN);
+            String sourceEtag = service.getObject(NS, "src", "hot").getEtag();
+            in(PHOENIX);
+            assertEquals(sourceEtag, service.getObject(NS, "dst", "hot").getEtag());
+        }
     }
 }

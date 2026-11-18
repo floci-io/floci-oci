@@ -12,11 +12,16 @@ import org.jboss.logging.Logger;
 
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 /**
  * Object Storage replication policies, and the mirroring of a source bucket's writes into its
@@ -26,6 +31,12 @@ import java.util.function.Consumer;
  * that wrote the source, which is the zero-lag case of the same contract and keeps tests deterministic.
  * Only writes made after the policy exists are replicated, deletes included, and a replica keeps the
  * source's name, data, metadata, ETag and MD5, as Oracle's replication documentation states.
+ *
+ * <p>Each write to a bucket holds that bucket's lock across the write and its replica, so a source
+ * object and its replica change in the same order. Policy changes hold one policy lock, then the locks
+ * of every bucket they touch, taken in key order: concurrent creates cannot both pass the conflict
+ * checks, and no replication is in flight while a policy is deleted or stopped. A write takes a single
+ * bucket lock and never the policy lock, so the two cannot deadlock.
  */
 final class BucketReplication {
 
@@ -36,6 +47,8 @@ final class BucketReplication {
     private final StorageBackend<String, StoredBucket> buckets;
     private final StorageBackend<String, StoredOsObject> objects;
     private final OciContext ociContext;
+    private final ReentrantLock policyLock = new ReentrantLock();
+    private final Map<String, ReentrantLock> bucketLocks = new ConcurrentHashMap<>();
 
     BucketReplication(StorageBackend<String, StoredReplicationPolicy> policies,
                       StorageBackend<String, StoredBucket> buckets,
@@ -49,8 +62,9 @@ final class BucketReplication {
 
     // ── Policies ───────────────────────────────────────────────────────────────
 
-    StoredReplicationPolicy create(String namespace, StoredBucket source, String name,
-                                   String destinationRegion, String destinationBucket) {
+    /** {@code source} reads the source bucket again once its lock is held. */
+    StoredReplicationPolicy create(String namespace, String sourceBucketName, Supplier<StoredBucket> source,
+                                   String name, String destinationRegion, String destinationBucket) {
         if (name == null || name.isBlank()) {
             throw OciException.missingParameter("name is required");
         }
@@ -64,6 +78,14 @@ final class BucketReplication {
             throw OciException.invalidParameter("Unknown destinationRegionName: " + destinationRegion);
         }
         String sourceRegion = ociContext.region();
+        return changingPolicies(List.of(lockKey(sourceRegion, sourceBucketName),
+                        lockKey(destinationRegion, destinationBucket)),
+                () -> createLocked(namespace, source.get(), name, sourceRegion, destinationRegion, destinationBucket));
+    }
+
+    private StoredReplicationPolicy createLocked(String namespace, StoredBucket source, String name,
+                                                 String sourceRegion, String destinationRegion,
+                                                 String destinationBucket) {
         if (policyOf(sourceRegion, source.getName()).isPresent()) {
             throw OciException.replicationPolicyConflict("Replication policy exists for bucket '"
                     + source.getName() + "' in namespace '" + namespace + "'.");
@@ -122,7 +144,20 @@ final class BucketReplication {
     }
 
     void delete(String bucketName, String replicationId) {
-        StoredReplicationPolicy policy = get(bucketName, replicationId);
+        policyLock.lock();
+        try {
+            StoredReplicationPolicy policy = get(bucketName, replicationId);
+            withBuckets(List.of(lockKey(policy.getSourceRegionName(), policy.getSourceBucketName()),
+                    lockKey(policy.getDestinationRegionName(), policy.getDestinationBucketName())), () -> {
+                deleteLocked(policy);
+                return null;
+            });
+        } finally {
+            policyLock.unlock();
+        }
+    }
+
+    private void deleteLocked(StoredReplicationPolicy policy) {
         TenancyAwareStorageBackend.deleteAllIn(policies, partition(policy.getSourceRegionName()),
                 List.of(key(policy)));
         updateBucket(policy.getSourceRegionName(), policy.getSourceBucketName(),
@@ -148,7 +183,24 @@ final class BucketReplication {
      * Stops replication into {@code destination}: the bucket becomes writable and its source's policy
      * moves to {@code CLIENT_ERROR}, where it stays until it is deleted.
      */
-    void makeWritable(StoredBucket destination) {
+    void makeWritable(String bucketName, Supplier<StoredBucket> destination) {
+        policyLock.lock();
+        try {
+            List<String> keys = new ArrayList<>();
+            keys.add(lockKey(ociContext.region(), bucketName));
+            for (StoredReplicationPolicy policy : sourcesOf(bucketName)) {
+                keys.add(lockKey(policy.getSourceRegionName(), policy.getSourceBucketName()));
+            }
+            withBuckets(keys, () -> {
+                makeWritableLocked(destination.get());
+                return null;
+            });
+        } finally {
+            policyLock.unlock();
+        }
+    }
+
+    private void makeWritableLocked(StoredBucket destination) {
         if (!destination.getIsReadOnly()) {
             throw OciException.conflict("Bucket '" + destination.getName()
                     + "' is not the destination of a replication policy.");
@@ -211,6 +263,49 @@ final class BucketReplication {
         });
     }
 
+    // ── Locking ────────────────────────────────────────────────────────────────
+
+    /** Runs a client write to {@code bucketName} in {@code region}, with its replication, under the bucket's lock. */
+    <T> T writing(String region, String bucketName, Supplier<T> write) {
+        return withBuckets(List.of(lockKey(region, bucketName)), write);
+    }
+
+    void writing(String region, String bucketName, Runnable write) {
+        writing(region, bucketName, () -> {
+            write.run();
+            return null;
+        });
+    }
+
+    private <T> T changingPolicies(List<String> bucketKeys, Supplier<T> change) {
+        policyLock.lock();
+        try {
+            return withBuckets(bucketKeys, change);
+        } finally {
+            policyLock.unlock();
+        }
+    }
+
+    private <T> T withBuckets(List<String> keys, Supplier<T> action) {
+        List<ReentrantLock> held = new ArrayList<>();
+        try {
+            for (String key : keys.stream().distinct().sorted().toList()) {
+                ReentrantLock lock = bucketLocks.computeIfAbsent(key, ignored -> new ReentrantLock());
+                lock.lock();
+                held.add(lock);
+            }
+            return action.get();
+        } finally {
+            for (int i = held.size() - 1; i >= 0; i--) {
+                held.get(i).unlock();
+            }
+        }
+    }
+
+    private String lockKey(String region, String bucketName) {
+        return partition(region) + "/" + bucketName;
+    }
+
     // ── Helpers ────────────────────────────────────────────────────────────────
 
     private Optional<StoredReplicationPolicy> policyOf(String region, String bucketName) {
@@ -224,9 +319,14 @@ final class BucketReplication {
         return policyOf(region, bucketName).filter(StoredReplicationPolicy::isActive);
     }
 
+    /** Moves {@code timeLastSync} on the stored policy, never bringing back one deleted meanwhile. */
     private void synced(StoredReplicationPolicy policy) {
-        policy.setTimeLastSync(Instant.now().toString());
-        save(policy);
+        TenancyAwareStorageBackend.getIn(policies, partition(policy.getSourceRegionName()), key(policy))
+                .filter(StoredReplicationPolicy::isActive)
+                .ifPresent(stored -> {
+                    stored.setTimeLastSync(Instant.now().toString());
+                    save(stored);
+                });
     }
 
     private void save(StoredReplicationPolicy policy) {
