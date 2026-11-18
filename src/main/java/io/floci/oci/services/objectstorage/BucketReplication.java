@@ -15,10 +15,8 @@ import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
@@ -34,7 +32,7 @@ import java.util.function.Supplier;
  *
  * <p>Each write to a bucket holds that bucket's lock across the write and its replica, so a source
  * object and its replica change in the same order. Policy changes hold one policy lock, then the locks
- * of every bucket they touch, taken in key order: concurrent creates cannot both pass the conflict
+ * of every bucket they touch, taken in stripe order: concurrent creates cannot both pass the conflict
  * checks, and no replication is in flight while a policy is deleted or stopped. A write takes a single
  * bucket lock and never the policy lock, so the two cannot deadlock.
  */
@@ -42,13 +40,18 @@ final class BucketReplication {
 
     private static final Logger LOG = Logger.getLogger(BucketReplication.class);
     static final String ACTIVE_MESSAGE = "The policy is active.";
+    private static final int LOCK_STRIPES = 64;
 
     private final StorageBackend<String, StoredReplicationPolicy> policies;
     private final StorageBackend<String, StoredBucket> buckets;
     private final StorageBackend<String, StoredOsObject> objects;
     private final OciContext ociContext;
     private final ReentrantLock policyLock = new ReentrantLock();
-    private final Map<String, ReentrantLock> bucketLocks = new ConcurrentHashMap<>();
+    /**
+     * Bucket locks are striped: a bucket name always maps to the same lock, and the set of locks is
+     * fixed, so buckets that come and go never grow it. Two buckets sharing a stripe only serialize.
+     */
+    private final ReentrantLock[] bucketLocks = newStripes();
 
     BucketReplication(StorageBackend<String, StoredReplicationPolicy> policies,
                       StorageBackend<String, StoredBucket> buckets,
@@ -289,8 +292,8 @@ final class BucketReplication {
     private <T> T withBuckets(List<String> keys, Supplier<T> action) {
         List<ReentrantLock> held = new ArrayList<>();
         try {
-            for (String key : keys.stream().distinct().sorted().toList()) {
-                ReentrantLock lock = bucketLocks.computeIfAbsent(key, ignored -> new ReentrantLock());
+            for (int stripe : keys.stream().map(BucketReplication::stripeOf).distinct().sorted().toList()) {
+                ReentrantLock lock = bucketLocks[stripe];
                 lock.lock();
                 held.add(lock);
             }
@@ -300,6 +303,18 @@ final class BucketReplication {
                 held.get(i).unlock();
             }
         }
+    }
+
+    private static int stripeOf(String lockKey) {
+        return Math.floorMod(lockKey.hashCode(), LOCK_STRIPES);
+    }
+
+    private static ReentrantLock[] newStripes() {
+        ReentrantLock[] stripes = new ReentrantLock[LOCK_STRIPES];
+        for (int i = 0; i < LOCK_STRIPES; i++) {
+            stripes[i] = new ReentrantLock();
+        }
+        return stripes;
     }
 
     private String lockKey(String region, String bucketName) {
