@@ -35,6 +35,51 @@ public class StoredNetworkResource {
     public StoredNetworkResource() {
     }
 
+    /** A deep copy, so an update can be validated in full before anything stored changes. */
+    public StoredNetworkResource copy() {
+        StoredNetworkResource copy = new StoredNetworkResource();
+        copy.id = id;
+        copy.kind = kind;
+        copy.compartmentId = compartmentId;
+        copy.vcnId = vcnId;
+        copy.displayName = displayName;
+        copy.lifecycleState = lifecycleState;
+        copy.timeCreated = timeCreated;
+        copy.etag = etag;
+        copy.vcnDefault = vcnDefault;
+        copy.freeformTags = new LinkedHashMap<>(freeformTags);
+        copy.definedTags = deepCopyMap(definedTags);
+        copy.attributes = deepCopyMap(attributes);
+        copy.securityRules = new ArrayList<>();
+        for (Map<String, Object> rule : securityRules) {
+            copy.securityRules.add(deepCopyMap(rule));
+        }
+        return copy;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <V> Map<String, V> deepCopyMap(Map<String, V> source) {
+        Map<String, V> copy = new LinkedHashMap<>();
+        source.forEach((key, value) -> copy.put(key, (V) deepCopy(value)));
+        return copy;
+    }
+
+    private static Object deepCopy(Object value) {
+        if (value instanceof Map<?, ?> map) {
+            Map<Object, Object> copy = new LinkedHashMap<>();
+            map.forEach((key, nested) -> copy.put(key, deepCopy(nested)));
+            return copy;
+        }
+        if (value instanceof List<?> list) {
+            List<Object> copy = new ArrayList<>();
+            for (Object nested : list) {
+                copy.add(deepCopy(nested));
+            }
+            return copy;
+        }
+        return value;
+    }
+
     public String getId() {
         return id;
     }

@@ -26,7 +26,6 @@ import jakarta.ws.rs.core.Response;
 
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 /**
  * OCI Identity (IAM) API — {@code /20160918/…}. Lists return bare JSON arrays with the
@@ -37,8 +36,6 @@ import java.util.Set;
 @Produces(MediaType.APPLICATION_JSON)
 @Consumes(MediaType.APPLICATION_JSON)
 public class IdentityController {
-
-    private static final Set<String> WORK_REQUEST_SERVICES = Set.of("identity", "networking");
 
     private final IdentityService service;
     private final WorkRequestService workRequests;
@@ -334,19 +331,6 @@ public class IdentityController {
     }
 
     // ── Work requests ──────────────────────────────────────────────────────────
-
-    @GET
-    @Path("/workRequests/{workRequestId}")
-    public Response getWorkRequest(@PathParam("workRequestId") String workRequestId) {
-        // Core Networking's work-request client polls this same path on the iaas host, so the
-        // VCN and subnet compartment moves resolve here too (oci-go-sdk/workrequests).
-        StoredWorkRequest wr = workRequests.get(workRequestId);
-        if (!WORK_REQUEST_SERVICES.contains(wr.getService())) {
-            throw OciException.notAuthorizedOrNotFound(
-                    "Work request not found or not authorized: " + workRequestId);
-        }
-        return Response.ok(wr.toWire()).build();
-    }
 
     @GET
     @Path("/workRequests")

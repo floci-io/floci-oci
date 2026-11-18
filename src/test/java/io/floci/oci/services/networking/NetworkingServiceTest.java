@@ -236,6 +236,40 @@ class NetworkingServiceTest {
     }
 
     @Test
+    void rejectedUpdateLeavesTheStoredResourceUnchanged() {
+        StoredNetworkResource vcn = vcn("10.0.0.0/16", null);
+        StoredNetworkResource igw = service.create(NetworkKind.INTERNET_GATEWAY, Map.of(
+                "compartmentId", COMPARTMENT, "vcnId", vcn.getId(), "isEnabled", true, "displayName", "igw"));
+        String etag = igw.getEtag();
+
+        assertThrows(OciException.class, () -> service.update(NetworkKind.INTERNET_GATEWAY, igw.getId(), Map.of(
+                "displayName", "renamed", "isEnabled", false, "routeTableId", "ocid1.routetable.oc1.iad.missing"),
+                null));
+
+        StoredNetworkResource stored = service.get(NetworkKind.INTERNET_GATEWAY, igw.getId());
+        assertEquals("igw", stored.getDisplayName());
+        assertEquals(true, stored.getAttributes().get("isEnabled"));
+        assertEquals(etag, stored.getEtag());
+    }
+
+    @Test
+    void rejectedRuleBatchLeavesEveryRuleUnchanged() {
+        StoredNetworkResource vcn = vcn("10.0.0.0/16", null);
+        StoredNetworkResource nsg = service.create(NetworkKind.NETWORK_SECURITY_GROUP, Map.of(
+                "compartmentId", COMPARTMENT, "vcnId", vcn.getId()));
+        String ruleId = (String) service.addSecurityRules(nsg.getId(), List.of(Map.of(
+                "direction", "INGRESS", "protocol", "6", "source", "10.0.0.0/16"))).get(0).get("id");
+
+        assertThrows(OciException.class, () -> service.updateSecurityRules(nsg.getId(), List.of(
+                Map.of("id", ruleId, "direction", "INGRESS", "protocol", "17", "source", "10.0.0.0/16"),
+                Map.of("id", "FFFFFF", "direction", "INGRESS", "protocol", "17", "source", "10.0.0.0/16"))));
+        assertEquals("6", service.listSecurityRules(nsg.getId(), null).get(0).get("protocol"));
+
+        assertThrows(OciException.class, () -> service.removeSecurityRules(nsg.getId(), List.of(ruleId, "FFFFFF")));
+        assertEquals(1, service.listSecurityRules(nsg.getId(), null).size());
+    }
+
+    @Test
     void vcnCompartmentMoveRecordsANetworkingWorkRequest() {
         StoredNetworkResource vcn = vcn("10.0.0.0/16", null);
         NetworkingService.CompartmentMove move =

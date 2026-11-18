@@ -143,6 +143,14 @@ public class NetworkingService implements CompartmentUsage {
                         "Authorization failed or requested resource not found: " + kind.ocidType() + " " + id));
     }
 
+    /**
+     * A copy of the stored resource to change. Writes go through {@code resources.put} only after
+     * every check has passed, so a rejected request leaves the stored resource as it was.
+     */
+    private StoredNetworkResource editable(NetworkKind kind, String id) {
+        return get(kind, id).copy();
+    }
+
     public List<StoredNetworkResource> list(NetworkKind kind, String compartmentId, String vcnId,
                                             String displayName, String lifecycleState,
                                             String sortBy, String sortOrder) {
@@ -171,7 +179,7 @@ public class NetworkingService implements CompartmentUsage {
 
     public synchronized StoredNetworkResource update(NetworkKind kind, String id, Map<String, Object> body,
                                                      String ifMatch) {
-        StoredNetworkResource r = get(kind, id);
+        StoredNetworkResource r = editable(kind, id);
         Etags.checkIfMatch(ifMatch, r.getEtag());
         Map<String, Object> b = body == null ? Map.of() : body;
         String displayName = str(b, "displayName");
@@ -276,7 +284,7 @@ public class NetworkingService implements CompartmentUsage {
 
     public synchronized CompartmentMove changeCompartment(NetworkKind kind, String id, String compartmentId,
                                                           String ifMatch) {
-        StoredNetworkResource r = get(kind, id);
+        StoredNetworkResource r = editable(kind, id);
         Etags.checkIfMatch(ifMatch, r.getEtag());
         if (compartmentId == null || compartmentId.isBlank()) {
             throw OciException.missingParameter("compartmentId is required");
@@ -298,7 +306,7 @@ public class NetworkingService implements CompartmentUsage {
 
     public synchronized StoredNetworkResource attachService(String serviceGatewayId, String serviceId,
                                                             boolean attach, String ifMatch) {
-        StoredNetworkResource r = get(NetworkKind.SERVICE_GATEWAY, serviceGatewayId);
+        StoredNetworkResource r = editable(NetworkKind.SERVICE_GATEWAY, serviceGatewayId);
         Etags.checkIfMatch(ifMatch, r.getEtag());
         Map<String, Object> service = serviceRef(serviceId);
         List<Map<String, Object>> current = new ArrayList<>(mapList(r.getAttributes().get("services")));
@@ -340,7 +348,7 @@ public class NetworkingService implements CompartmentUsage {
     // ── Network security group rules ───────────────────────────────────────────
 
     public synchronized List<Map<String, Object>> addSecurityRules(String nsgId, List<?> rules) {
-        StoredNetworkResource nsg = get(NetworkKind.NETWORK_SECURITY_GROUP, nsgId);
+        StoredNetworkResource nsg = editable(NetworkKind.NETWORK_SECURITY_GROUP, nsgId);
         List<Map<String, Object>> added = new ArrayList<>();
         for (Object raw : rules == null ? List.of() : rules) {
             Map<String, Object> rule = nsgRule(asMap(raw, "securityRules"), nsg.getVcnId());
@@ -356,7 +364,7 @@ public class NetworkingService implements CompartmentUsage {
     }
 
     public synchronized List<Map<String, Object>> updateSecurityRules(String nsgId, List<?> rules) {
-        StoredNetworkResource nsg = get(NetworkKind.NETWORK_SECURITY_GROUP, nsgId);
+        StoredNetworkResource nsg = editable(NetworkKind.NETWORK_SECURITY_GROUP, nsgId);
         List<Map<String, Object>> updated = new ArrayList<>();
         for (Object raw : rules == null ? List.of() : rules) {
             Map<String, Object> input = asMap(raw, "securityRules");
@@ -376,7 +384,7 @@ public class NetworkingService implements CompartmentUsage {
     }
 
     public synchronized void removeSecurityRules(String nsgId, List<String> ruleIds) {
-        StoredNetworkResource nsg = get(NetworkKind.NETWORK_SECURITY_GROUP, nsgId);
+        StoredNetworkResource nsg = editable(NetworkKind.NETWORK_SECURITY_GROUP, nsgId);
         for (String ruleId : ruleIds == null ? List.<String>of() : ruleIds) {
             nsg.getSecurityRules().remove(indexOfRule(nsg, ruleId));
         }
