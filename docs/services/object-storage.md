@@ -79,6 +79,11 @@ reaches the native API as before.
 - `aws-chunked` uploads (`STREAMING-*` payloads, with or without trailing checksums) are
   decoded; chunk signatures and trailing checksums are not checked.
 - Errors are S3 XML (`NoSuchBucket`, `NoSuchKey`, `BucketNotEmpty`, `NoSuchUpload`, ...).
+- PutObject honours `If-None-Match: *` and `If-Match`, compared with the hex MD5 ETag
+  (`412 PreconditionFailed`). CompleteMultipartUpload needs every part's ETag and the parts in
+  ascending order (`InvalidPart`, `InvalidPartOrder`).
+- SigV4 credentials only count on the S3 host. Deleting an Identity user deletes its Customer
+  Secret Keys, and turning Object Storage off turns this API off too.
 - Oracle's supported list does not name CopyObject or ListObjectsV2; floci-oci serves them
   because boto3, the AWS CLI and rclone use them. SSE-C and KMS headers, ACLs, policies and
   the virtual-host `vhcompat` endpoint are not implemented.

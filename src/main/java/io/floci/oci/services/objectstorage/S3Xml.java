@@ -98,9 +98,10 @@ final class S3Xml {
         return result;
     }
 
+    /** The text of the first {@code name} child, exactly as sent: object keys and tag values may hold spaces. */
     static String childText(Element parent, String name) {
         List<Element> found = children(parent, name);
-        return found.isEmpty() ? null : found.get(0).getTextContent().trim();
+        return found.isEmpty() ? null : found.get(0).getTextContent();
     }
 
     private static String localName(Element e) {

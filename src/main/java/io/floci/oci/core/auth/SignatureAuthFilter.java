@@ -61,9 +61,13 @@ public class SignatureAuthFilter implements ContainerRequestFilter {
 
         String authorization = ctx.getHeaderString(HttpHeaders.AUTHORIZATION);
         Optional<AuthContext> auth = OciSignatureParser.parse(authorization);
-        Optional<String> s3AccessKey = AccessKeyResolver.sigV4AccessKey(authorization)
-                .or(() -> AccessKeyResolver.presignedAccessKey(
-                        ctx.getUriInfo().getQueryParameters().getFirst("X-Amz-Credential")));
+        // SigV4 credentials count only on the S3 Compatibility API host: a native route keeps its
+        // OCI signature requirement whatever S3-looking header or query it carries.
+        Optional<String> s3AccessKey = AccessKeyResolver.isS3CompatHost(ctx.getHeaderString(HttpHeaders.HOST))
+                ? AccessKeyResolver.sigV4AccessKey(authorization)
+                        .or(() -> AccessKeyResolver.presignedAccessKey(
+                                ctx.getUriInfo().getQueryParameters().getFirst("X-Amz-Credential")))
+                : Optional.empty();
         if (auth.isEmpty() && s3AccessKey.isPresent() && accessKeys.isResolvable()) {
             auth = accessKeys.get().resolve(s3AccessKey.get());
         }

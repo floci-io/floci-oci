@@ -183,7 +183,8 @@ public class S3CompatResource {
                 return error(400, "InvalidRequest", "Unsupported bucket POST", "/" + bucket);
             }
             Document doc = S3Xml.parse(readAll(body));
-            boolean quiet = "true".equalsIgnoreCase(S3Xml.childText(doc.getDocumentElement(), "Quiet"));
+            String quietText = S3Xml.childText(doc.getDocumentElement(), "Quiet");
+            boolean quiet = quietText != null && "true".equalsIgnoreCase(quietText.trim());
             List<ObjectStorageService.BatchDeleteItem> items = new ArrayList<>();
             for (Element object : S3Xml.children(doc.getDocumentElement(), "Object")) {
                 items.add(new ObjectStorageService.BatchDeleteItem(S3Xml.childText(object, "Key"), null));
@@ -217,15 +218,22 @@ public class S3CompatResource {
         if (v2) {
             String token = query.getFirst("continuation-token");
             String startAfter = query.getFirst("start-after");
-            start = token != null ? decodeToken(token) : startAfter != null ? startAfter + '\u0000' : null;
+            start = token != null ? resumeAfter(decodeToken(token), prefix, delimiter)
+                    : startAfter != null ? startAfter + '\u0000' : null;
         } else {
             String marker = query.getFirst("marker");
-            start = marker != null ? marker + '\u0000' : null;
+            start = marker != null ? resumeAfter(marker, prefix, delimiter) : null;
         }
         ObjectStorageService.ObjectListing listing = maxKeys == 0
                 ? new ObjectStorageService.ObjectListing(List.of(), List.of(), null)
                 : service.listObjects(namespace, bucket, prefix, start, null, delimiter, maxKeys);
+        String last = lastName(listing);
         boolean truncated = listing.nextStartWith() != null;
+        if (truncated && isCommonPrefix(last, prefix, delimiter) && listing.nextStartWith().startsWith(last)) {
+            // The native listing stopped inside the last folder returned; more is left only after it.
+            String after = resumeAfter(last, prefix, delimiter);
+            truncated = !service.listObjects(namespace, bucket, prefix, after, null, null, 1).objects().isEmpty();
+        }
         String root = "ListBucketResult";
         S3Xml xml = S3Xml.document(root)
                 .element("Name", bucket)
@@ -238,12 +246,12 @@ public class S3CompatResource {
             xml.element("ContinuationToken", query.getFirst("continuation-token"));
             xml.element("StartAfter", query.getFirst("start-after"));
             if (truncated) {
-                xml.element("NextContinuationToken", encodeToken(listing.nextStartWith()));
+                xml.element("NextContinuationToken", encodeToken(last));
             }
         } else {
             xml.element("Marker", query.getFirst("marker") == null ? "" : query.getFirst("marker"));
             if (truncated && delimiter != null) {
-                xml.element("NextMarker", lastName(listing));
+                xml.element("NextMarker", last);
             }
         }
         for (StoredOsObject o : listing.objects()) {
@@ -296,14 +304,19 @@ public class S3CompatResource {
                 return copyObject(namespace, bucket, key, copySource, headers);
             }
             byte[] data = readBody(headers, body);
+            WriteConditions conditions = writeConditions(namespace, bucket, key, headers);
             StoredOsObject o = service.putObject(namespace, bucket, key, data, headers.getHeaderString("Content-Type"),
-                    headers.getHeaderString("Content-MD5"), userMetadata(headers), null, null);
+                    headers.getHeaderString("Content-MD5"), userMetadata(headers), conditions.ifMatch(),
+                    conditions.ifNoneMatch());
             return Response.ok().header("ETag", quotedEtag(o)).build();
         });
     }
 
     private Response copyObject(String namespace, String bucket, String key, String copySource, HttpHeaders headers) {
-        String source = URLDecoder.decode(copySource, StandardCharsets.UTF_8);
+        // The version query is split off before decoding: an encoded '?' belongs to the key.
+        int query = copySource.indexOf('?');
+        String source = URLDecoder.decode(query < 0 ? copySource : copySource.substring(0, query),
+                StandardCharsets.UTF_8);
         if (source.startsWith("/")) {
             source = source.substring(1);
         }
@@ -313,10 +326,6 @@ public class S3CompatResource {
         }
         String sourceBucket = source.substring(0, slash);
         String sourceKey = source.substring(slash + 1);
-        int versionMarker = sourceKey.indexOf("?versionId=");
-        if (versionMarker >= 0) {
-            sourceKey = sourceKey.substring(0, versionMarker);
-        }
         StoredOsObject copied;
         if ("REPLACE".equalsIgnoreCase(headers.getHeaderString("x-amz-metadata-directive"))) {
             StoredOsObject original = service.getObject(namespace, sourceBucket, sourceKey);
@@ -421,11 +430,18 @@ public class S3CompatResource {
             StoredMultipartUpload upload = service.getUpload(bucket, uploadId, key);
             Document doc = S3Xml.parse(readAll(body));
             List<Map<String, Object>> parts = new ArrayList<>();
+            int previous = 0;
             for (Element part : S3Xml.children(doc.getDocumentElement(), "Part")) {
                 int number = parseInt(S3Xml.childText(part, "PartNumber"), 0);
                 String etag = S3Xml.childText(part, "ETag");
+                if (number <= previous) {
+                    return error(400, "InvalidPartOrder",
+                            "The list of parts was not in ascending order. Parts must be ordered by part number.",
+                            resource);
+                }
+                previous = number;
                 StoredMultipartUpload.Part stored = upload.getParts().get(number);
-                if (stored == null || (etag != null && !unquote(etag).equals(md5Hex(stored.getData())))) {
+                if (stored == null || etag == null || !unquote(etag).equals(md5Hex(stored.getData()))) {
                     return error(400, "InvalidPart", "Part " + number + " was not uploaded with that ETag", resource);
                 }
                 Map<String, Object> ref = new LinkedHashMap<>();
@@ -455,6 +471,57 @@ public class S3CompatResource {
     }
 
     // ── Helpers ────────────────────────────────────────────────────────────────
+
+    /** The native preconditions a conditional S3 PutObject turns into. */
+    private record WriteConditions(String ifMatch, String ifNoneMatch) {
+    }
+
+    /**
+     * Translates {@code If-Match} and {@code If-None-Match} on PutObject. S3 compares them with the
+     * hex-MD5 ETag this API exposes, not the native one, so {@code If-Match} is checked here and then
+     * handed to the write as the native ETag of the object it matched, which keeps the write
+     * conditional on that object still being there. {@code If-None-Match: *} passes through: the
+     * write fails when any object exists. A failed condition is {@code 412 PreconditionFailed}, and
+     * {@code If-Match} on a missing key is {@code 404 NoSuchKey}.
+     */
+    private WriteConditions writeConditions(String namespace, String bucket, String key, HttpHeaders headers) {
+        String ifMatch = blankToNull(headers.getHeaderString("If-Match"));
+        String ifNoneMatch = blankToNull(headers.getHeaderString("If-None-Match"));
+        if (ifMatch == null && (ifNoneMatch == null || "*".equals(ifNoneMatch))) {
+            return new WriteConditions(null, ifNoneMatch);
+        }
+        StoredOsObject current;
+        try {
+            current = service.getObject(namespace, bucket, key);
+        } catch (OciException e) {
+            if (ifMatch != null || !"ObjectNotFound".equals(e.getCode())) {
+                throw e;
+            }
+            // If-None-Match with an ETag holds for a key that is not there.
+            return new WriteConditions(null, null);
+        }
+        String currentEtag = unquote(quotedEtag(current));
+        if (ifMatch != null && !matchesAny(ifMatch, currentEtag)) {
+            throw OciException.noEtagMatch("At least one of the pre-conditions you specified did not hold");
+        }
+        if (ifNoneMatch != null && ("*".equals(ifNoneMatch) || matchesAny(ifNoneMatch, currentEtag))) {
+            throw OciException.ifNoneMatchFailed("At least one of the pre-conditions you specified did not hold");
+        }
+        return new WriteConditions(current.getEtag(), null);
+    }
+
+    private static boolean matchesAny(String header, String etag) {
+        for (String candidate : header.split(",")) {
+            if ("*".equals(candidate.trim()) || unquote(candidate).equals(etag)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
+    }
 
     @FunctionalInterface
     private interface S3Call {
@@ -600,6 +667,24 @@ public class S3CompatResource {
         } catch (IllegalArgumentException e) {
             throw OciException.invalidParameter("Invalid continuation token");
         }
+    }
+
+    /**
+     * Where a page resumes after {@code last}, the last key or common prefix the previous page
+     * returned. After a common prefix it skips every key under that prefix, so a folder is never
+     * listed twice and a listing cannot repeat the same page.
+     */
+    static String resumeAfter(String last, String prefix, String delimiter) {
+        return isCommonPrefix(last, prefix, delimiter) ? last + '\uffff' : last + '\u0000';
+    }
+
+    /** Whether {@code name} is a common prefix of a listing under {@code prefix}, rather than a key. */
+    private static boolean isCommonPrefix(String name, String prefix, String delimiter) {
+        if (name == null || delimiter == null || delimiter.isEmpty()) {
+            return false;
+        }
+        String base = prefix == null ? "" : prefix;
+        return name.startsWith(base) && name.length() > base.length() && name.endsWith(delimiter);
     }
 
     private static String lastName(ObjectStorageService.ObjectListing listing) {

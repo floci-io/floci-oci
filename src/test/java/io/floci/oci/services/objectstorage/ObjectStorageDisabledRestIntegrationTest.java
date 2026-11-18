@@ -24,6 +24,15 @@ class ObjectStorageDisabledRestIntegrationTest {
                 .body("message", equalTo("Service objectstorage is not enabled."));
     }
 
+    @Test
+    void theS3CompatibilityRootIsDisabledToo() {
+        given()
+            .when().get("/_s3compat/floci-test")
+            .then()
+                .statusCode(503)
+                .body("code", equalTo("ServiceUnavailable"));
+    }
+
     public static class DisabledObjectStorageProfile implements QuarkusTestProfile {
         @Override
         public Map<String, String> getConfigOverrides() {

@@ -13,6 +13,18 @@ public interface AccessKeyResolver {
 
     Optional<AuthContext> resolve(String accessKey);
 
+    /**
+     * OCI's S3 Compatibility API host, {@code <namespace>.compat.objectstorage.<region>.<domain>}
+     * (Object/Tasks/s3compatibleapi.htm). Group 1 is the namespace.
+     */
+    Pattern S3_COMPAT_HOST = Pattern.compile("^([a-z0-9][a-z0-9_-]*)\\.compat\\.objectstorage\\.[a-z0-9-]+\\.",
+            Pattern.CASE_INSENSITIVE);
+
+    /** Whether {@code host} is an S3 Compatibility API host, the only place SigV4 credentials count. */
+    static boolean isS3CompatHost(String host) {
+        return host != null && S3_COMPAT_HOST.matcher(host).find();
+    }
+
     /** {@code Credential=<accessKey>/<date>/<region>/s3/aws4_request} in a SigV4 Authorization header. */
     Pattern SIGV4_CREDENTIAL = Pattern.compile("^AWS4-HMAC-SHA256\\s+.*?Credential=([^/,\\s]+)/");
 

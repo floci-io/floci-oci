@@ -39,11 +39,14 @@ public class IdentityController {
 
     private final IdentityService service;
     private final WorkRequestService workRequests;
+    private final CustomerSecretKeyService customerSecretKeys;
 
     @Inject
-    public IdentityController(IdentityService service, WorkRequestService workRequests) {
+    public IdentityController(IdentityService service, WorkRequestService workRequests,
+                              CustomerSecretKeyService customerSecretKeys) {
         this.service = service;
         this.workRequests = workRequests;
+        this.customerSecretKeys = customerSecretKeys;
     }
 
     // ── Compartments ───────────────────────────────────────────────────────────
@@ -157,6 +160,7 @@ public class IdentityController {
     public Response deleteUser(@PathParam("userId") String userId,
                                @HeaderParam("if-match") String ifMatch) {
         service.deleteUser(userId, ifMatch);
+        customerSecretKeys.deleteAllOf(userId);
         return Response.noContent().build();
     }
 

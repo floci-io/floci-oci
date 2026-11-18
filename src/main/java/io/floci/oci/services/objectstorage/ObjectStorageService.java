@@ -146,7 +146,7 @@ public class ObjectStorageService implements CompartmentUsage, Resettable {
         serviceRegistry.register(ServiceDescriptor.builder("objectstorage")
                 .enabled(config.services().objectstorage().enabled())
                 .storageKey("objectstorage")
-                .resourceClasses(ObjectStorageController.class, ParAccessController.class)
+                .resourceClasses(ObjectStorageController.class, ParAccessController.class, S3CompatResource.class)
                 .build());
     }
 

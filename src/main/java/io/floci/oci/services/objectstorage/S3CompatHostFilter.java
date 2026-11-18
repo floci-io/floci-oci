@@ -1,6 +1,7 @@
 package io.floci.oci.services.objectstorage;
 
 import io.floci.oci.config.EmulatorConfig;
+import io.floci.oci.core.auth.AccessKeyResolver;
 import jakarta.annotation.Priority;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.Priorities;
@@ -13,7 +14,6 @@ import jakarta.ws.rs.ext.Provider;
 import java.net.URI;
 import java.util.Optional;
 import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 /**
  * Routes Amazon S3 Compatibility API requests to {@link S3CompatResource}. OCI serves that API on
@@ -30,9 +30,6 @@ import java.util.regex.Pattern;
 public class S3CompatHostFilter implements ContainerRequestFilter {
 
     static final String ROOT = "/_s3compat/";
-
-    private static final Pattern COMPAT_HOST =
-            Pattern.compile("^([a-z0-9][a-z0-9_-]*)\\.compat\\.objectstorage\\.[a-z0-9-]+\\.", Pattern.CASE_INSENSITIVE);
 
     /** Injected lazily: this filter is instantiated during Quarkus static init. */
     @Inject
@@ -59,7 +56,7 @@ public class S3CompatHostFilter implements ContainerRequestFilter {
         if (host == null) {
             return Optional.empty();
         }
-        Matcher m = COMPAT_HOST.matcher(host);
+        Matcher m = AccessKeyResolver.S3_COMPAT_HOST.matcher(host);
         return m.find() ? Optional.of(m.group(1).toLowerCase()) : Optional.empty();
     }
 }

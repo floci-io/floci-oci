@@ -94,6 +94,13 @@ public class CustomerSecretKeyService implements AccessKeyResolver {
         keys.delete(keyId);
     }
 
+    /** Removes every key of a deleted user, so its access keys stop resolving. */
+    public synchronized void deleteAllOf(String userId) {
+        keys.scan(k -> true).stream()
+                .filter(k -> userId.equals(k.getUserId()))
+                .forEach(k -> keys.delete(k.getId()));
+    }
+
     private StoredCustomerSecretKey get(String userId, String keyId) {
         identity.getUser(userId);
         return keys.get(keyId)

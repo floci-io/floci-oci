@@ -211,6 +211,156 @@ class S3CompatRestIntegrationTest {
     }
 
     @Test
+    void folderListingsResumeAfterTheWholeFolder() {
+        String bucket = bucket();
+        s3().when().put("/" + bucket).then().statusCode(200);
+        for (String key : new String[]{"a/1", "a/2", "b"}) {
+            s3().body(key).when().put("/" + bucket + "/" + key).then().statusCode(200);
+        }
+
+        String marker = s3().queryParam("delimiter", "/").queryParam("max-keys", "1")
+            .when().get("/" + bucket)
+            .then().statusCode(200)
+                .body("ListBucketResult.IsTruncated", equalTo("true"))
+                .body("ListBucketResult.CommonPrefixes.Prefix", equalTo("a/"))
+                .body("ListBucketResult.NextMarker", equalTo("a/"))
+                .extract().path("ListBucketResult.NextMarker");
+        s3().queryParam("delimiter", "/").queryParam("max-keys", "1").queryParam("marker", marker)
+            .when().get("/" + bucket)
+            .then().statusCode(200)
+                .body("ListBucketResult.IsTruncated", equalTo("false"))
+                .body("ListBucketResult.Contents.Key", equalTo("b"))
+                .body(not(containsString("<CommonPrefixes>")));
+
+        String token = s3().queryParam("list-type", "2").queryParam("delimiter", "/").queryParam("max-keys", "1")
+            .when().get("/" + bucket)
+            .then().statusCode(200)
+                .body("ListBucketResult.IsTruncated", equalTo("true"))
+                .body("ListBucketResult.CommonPrefixes.Prefix", equalTo("a/"))
+                .extract().path("ListBucketResult.NextContinuationToken");
+        s3().queryParam("list-type", "2").queryParam("delimiter", "/").queryParam("max-keys", "1")
+                .queryParam("continuation-token", token)
+            .when().get("/" + bucket)
+            .then().statusCode(200)
+                .body("ListBucketResult.IsTruncated", equalTo("false"))
+                .body("ListBucketResult.Contents.Key", equalTo("b"));
+
+        // A folder that is the last thing left is not reported as truncated.
+        s3().queryParam("list-type", "2").queryParam("delimiter", "/").queryParam("prefix", "a")
+                .queryParam("max-keys", "1")
+            .when().get("/" + bucket)
+            .then().statusCode(200)
+                .body("ListBucketResult.CommonPrefixes.Prefix", equalTo("a/"))
+                .body("ListBucketResult.IsTruncated", equalTo("false"));
+    }
+
+    @Test
+    void keysAndTagValuesKeepTheirSpaces() {
+        String bucket = bucket();
+        s3().when().put("/" + bucket).then().statusCode(200);
+        s3().body("spaced").when().put("/" + bucket + "/%20report%20").then().statusCode(200);
+        s3().body("plain").when().put("/" + bucket + "/report").then().statusCode(200);
+
+        s3().body("<Delete><Object><Key> report </Key></Object></Delete>")
+            .when().post("/" + bucket + "?delete")
+            .then().statusCode(200).body("DeleteResult.Deleted.Key", equalTo(" report "));
+        s3().when().get("/" + bucket + "/%20report%20").then().statusCode(404);
+        s3().when().get("/" + bucket + "/report").then().statusCode(200).body(equalTo("plain"));
+
+        s3().body("<Tagging><TagSet><Tag><Key>team</Key><Value> blue </Value></Tag></TagSet></Tagging>")
+            .when().put("/" + bucket + "?tagging")
+            .then().statusCode(204);
+        given().when().get("/n/" + NAMESPACE + "/b/" + bucket)
+            .then().statusCode(200).body("freeformTags.team", equalTo(" blue "));
+    }
+
+    @Test
+    void copySourceSplitsTheVersionQueryBeforeDecoding() {
+        String bucket = bucket();
+        s3().when().put("/" + bucket).then().statusCode(200);
+        s3().body("question").when().put("/" + bucket + "/report%3FversionId%3Dnotes").then().statusCode(200);
+        s3().body("plain").when().put("/" + bucket + "/report").then().statusCode(200);
+
+        s3().header("x-amz-copy-source", "/" + bucket + "/report%3FversionId%3Dnotes")
+            .when().put("/" + bucket + "/copy1")
+            .then().statusCode(200);
+        s3().when().get("/" + bucket + "/copy1").then().statusCode(200).body(equalTo("question"));
+
+        s3().header("x-amz-copy-source", "/" + bucket + "/report?versionId=null")
+            .when().put("/" + bucket + "/copy2")
+            .then().statusCode(200);
+        s3().when().get("/" + bucket + "/copy2").then().statusCode(200).body(equalTo("plain"));
+    }
+
+    @Test
+    void completeRejectsMissingEtagsAndUnorderedParts() {
+        String bucket = bucket();
+        s3().when().put("/" + bucket).then().statusCode(200);
+        String uploadId = s3().when().post("/" + bucket + "/mp.bin?uploads")
+            .then().statusCode(200).extract().path("InitiateMultipartUploadResult.UploadId");
+        String etag1 = s3().body("one").when().put("/" + bucket + "/mp.bin?partNumber=1&uploadId=" + uploadId)
+            .then().statusCode(200).extract().header("ETag");
+        String etag2 = s3().body("two").when().put("/" + bucket + "/mp.bin?partNumber=2&uploadId=" + uploadId)
+            .then().statusCode(200).extract().header("ETag");
+        String path = "/" + bucket + "/mp.bin?uploadId=" + uploadId;
+
+        s3().body("<CompleteMultipartUpload><Part><PartNumber>1</PartNumber></Part></CompleteMultipartUpload>")
+            .when().post(path)
+            .then().statusCode(400).body("Error.Code", equalTo("InvalidPart"));
+        s3().body("<CompleteMultipartUpload>"
+                    + "<Part><PartNumber>1</PartNumber><ETag>" + etag1 + "</ETag></Part>"
+                    + "<Part><PartNumber>1</PartNumber><ETag>" + etag1 + "</ETag></Part>"
+                    + "</CompleteMultipartUpload>")
+            .when().post(path)
+            .then().statusCode(400).body("Error.Code", equalTo("InvalidPartOrder"));
+        s3().body("<CompleteMultipartUpload>"
+                    + "<Part><PartNumber>2</PartNumber><ETag>" + etag2 + "</ETag></Part>"
+                    + "<Part><PartNumber>1</PartNumber><ETag>" + etag1 + "</ETag></Part>"
+                    + "</CompleteMultipartUpload>")
+            .when().post(path)
+            .then().statusCode(400).body("Error.Code", equalTo("InvalidPartOrder"));
+        s3().when().get("/" + bucket + "/mp.bin").then().statusCode(404);
+    }
+
+    @Test
+    void conditionalPutsUseTheS3Etag() throws Exception {
+        String bucket = bucket();
+        s3().when().put("/" + bucket).then().statusCode(200);
+        String path = "/" + bucket + "/cond.txt";
+
+        s3().header("If-Match", "\"abc\"").body("x").when().put(path)
+            .then().statusCode(404).body("Error.Code", equalTo("NoSuchKey"));
+        s3().header("If-None-Match", "*").body("first").when().put(path).then().statusCode(200);
+        s3().header("If-None-Match", "*").body("second").when().put(path)
+            .then().statusCode(412).body("Error.Code", equalTo("PreconditionFailed"));
+
+        String etag = "\"" + md5Hex("first".getBytes(StandardCharsets.UTF_8)) + "\"";
+        s3().header("If-Match", "\"0000\"").body("second").when().put(path)
+            .then().statusCode(412).body("Error.Code", equalTo("PreconditionFailed"));
+        s3().header("If-None-Match", etag).body("second").when().put(path)
+            .then().statusCode(412).body("Error.Code", equalTo("PreconditionFailed"));
+        s3().header("If-Match", etag).body("second").when().put(path).then().statusCode(200);
+        s3().when().get(path).then().statusCode(200).body(equalTo("second"));
+    }
+
+    @Test
+    void deletingAUserRevokesItsAccessKeys() {
+        String userId = given().contentType("application/json")
+                .body(Map.of("name", "s3gone-" + System.nanoTime(), "description", "s3"))
+            .when().post("/20160918/users")
+            .then().statusCode(200).extract().path("id");
+        String accessKey = given().contentType("application/json").body(Map.of("displayName", "s3"))
+            .when().post("/20160918/users/" + userId + "/customerSecretKeys")
+            .then().statusCode(200).extract().path("id");
+        given().when().delete("/20160918/users/" + userId).then().statusCode(204);
+
+        String bucket = bucket();
+        s3(accessKey).when().put("/" + bucket).then().statusCode(200);
+        given().when().get("/n/" + NAMESPACE + "/b/" + bucket)
+            .then().statusCode(200).body("createdBy", not(equalTo(userId)));
+    }
+
+    @Test
     void nativeApiIsUntouchedWithoutTheCompatHost() {
         given().when().get("/n/" + NAMESPACE)
             .then().statusCode(200);
