@@ -18,8 +18,9 @@ which shares the same version prefix.
 - A rule is `ACTIVE` at once, or `INACTIVE` when `isEnabled` is false. Each action carries
   an `id`, `lifecycleState` `ACTIVE` and an empty `lifecycleMessage`.
 - `condition` is stored exactly as sent, so Terraform reads back the string it wrote.
-  It must parse as a JSON object (`400 InvalidParameter` otherwise).
-- UpdateRule with `actions` replaces the whole list.
+  It must parse as a JSON object (`400 InvalidParameter` otherwise, `null` included).
+- UpdateRule with `actions` replaces the whole list. Every supplied field is validated first,
+  so a rejected update leaves the rule unchanged.
 - An OSS action needs a `streamId`. A `functionId` or `streamId` that does not exist is
   `400 RelatedResourceNotAuthorizedOrNotFound` while that service is enabled.
 - Rule OCIDs use the `eventrule` resource type. No local Oracle source shows a real rule
@@ -84,7 +85,8 @@ The payload is the CloudEvents 0.1 envelope from Oracle's examples:
 | `ONS` | Stored and validated, not delivered: Notifications is not emulated yet |
 
 Delivery runs in the background after the request that caused the event has returned. A
-failed delivery is logged and never fails that request.
+failed delivery is logged and never fails that request. An action whose target service
+(Functions or Streaming) is disabled is skipped.
 
 ## Quickstart
 

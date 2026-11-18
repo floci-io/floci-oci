@@ -77,4 +77,16 @@ class EventFilterTest {
         assertFalse(EventFilter.matches(Map.of("data", Map.of("additionalDetails",
                 Map.of("archivalState", "*"))), event()));
     }
+
+    @Test
+    void loneWildcardMatchesAnyNonNullValueOfAnyType() {
+        Map<String, Object> event = Map.of("data", Map.of("size", 42, "public", false,
+                "tags", Map.of("team", "a"), "names", List.of("x")));
+        assertTrue(EventFilter.matches(Map.of("data", Map.of("size", "*")), event));
+        assertTrue(EventFilter.matches(Map.of("data", Map.of("public", "*")), event));
+        assertTrue(EventFilter.matches(Map.of("data", Map.of("tags", "*")), event));
+        assertTrue(EventFilter.matches(Map.of("data", Map.of("names", "*")), event));
+        assertFalse(EventFilter.matches(Map.of("data", Map.of("additionalDetails", Map.of("archivalState", "*"))),
+                event()));
+    }
 }

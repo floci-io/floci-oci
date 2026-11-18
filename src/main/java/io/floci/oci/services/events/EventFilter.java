@@ -32,6 +32,10 @@ final class EventFilter {
 
     @SuppressWarnings("unchecked")
     private static boolean matchesValue(Object expected, Object actual) {
+        if ("*".equals(expected)) {
+            // A lone asterisk matches every value of any type, but not null.
+            return actual != null;
+        }
         if (expected instanceof Map<?, ?> nested) {
             return actual instanceof Map<?, ?> actualMap
                     && matches((Map<String, Object>) nested, (Map<String, Object>) actualMap);

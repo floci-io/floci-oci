@@ -6,6 +6,8 @@ import io.floci.oci.core.common.OciEvents;
 import io.floci.oci.core.common.OciException;
 import io.floci.oci.core.storage.InMemoryStorage;
 import io.floci.oci.services.events.model.StoredRule;
+import io.floci.oci.services.functions.FunctionsService;
+import io.floci.oci.services.streaming.StreamingService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -14,19 +16,26 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 class EventsServiceTest {
 
     private static final String COMPARTMENT = "ocid1.compartment.oc1..eventstest";
 
     private EventsService service;
+    private EmulatorConfig config;
 
     @BeforeEach
     void setUp() {
-        EmulatorConfig config = mock(EmulatorConfig.class, RETURNS_DEEP_STUBS);
+        config = mock(EmulatorConfig.class, RETURNS_DEEP_STUBS);
         lenient().when(config.defaultRealm()).thenReturn("oc1");
         lenient().when(config.defaultRegion()).thenReturn("us-ashburn-1");
         lenient().when(config.services().events().enabled()).thenReturn(true);
@@ -146,5 +155,65 @@ class EventsServiceTest {
                 service.listRules(COMPARTMENT, null, null, null, null).stream().map(StoredRule::getId).toList());
         assertEquals(List.of(second.getId()),
                 service.listRules(COMPARTMENT, null, "INACTIVE", null, null).stream().map(StoredRule::getId).toList());
+    }
+
+    @Test
+    void conditionThatIsJsonNullIsInvalidParameter() {
+        OciException e = assertThrows(OciException.class, () -> service.createRule(ruleBody("null", true)));
+        assertEquals(400, e.getHttpStatus());
+        assertEquals("InvalidParameter", e.getCode());
+        assertThrows(OciException.class, () -> service.createRule(ruleBody("[]", true)));
+    }
+
+    @Test
+    void oneUnreadableConditionDoesNotStopTheOtherRules() {
+        StoredRule good = service.createRule(ruleBody("{}", true));
+        StoredRule broken = service.createRule(ruleBody("{}", true));
+        // A condition stored before validation rejected JSON null, for example by an older version.
+        broken.setCondition("null");
+
+        assertEquals(List.of(good.getId()),
+                service.matchingRules(createObject("b")).stream().map(StoredRule::getId).toList());
+    }
+
+    @Test
+    void rejectedUpdateLeavesTheRuleUnchanged() {
+        StoredRule rule = service.createRule(ruleBody("{}", true));
+        String etag = rule.getEtag();
+        Map<String, Object> update = Map.of("isEnabled", false, "displayName", "renamed",
+                "actions", Map.of("actions", List.of(Map.of("actionType", "invalid", "isEnabled", true))));
+
+        assertThrows(OciException.class, () -> service.updateRule(rule.getId(), update, null));
+
+        StoredRule stored = service.getRule(rule.getId());
+        assertTrue(stored.isEnabled());
+        assertEquals("ACTIVE", stored.getLifecycleState());
+        assertEquals("rule", stored.getDisplayName());
+        assertEquals(etag, stored.getEtag());
+    }
+
+    @Test
+    void actionsToADisabledServiceAreNotDelivered() {
+        FunctionsService functions = mock(FunctionsService.class);
+        StreamingService streaming = mock(StreamingService.class);
+        EventsService delivering = new EventsService(new InMemoryStorage<>(), config, new ObjectMapper(),
+                functions, streaming);
+        when(config.services().functions().enabled()).thenReturn(false);
+        when(config.services().streaming().enabled()).thenReturn(false);
+        StoredRule rule = new StoredRule();
+        rule.setId("ocid1.eventrule.oc1.iad.x");
+        byte[] payload = "{}".getBytes();
+
+        delivering.deliver(rule, Map.of("actionType", "FAAS", "functionId", "ocid1.fnfunc.oc1.iad.f"), payload);
+        delivering.deliver(rule, Map.of("actionType", "OSS", "streamId", "ocid1.stream.oc1.iad.s"), payload);
+        verify(functions, never()).invoke(anyString(), any(), anyString());
+        verify(streaming, never()).putMessages(anyString(), anyList());
+
+        when(config.services().functions().enabled()).thenReturn(true);
+        when(config.services().streaming().enabled()).thenReturn(true);
+        delivering.deliver(rule, Map.of("actionType", "FAAS", "functionId", "ocid1.fnfunc.oc1.iad.f"), payload);
+        delivering.deliver(rule, Map.of("actionType", "OSS", "streamId", "ocid1.stream.oc1.iad.s"), payload);
+        verify(functions).invoke("ocid1.fnfunc.oc1.iad.f", payload, "application/json");
+        verify(streaming).putMessages(anyString(), anyList());
     }
 }

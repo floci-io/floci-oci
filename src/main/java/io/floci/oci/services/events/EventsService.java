@@ -84,13 +84,18 @@ public class EventsService implements OciEvents, CompartmentUsage {
     }
 
     EventsService(StorageBackend<String, StoredRule> rules, EmulatorConfig config, ObjectMapper mapper) {
+        this(rules, config, mapper, null, null);
+    }
+
+    EventsService(StorageBackend<String, StoredRule> rules, EmulatorConfig config, ObjectMapper mapper,
+                  FunctionsService functions, StreamingService streaming) {
         this.rules = rules;
         this.config = config;
         this.ociContext = OciContext.fromConfig(config);
         this.serviceRegistry = null;
         this.identity = null;
-        this.functions = null;
-        this.streaming = null;
+        this.functions = functions;
+        this.streaming = streaming;
         this.contextPropagation = null;
         this.mapper = mapper;
     }
@@ -156,6 +161,17 @@ public class EventsService implements OciEvents, CompartmentUsage {
         StoredRule rule = getRule(ruleId);
         Etags.checkIfMatch(ifMatch, rule.getEtag());
         Map<String, Object> b = body == null ? Map.of() : body;
+        // Every supplied field is validated before the rule changes, so a rejected update leaves it as it was.
+        String condition = str(b, "condition");
+        if (condition != null) {
+            validCondition(condition);
+        }
+        // UpdateRuleDetails replaces the whole action list; replaced actions are dropped.
+        List<Map<String, Object>> actions = b.get("actions") instanceof Map<?, ?> ? actions(requireActions(b)) : null;
+        Map<String, String> freeformTags = b.get("freeformTags") instanceof Map<?, ?> tags ? stringMap(tags) : null;
+        Map<String, Map<String, Object>> definedTags =
+                b.get("definedTags") instanceof Map<?, ?> tags ? definedTags(tags) : null;
+
         String displayName = str(b, "displayName");
         if (displayName != null) {
             rule.setDisplayName(displayName);
@@ -163,23 +179,21 @@ public class EventsService implements OciEvents, CompartmentUsage {
         if (b.containsKey("description")) {
             rule.setDescription(str(b, "description"));
         }
-        String condition = str(b, "condition");
         if (condition != null) {
-            rule.setCondition(validCondition(condition));
+            rule.setCondition(condition);
         }
         if (b.get("isEnabled") instanceof Boolean enabled) {
             rule.setEnabled(enabled);
             rule.setLifecycleState(enabled ? "ACTIVE" : "INACTIVE");
         }
-        if (b.get("actions") instanceof Map<?, ?>) {
-            // UpdateRuleDetails replaces the whole action list; replaced actions are dropped.
-            rule.setActions(actions(requireActions(b)));
+        if (actions != null) {
+            rule.setActions(actions);
         }
-        if (b.get("freeformTags") instanceof Map<?, ?> tags) {
-            rule.setFreeformTags(stringMap(tags));
+        if (freeformTags != null) {
+            rule.setFreeformTags(freeformTags);
         }
-        if (b.get("definedTags") instanceof Map<?, ?> tags) {
-            rule.setDefinedTags(definedTags(tags));
+        if (definedTags != null) {
+            rule.setDefinedTags(definedTags);
         }
         rule.setEtag(Etags.newEtag());
         rules.put(ruleId, rule);
@@ -244,15 +258,25 @@ public class EventsService implements OciEvents, CompartmentUsage {
             if (!rule.isEnabled() || !scope.contains(rule.getCompartmentId())) {
                 continue;
             }
-            if (EventFilter.matches(parseCondition(rule.getCondition()), envelope)) {
-                matched.add(rule);
+            try {
+                if (EventFilter.matches(parseCondition(rule.getCondition()), envelope)) {
+                    matched.add(rule);
+                }
+            } catch (RuntimeException e) {
+                // One unreadable condition must not stop delivery to the other rules.
+                LOG.warnv("Rule {0}: condition could not be matched: {1}", rule.getId(), e.getMessage());
             }
         }
         return matched;
     }
 
-    private void deliver(StoredRule rule, Map<String, Object> action, byte[] payload) {
+    void deliver(StoredRule rule, Map<String, Object> action, byte[] payload) {
         String type = (String) action.get("actionType");
+        if (!targetEnabled(type)) {
+            LOG.infov("Rule {0}: {1} action {2} not delivered because its target service is disabled",
+                    rule.getId(), type, action.get("id"));
+            return;
+        }
         try {
             switch (type) {
                 case "FAAS" -> functions.invoke((String) action.get("functionId"), payload, "application/json");
@@ -267,6 +291,15 @@ public class EventsService implements OciEvents, CompartmentUsage {
             LOG.warnv("Rule {0}: delivery to {1} action {2} failed: {3}", rule.getId(), type, action.get("id"),
                     e.getMessage());
         }
+    }
+
+    /** Whether the service an action delivers to is enabled; a disabled service never receives events. */
+    private boolean targetEnabled(String actionType) {
+        return switch (actionType) {
+            case "FAAS" -> config.services().functions().enabled();
+            case "OSS" -> config.services().streaming().enabled();
+            default -> true;
+        };
     }
 
     /** The CloudEvents 0.1 envelope OCI Events delivers (Events/Reference/eventenvelopereference.htm). */
@@ -341,7 +374,11 @@ public class EventsService implements OciEvents, CompartmentUsage {
 
     private Map<String, Object> parseCondition(String condition) {
         try {
-            return mapper.readValue(condition, JSON_OBJECT);
+            Map<String, Object> parsed = mapper.readValue(condition, JSON_OBJECT);
+            if (parsed == null) {
+                throw OciException.invalidParameter("condition must be a JSON object, got " + condition);
+            }
+            return parsed;
         } catch (JsonProcessingException e) {
             throw OciException.invalidParameter("condition must be a JSON object: " + e.getOriginalMessage());
         }
