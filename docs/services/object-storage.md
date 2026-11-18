@@ -46,6 +46,9 @@ oci os object get $E --namespace floci-local --bucket-name demo \
   must exist in that region and the copy lands there. The copy completes immediately; its work
   request (`COMPLETED`) is read from the source region.
 - `Content-MD5` is verified on upload; `opc-content-md5` is returned.
+- Buckets emit `createbucket`, `updatebucket` and `deletebucket` events, and objects emit
+  `createobject`, `updateobject` and `deleteobject` on buckets created or updated with
+  `objectEventsEnabled: true`. Rules in [Events](events.md) deliver them to Functions and Streaming.
 - `CommitMultipartUpload` returns `opc-multipart-md5`: the Base64 MD5 of the committed parts' binary
   MD5 digests in part-number order, followed by `-` and the part count. `GetObject` and `HeadObject`
   return the same value for multipart objects, in place of `content-md5`.

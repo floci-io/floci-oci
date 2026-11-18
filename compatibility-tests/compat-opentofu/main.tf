@@ -37,6 +37,8 @@ resource "oci_objectstorage_bucket" "tf_bucket" {
   compartment_id = var.tenancy_ocid
   namespace      = data.oci_objectstorage_namespace.ns.namespace
   name           = "tf-compat-bucket"
+
+  object_events_enabled = true
 }
 
 resource "oci_objectstorage_object" "tf_object" {
@@ -117,6 +119,34 @@ resource "oci_streaming_stream" "tf_stream" {
   partitions         = 2
   compartment_id     = var.tenancy_ocid
   retention_in_hours = 24
+}
+
+# ── Events ──────────────────────────────────────────────────────────────────
+
+resource "oci_events_rule" "tf_rule" {
+  compartment_id = var.tenancy_ocid
+  display_name   = "tf-compat-rule"
+  is_enabled     = true
+  condition = jsonencode({
+    eventType = ["com.oraclecloud.objectstorage.createobject"]
+    data = {
+      additionalDetails = {
+        bucketName = "tf-compat-bucket"
+      }
+    }
+  })
+
+  actions {
+    action {
+      action_type = "OSS"
+      is_enabled  = true
+      stream_id   = oci_streaming_stream.tf_stream.id
+    }
+  }
+}
+
+output "rule_state" {
+  value = oci_events_rule.tf_rule.state
 }
 
 # NOTE: oci_functions_application is deliberately NOT exercised here — the provider

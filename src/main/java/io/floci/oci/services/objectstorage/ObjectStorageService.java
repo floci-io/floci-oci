@@ -5,6 +5,7 @@ import io.floci.oci.config.EmulatorConfig;
 import io.floci.oci.core.common.CompartmentUsage;
 import io.floci.oci.core.common.Etags;
 import io.floci.oci.core.common.OciContext;
+import io.floci.oci.core.common.OciEvents;
 import io.floci.oci.core.common.OciException;
 import io.floci.oci.core.common.Resettable;
 import io.floci.oci.core.common.Ocids;
@@ -22,6 +23,7 @@ import io.floci.oci.services.objectstorage.model.StoredPar;
 import io.quarkus.runtime.StartupEvent;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.Observes;
+import jakarta.enterprise.inject.Instance;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
@@ -59,6 +61,8 @@ public class ObjectStorageService implements CompartmentUsage, Resettable {
     private final OciContext ociContext;
     private final ServiceRegistry serviceRegistry;
     private final WorkRequestService workRequests;
+    /** Bucket and object events go to the Events service through this, unresolvable when none is deployed. */
+    private final Instance<OciEvents> events;
     /**
      * The tenancy each pre-authenticated request token was last found in, so a token in use is not
      * looked up across every partition each time. Checked against the store on every use.
@@ -68,8 +72,9 @@ public class ObjectStorageService implements CompartmentUsage, Resettable {
     @Inject
     public ObjectStorageService(StorageFactory storageFactory, EmulatorConfig config,
                                 ServiceRegistry serviceRegistry, WorkRequestService workRequests,
-                                OciContext ociContext) {
+                                OciContext ociContext, Instance<OciEvents> events) {
         this.config = config;
+        this.events = events;
         this.ociContext = ociContext;
         this.serviceRegistry = serviceRegistry;
         this.workRequests = workRequests;
@@ -98,6 +103,7 @@ public class ObjectStorageService implements CompartmentUsage, Resettable {
         this.config = config;
         this.serviceRegistry = null;
         this.workRequests = workRequests;
+        this.events = null;
     }
 
     /**
@@ -203,7 +209,7 @@ public class ObjectStorageService implements CompartmentUsage, Resettable {
 
     public StoredBucket createBucket(String namespaceName, String name, String compartmentId,
                                      Map<String, String> metadata, String publicAccessType,
-                                     String storageTier,
+                                     String storageTier, Boolean objectEventsEnabled,
                                      Map<String, String> freeformTags,
                                      Map<String, Map<String, Object>> definedTags) {
         if (name == null || name.isBlank()) {
@@ -226,13 +232,14 @@ public class ObjectStorageService implements CompartmentUsage, Resettable {
         b.setEtag(Etags.newEtag());
         b.setPublicAccessType(publicAccessType != null ? publicAccessType : "NoPublicAccess");
         b.setStorageTier(storageTier != null ? storageTier : "Standard");
-        b.setObjectEventsEnabled(false);
+        b.setObjectEventsEnabled(Boolean.TRUE.equals(objectEventsEnabled));
         b.setVersioning("Disabled");
         b.setId(Ocids.generate("bucket", ociContext.realm(), ociContext.regionCode()));
         b.setFreeformTags(freeformTags);
         b.setDefinedTags(definedTags);
         buckets.put(name, b);
         LOG.infof("createBucket %s", name);
+        emitBucketEvent("createbucket", b);
         return b;
     }
 
@@ -255,6 +262,7 @@ public class ObjectStorageService implements CompartmentUsage, Resettable {
 
     public StoredBucket updateBucket(String namespaceName, String bucketName,
                                      Map<String, String> metadata, String publicAccessType,
+                                     Boolean objectEventsEnabled,
                                      Map<String, String> freeformTags,
                                      Map<String, Map<String, Object>> definedTags,
                                      String ifMatch) {
@@ -266,6 +274,9 @@ public class ObjectStorageService implements CompartmentUsage, Resettable {
         if (publicAccessType != null) {
             b.setPublicAccessType(publicAccessType);
         }
+        if (objectEventsEnabled != null) {
+            b.setObjectEventsEnabled(objectEventsEnabled);
+        }
         if (freeformTags != null) {
             b.setFreeformTags(freeformTags);
         }
@@ -274,6 +285,7 @@ public class ObjectStorageService implements CompartmentUsage, Resettable {
         }
         b.setEtag(Etags.newEtag());
         buckets.put(bucketName, b);
+        emitBucketEvent("updatebucket", b);
         return b;
     }
 
@@ -291,6 +303,7 @@ public class ObjectStorageService implements CompartmentUsage, Resettable {
                     parOwners.remove(p.getToken());
                 });
         buckets.delete(bucketName);
+        emitBucketEvent("deletebucket", b);
     }
 
     // ── Objects ────────────────────────────────────────────────────────────────
@@ -332,6 +345,7 @@ public class ObjectStorageService implements CompartmentUsage, Resettable {
         o.setTimeModified(now);
         o.setMetadata(metadata == null ? Map.of() : metadata);
         objects.put(key, o);
+        emitObjectEvent(existing == null ? "createobject" : "updateobject", bucketName, o);
         return o;
     }
 
@@ -347,6 +361,7 @@ public class ObjectStorageService implements CompartmentUsage, Resettable {
         StoredOsObject o = getObject(namespaceName, bucketName, objectName);
         Etags.checkIfMatch(ifMatch, o.getEtag());
         objects.delete(objectKey(bucketName, objectName));
+        emitObjectEvent("deleteobject", bucketName, o);
     }
 
     record BatchDeleteItem(String objectName, String ifMatch) {
@@ -370,6 +385,7 @@ public class ObjectStorageService implements CompartmentUsage, Resettable {
                 StoredOsObject o = getObject(namespaceName, bucketName, item.objectName());
                 Etags.checkIfMatch(item.ifMatch(), o.getEtag());
                 objects.delete(objectKey(bucketName, item.objectName()));
+                emitObjectEvent("deleteobject", bucketName, o);
                 deleted.add(new BatchDeleteResult.DeletedObject(
                         item.objectName(), Instant.now()));
             } catch (OciException e) {
@@ -431,11 +447,16 @@ public class ObjectStorageService implements CompartmentUsage, Resettable {
         Etags.checkIfMatch(newIfMatch, target != null ? target.getEtag() : null);
         Etags.checkIfNoneMatch(newIfNoneMatch, target != null ? target.getEtag() : null);
 
+        StoredOsObject removed = new StoredOsObject();
+        removed.setName(sourceName);
+        removed.setEtag(source.getEtag());
         source.setName(newName);
         source.setEtag(Etags.newEtag());
         source.setTimeModified(Instant.now().toString());
         objects.put(objectKey(bucketName, newName), source);
         objects.delete(objectKey(bucketName, sourceName));
+        emitObjectEvent("deleteobject", bucketName, removed);
+        emitObjectEvent(target == null ? "createobject" : "updateobject", bucketName, source);
         return source;
     }
 
@@ -469,7 +490,12 @@ public class ObjectStorageService implements CompartmentUsage, Resettable {
         copy.setTimeCreated(now);
         copy.setTimeModified(now);
         copy.setMetadata(source.getMetadata());
+        boolean replaced = TenancyAwareStorageBackend.getIn(objects, destPartition,
+                objectKey(destBucket, destObjectName)).isPresent();
         TenancyAwareStorageBackend.putIn(objects, destPartition, objectKey(destBucket, destObjectName), copy);
+        if (destRegion == null || destRegion.equals(ociContext.region())) {
+            emitObjectEvent(replaced ? "updateobject" : "createobject", destBucket, copy);
+        }
 
         StoredBucket bucket = getBucket(namespaceName, bucketName);
         // Object Storage work requests terminate in COMPLETED (Identity uses SUCCEEDED).
@@ -668,6 +694,46 @@ public class ObjectStorageService implements CompartmentUsage, Resettable {
 
     // ── Helpers ────────────────────────────────────────────────────────────────
 
+
+    private void emitBucketEvent(String type, StoredBucket b) {
+        Map<String, Object> details = new LinkedHashMap<>();
+        details.put("namespace", b.getNamespace());
+        details.put("publicAccessType", b.getPublicAccessType());
+        details.put("eTag", b.getEtag());
+        // Oracle's bucket example carries the compartment OCID as resourceId (eventsproducers.htm).
+        emit(new OciEvents.Event("com.oraclecloud.objectstorage." + type, "objectstorage", b.getCompartmentId(),
+                b.getName(), b.getCompartmentId(),
+                b.getFreeformTags() != null ? b.getFreeformTags() : Map.of(),
+                b.getDefinedTags() != null ? b.getDefinedTags() : Map.of(), details));
+    }
+
+    /** Object events fire only when the bucket has objectEventsEnabled; objects emit none by default. */
+    private void emitObjectEvent(String type, String bucketName, StoredOsObject o) {
+        Optional<StoredBucket> bucket = buckets.get(bucketName);
+        if (bucket.isEmpty() || !Boolean.TRUE.equals(bucket.get().getObjectEventsEnabled())) {
+            return;
+        }
+        StoredBucket b = bucket.get();
+        Map<String, Object> details = new LinkedHashMap<>();
+        details.put("eTag", o.getEtag());
+        details.put("namespace", b.getNamespace());
+        details.put("archivalState", null);
+        details.put("bucketName", b.getName());
+        details.put("bucketId", b.getId());
+        emit(new OciEvents.Event("com.oraclecloud.objectstorage." + type, "objectstorage", b.getCompartmentId(),
+                o.getName(), "", null, null, details));
+    }
+
+    private void emit(OciEvents.Event event) {
+        if (events == null || !events.isResolvable()) {
+            return;
+        }
+        try {
+            events.get().emit(event);
+        } catch (RuntimeException e) {
+            LOG.warnv("Could not emit {0} for {1}: {2}", event.eventType(), event.resourceName(), e.getMessage());
+        }
+    }
 
     private static String objectKey(String bucketName, String objectName) {
         return bucketName + "/" + objectName;

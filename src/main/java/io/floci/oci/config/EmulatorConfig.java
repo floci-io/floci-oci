@@ -203,6 +203,8 @@ public interface EmulatorConfig {
 
         PsqlServiceConfig psql();
 
+        EventsServiceConfig events();
+
         interface IdentityServiceConfig {
             @WithDefault("true")
             boolean enabled();
@@ -214,6 +216,11 @@ public interface EmulatorConfig {
         }
 
         interface QueueServiceConfig {
+            @WithDefault("true")
+            boolean enabled();
+        }
+
+        interface EventsServiceConfig {
             @WithDefault("true")
             boolean enabled();
         }
