@@ -1,0 +1,76 @@
+# Networking (VCN)
+
+OCI Core Virtual Network, API version `20160918`. Real OCI serves it on the
+`iaas.<region>` host under the same version prefix as Identity; floci-oci serves both on
+port 4599. Resources are kept as state only: no Docker network is created for a VCN.
+
+## Supported operations
+
+| Area | Operations |
+|---|---|
+| VCNs | CreateVcn, GetVcn, ListVcns, UpdateVcn, DeleteVcn, ChangeVcnCompartment |
+| Subnets | CreateSubnet, GetSubnet, ListSubnets, UpdateSubnet, DeleteSubnet, ChangeSubnetCompartment |
+| Gateways | Internet, NAT and service gateways: Create, Get, List, Update, Delete, ChangeCompartment; AttachServiceId, DetachServiceId |
+| Services | ListServices, GetService |
+| Route tables | Create, Get, List, Update, Delete, ChangeCompartment |
+| Security lists | Create, Get, List, Update, Delete, ChangeCompartment |
+| Network security groups | Create, Get, List, Update, Delete, ChangeCompartment; AddNetworkSecurityGroupSecurityRules, UpdateNetworkSecurityGroupSecurityRules, RemoveNetworkSecurityGroupSecurityRules, ListNetworkSecurityGroupSecurityRules, ListNetworkSecurityGroupVnics (always empty) |
+| DHCP options | Create, Get, List, Update, Delete, ChangeCompartment |
+
+## Wire notes
+
+- Create, get and update return the resource with an `etag` header (CreateServiceGateway
+  returns none); delete returns `204`. Lists are **bare JSON arrays** paginated with
+  `opc-next-page`. `sortBy=TIMECREATED` sorts newest first, `DISPLAYNAME` A to Z.
+- Every resource is `AVAILABLE` as soon as it is created. A deleted resource reads as
+  `404 NotAuthorizedOrNotFound`, which Terraform accepts as gone.
+- **CreateVcn makes three defaults** and returns their OCIDs as
+  `defaultRouteTableId`, `defaultSecurityListId` and `defaultDhcpOptionsId`:
+  `Default Route Table for <name>` (no rules), `Default Security List for <name>`
+  (ingress TCP 22 and ICMP 3/4 from anywhere, ICMP 3 from the VCN, all egress) and
+  `Default DHCP Options for <name>` (`VcnLocalPlusInternet`, plus a
+  `<dnsLabel>.oraclevcn.com` search domain when the VCN has a DNS label). Defaults cannot be
+  deleted on their own; they go with the VCN.
+- A subnet without `routeTableId`, `securityListIds` or `dhcpOptionsId` uses the VCN's
+  defaults. `virtualRouterIp` is the first host address of the subnet.
+- Route rules come back with both `cidrBlock` and `destination`, `destinationType`
+  (`CIDR_BLOCK` by default) and `routeType: STATIC`, as Terraform expects.
+- ListServices returns `All <CODE> Services In Oracle Services Network` and
+  `OCI <CODE> Object Storage` for the region; their OCIDs are stable across restarts.
+- VCN and subnet compartment moves return `202` with `opc-work-request-id`, polled at
+  `/20160918/workRequests/{id}` (the path the Core work-request client uses). The other
+  compartment moves return `200`.
+
+## Validation
+
+| Request | Result |
+|---|---|
+| VCN CIDR outside `/16` to `/30`, or overlapping CIDR blocks | `400 InvalidParameter` |
+| Subnet CIDR outside the VCN, or overlapping another subnet | `400 InvalidParameter` |
+| `dnsLabel` not a letter followed by letters and digits (15 max), or reused in the VCN | `400 InvalidParameter` |
+| Route rule with different `cidrBlock` and `destination` | `400 InvalidParameter` |
+| Unknown `vcnId`, route table, security list, DHCP options, gateway or service in a body | `400 RelatedResourceNotAuthorizedOrNotFound` |
+| Delete a VCN that still has subnets, gateways or non-default resources | `409 Conflict` |
+| Delete a route table, security list or DHCP options a subnet uses, or a gateway a route rule targets | `409 Conflict` |
+
+## Quickstart
+
+```bash
+E="--endpoint http://localhost:4599"
+TENANCY=ocid1.tenancy.oc1..flocilocaltenancy0000000000000000000000000000000000000000
+
+VCN=$(oci network vcn create $E --compartment-id "$TENANCY" --cidr-blocks '["10.0.0.0/16"]' \
+  --dns-label main --query data.id --raw-output)
+oci network subnet create $E --compartment-id "$TENANCY" --vcn-id "$VCN" \
+  --cidr-block 10.0.1.0/24 --dns-label app
+oci network internet-gateway create $E --compartment-id "$TENANCY" --vcn-id "$VCN" --is-enabled true
+```
+
+With Terraform, add `oci_core.VirtualNetworkClient` to `client_host_overrides` in the
+provider block.
+
+## Notes and limitations
+
+VCN and subnet CIDR changes (add, modify and remove CIDR, IPv6), VLANs, DRGs, local peering
+gateways, private and public IPs, and VNICs are not implemented. OKE, Functions and Database
+with PostgreSQL do not yet check that the VCN and subnet OCIDs they receive exist.
