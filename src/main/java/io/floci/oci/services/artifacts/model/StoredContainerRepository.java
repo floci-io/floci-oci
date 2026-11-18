@@ -2,12 +2,16 @@ package io.floci.oci.services.artifacts.model;
 
 import io.quarkus.runtime.annotations.RegisterForReflection;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
  * A container repository. Image counts and sizes are not stored: they are read from the
- * registry each time, so they can never disagree with what was actually pushed.
+ * registry each time, so they can never disagree with what was actually pushed. The digests of
+ * pushed manifests are stored, because the registry can only enumerate manifests through tags and
+ * an image whose tag moved to a newer push must stay visible.
  */
 @RegisterForReflection
 public class StoredContainerRepository {
@@ -26,6 +30,7 @@ public class StoredContainerRepository {
     private Map<String, Object> readme;
     private Map<String, String> freeformTags = new LinkedHashMap<>();
     private Map<String, Map<String, Object>> definedTags = new LinkedHashMap<>();
+    private List<String> pushedDigests = new ArrayList<>();
 
     public StoredContainerRepository() {
     }
@@ -141,5 +146,14 @@ public class StoredContainerRepository {
 
     public void setDefinedTags(Map<String, Map<String, Object>> definedTags) {
         this.definedTags = definedTags;
+    }
+
+    /** Digests of the manifests pushed into this repository, oldest first. */
+    public List<String> getPushedDigests() {
+        return pushedDigests;
+    }
+
+    public void setPushedDigests(List<String> pushedDigests) {
+        this.pushedDigests = pushedDigests == null ? new ArrayList<>() : pushedDigests;
     }
 }

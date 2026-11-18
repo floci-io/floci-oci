@@ -96,7 +96,7 @@ public class ArtifactsController {
         collection.put("items", items);
         collection.put("layerCount", layerCount);
         collection.put("layersSizeInBytes", layersSize);
-        collection.put("remainingItemsCount", all.size() - result.items().size());
+        collection.put("remainingItemsCount", OciPage.remainingAfter(result, all.size()));
         collection.put("repositoryCount", all.size());
         return withNextPage(Response.ok(collection), result).build();
     }
@@ -150,7 +150,7 @@ public class ArtifactsController {
         OciPage.Page<Map<String, Object>> result = OciPage.paginate(summaries, limit, page);
         Map<String, Object> collection = new LinkedHashMap<>();
         collection.put("items", result.items());
-        collection.put("remainingItemsCount", summaries.size() - result.items().size());
+        collection.put("remainingItemsCount", OciPage.remainingAfter(result, summaries.size()));
         return withNextPage(Response.ok(collection), result).build();
     }
 

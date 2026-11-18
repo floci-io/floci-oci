@@ -149,6 +149,25 @@ class ArtifactsServiceTest {
     }
 
     @Test
+    void repositoryComponentsNamedAfterOperationsStayInTheName() {
+        assertOperation("ns/blobs/manifests/v1", "ns", "blobs", "manifests", "/v1");
+        assertOperation("ns/project/blobs/app/manifests/v1", "ns", "project/blobs/app", "manifests", "/v1");
+        assertOperation("ns/tags/tags/list", "ns", "tags", "tags", "/list");
+        assertOperation("ns/manifests/blobs/sha256:abc123", "ns", "manifests", "blobs", "/sha256:abc123");
+        assertOperation("ns/app/blobs/uploads/", "ns", "app", "blobs", "/uploads/");
+        assertOperation("ns/app/blobs/uploads", "ns", "app", "blobs", "/uploads");
+        assertOperation("ns/app/manifests/blobs/uploads/123", "ns", "app/manifests", "blobs", "/uploads/123");
+        assertTrue(OcirRegistryResource.RepositoryOperation.parse("ns/manifests/v1").isEmpty());
+        assertTrue(OcirRegistryResource.RepositoryOperation.parse("_catalog").isEmpty());
+    }
+
+    private static void assertOperation(String path, String namespace, String repository, String kind,
+                                        String suffix) {
+        assertEquals(new OcirRegistryResource.RepositoryOperation(namespace, repository, kind, suffix),
+                OcirRegistryResource.RepositoryOperation.parse(path).orElseThrow(), path);
+    }
+
+    @Test
     void uploadLocationLosesTheBackendPrefix() {
         assertEquals("/v2/ns/app/blobs/uploads/123?_state=x", OcirRegistryResource.clientLocation(
                 "http://localhost:5200/v2/iad/ns/app/blobs/uploads/123?_state=x", "iad/ns/app", "ns/app"));

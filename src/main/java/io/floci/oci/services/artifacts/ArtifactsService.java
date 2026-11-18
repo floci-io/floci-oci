@@ -97,12 +97,18 @@ public class ArtifactsService implements Resettable, CompartmentUsage {
     ArtifactsService(StorageBackend<String, StoredContainerRepository> repositories,
                      StorageBackend<String, Map<String, Object>> configurations, EmulatorConfig config,
                      ObjectStorageService objectStorage) {
+        this(repositories, configurations, config, objectStorage, null);
+    }
+
+    ArtifactsService(StorageBackend<String, StoredContainerRepository> repositories,
+                     StorageBackend<String, Map<String, Object>> configurations, EmulatorConfig config,
+                     ObjectStorageService objectStorage, ArtifactsRegistryManager registry) {
         this.repositories = repositories;
         this.configurations = configurations;
         this.config = config;
         this.ociContext = OciContext.fromConfig(config);
         this.serviceRegistry = null;
-        this.registry = null;
+        this.registry = registry;
         this.objectStorage = objectStorage;
     }
 
@@ -114,6 +120,7 @@ public class ArtifactsService implements Resettable, CompartmentUsage {
                 .build());
     }
 
+    /** Stops the registry container; its volume, and so every pushed image, is kept for the next start. */
     @PreDestroy
     void shutdown() {
         if (!mock()) {
@@ -127,7 +134,7 @@ public class ArtifactsService implements Resettable, CompartmentUsage {
         repositories.clear();
         configurations.clear();
         if (!mock()) {
-            registry.stop();
+            registry.reset();
         }
     }
 
@@ -235,11 +242,12 @@ public class ArtifactsService implements Resettable, CompartmentUsage {
         return r;
     }
 
+    /** The stored record goes only after every image is gone from the registry: a failed delete keeps it. */
     public synchronized void deleteRepository(String repositoryId, String ifMatch) {
         StoredContainerRepository r = getRepository(repositoryId);
         Etags.checkIfMatch(ifMatch, r.getEtag());
-        for (Map<String, Object> image : images(r)) {
-            deleteManifest(r, (String) image.get("digest"));
+        for (ImageEntry image : imageEntries(r)) {
+            deleteImageManifests(r, image);
         }
         repositories.delete(repositoryId);
     }
@@ -257,8 +265,21 @@ public class ArtifactsService implements Resettable, CompartmentUsage {
         return r;
     }
 
-    /** Called by the data plane after a manifest push. */
-    synchronized void recordPush(StoredContainerRepository r) {
+    /**
+     * Called by the data plane after a manifest push. The repository is read again here, under the
+     * lock, because the push ran outside it: a repository deleted meanwhile stays deleted.
+     */
+    synchronized void recordPush(String repositoryId, String digest) {
+        Optional<StoredContainerRepository> current = repositories.get(repositoryId);
+        if (current.isEmpty()) {
+            LOG.infov("Repository {0} was deleted while a manifest was being pushed; not recording {1}",
+                    repositoryId, digest);
+            return;
+        }
+        StoredContainerRepository r = current.get();
+        if (digest != null && !r.getPushedDigests().contains(digest)) {
+            r.getPushedDigests().add(digest);
+        }
         r.setTimeLastPushed(Instant.now().toString());
         repositories.put(r.getId(), r);
     }
@@ -329,26 +350,71 @@ public class ArtifactsService implements Resettable, CompartmentUsage {
                         "Authorization failed or requested resource not found: image " + imageId));
     }
 
-    public void deleteImage(String imageId) {
-        Map<String, Object> image = getImage(imageId);
-        deleteManifest(getRepository((String) image.get("repositoryId")), (String) image.get("digest"));
+    public synchronized void deleteImage(String imageId) {
+        for (StoredContainerRepository r : repositories.scan(k -> true)) {
+            for (ImageEntry image : imageEntries(r)) {
+                if (imageId.equals(image.wire().get("id"))) {
+                    deleteImageManifests(r, image);
+                    return;
+                }
+            }
+        }
+        throw OciException.notAuthorizedOrNotFound(
+                "Authorization failed or requested resource not found: image " + imageId);
+    }
+
+    /**
+     * Deletes an image's manifest, and the platform manifests of an image index with it, then forgets
+     * their digests. A registry failure is raised, so nothing is reported deleted that still exists.
+     */
+    private void deleteImageManifests(StoredContainerRepository r, ImageEntry image) {
+        String digest = image.digest();
+        deleteManifest(r, digest);
+        List<String> children = image.childDigests();
+        for (String child : children) {
+            deleteManifest(r, child);
+        }
+        repositories.get(r.getId()).ifPresent(stored -> {
+            stored.getPushedDigests().remove(digest);
+            stored.getPushedDigests().removeAll(children);
+            repositories.put(stored.getId(), stored);
+        });
     }
 
     /**
      * One entry per distinct manifest digest in the repository, with the tags that point at it as
-     * versions. Empty in mock mode or while the registry has not been started by a push.
+     * versions. Digests reached through tags and digests recorded at push time both count, so an image
+     * whose tag moved to a newer push is still listed, untagged. The platform manifests of an image
+     * index are part of that index, not images of their own. Empty in mock mode, and while the
+     * registry has not been started for a repository that has never had a push.
      */
     List<Map<String, Object>> images(StoredContainerRepository r) {
-        if (mock() || registry == null || !registry.isStarted()) {
+        return imageEntries(r).stream().map(ImageEntry::wire).toList();
+    }
+
+    /** An image's wire shape, with the platform manifest digests an index deletes along with it. */
+    private record ImageEntry(String digest, Map<String, Object> wire, List<String> childDigests) {
+    }
+
+    private List<ImageEntry> imageEntries(StoredContainerRepository r) {
+        if (mock() || registry == null) {
             return List.of();
+        }
+        if (!registry.isStarted()) {
+            if (r.getPushedDigests().isEmpty()) {
+                return List.of();
+            }
+            registry.ensureReady();
         }
         String backendName = backendRepository(r);
         Map<String, Map<String, Object>> byDigest = new LinkedHashMap<>();
+        Map<String, Manifest> manifests = new LinkedHashMap<>();
         for (String tag : tags(backendName)) {
             Optional<Manifest> manifest = manifest(backendName, tag);
             if (manifest.isEmpty()) {
                 continue;
             }
+            manifests.putIfAbsent(manifest.get().digest(), manifest.get());
             Map<String, Object> image = byDigest.computeIfAbsent(manifest.get().digest(), d -> newImage(r, manifest.get()));
             @SuppressWarnings("unchecked")
             List<Map<String, Object>> versions = (List<Map<String, Object>>) image.get("versions");
@@ -362,7 +428,22 @@ public class ArtifactsService implements Resettable, CompartmentUsage {
                 image.put("displayName", r.getDisplayName() + ":" + tag);
             }
         }
-        return new ArrayList<>(byDigest.values());
+        for (String digest : r.getPushedDigests()) {
+            if (byDigest.containsKey(digest)) {
+                continue;
+            }
+            manifest(backendName, digest).ifPresent(manifest -> {
+                manifests.put(manifest.digest(), manifest);
+                byDigest.put(manifest.digest(), newImage(r, manifest));
+            });
+        }
+        for (Manifest manifest : manifests.values()) {
+            manifest.childDigests().forEach(byDigest::remove);
+        }
+        List<ImageEntry> entries = new ArrayList<>();
+        byDigest.forEach((digest, wire) -> entries.add(new ImageEntry(digest, wire,
+                manifests.get(digest).childDigests())));
+        return entries;
     }
 
     private Map<String, Object> newImage(StoredContainerRepository r, Manifest manifest) {
@@ -403,63 +484,118 @@ public class ArtifactsService implements Resettable, CompartmentUsage {
     public record RepositoryStats(int imageCount, long layerCount, long layersSizeInBytes, long billableSizeInGBs) {
     }
 
-    private record Manifest(String digest, long size, List<Map<String, Object>> layers, long layersSize) {
+    /**
+     * A manifest as the registry stores it. For an image index (or Docker manifest list) the layers
+     * and their size are those of its platform manifests, whose digests are {@code childDigests}.
+     */
+    private record Manifest(String digest, long size, List<Map<String, Object>> layers, long layersSize,
+                            List<String> childDigests) {
     }
 
+    /** Tags of a repository; a repository the registry has never seen (404) has none. */
     private List<String> tags(String backendName) {
-        try {
-            HttpResponse<byte[]> response = send("GET", "/v2/" + backendName + "/tags/list", null);
-            if (response.statusCode() != 200) {
-                return List.of();
-            }
-            List<String> tags = new ArrayList<>();
-            mapper.readTree(response.body()).path("tags").forEach(t -> tags.add(t.asText()));
-            return tags;
-        } catch (IOException e) {
-            LOG.debugv("Could not list tags of {0}: {1}", backendName, e.getMessage());
+        HttpResponse<byte[]> response = registryCall("GET", "/v2/" + backendName + "/tags/list", null);
+        if (response.statusCode() == 404) {
             return List.of();
         }
+        requireSuccess(response, "list the tags of " + backendName);
+        List<String> tags = new ArrayList<>();
+        try {
+            mapper.readTree(response.body()).path("tags").forEach(t -> tags.add(t.asText()));
+        } catch (IOException e) {
+            throw invalidResponse("The registry returned an unreadable tag list for " + backendName, e);
+        }
+        return tags;
     }
 
+    /** A manifest by tag or digest; one that no longer exists (404) is empty. */
     private Optional<Manifest> manifest(String backendName, String reference) {
-        try {
-            HttpResponse<byte[]> response = send("GET", "/v2/" + backendName + "/manifests/" + reference,
-                    MANIFEST_ACCEPT);
-            if (response.statusCode() != 200) {
-                return Optional.empty();
-            }
-            String digest = response.headers().firstValue("Docker-Content-Digest").orElse(null);
-            if (digest == null) {
-                return Optional.empty();
-            }
-            List<Map<String, Object>> layers = new ArrayList<>();
-            long total = 0;
-            JsonNode root = mapper.readTree(response.body());
-            for (JsonNode layer : root.path("layers")) {
-                Map<String, Object> l = new LinkedHashMap<>();
-                long size = layer.path("size").asLong();
-                l.put("digest", layer.path("digest").asText());
-                l.put("sizeInBytes", size);
-                l.put("timeCreated", Instant.now().toString());
-                layers.add(l);
-                total += size;
-            }
-            return Optional.of(new Manifest(digest, response.body().length, layers, total));
-        } catch (IOException e) {
-            LOG.debugv("Could not read manifest {0}:{1}: {2}", backendName, reference, e.getMessage());
+        return manifest(backendName, reference, true);
+    }
+
+    private Optional<Manifest> manifest(String backendName, String reference, boolean followIndex) {
+        HttpResponse<byte[]> response = registryCall("GET", "/v2/" + backendName + "/manifests/" + reference,
+                MANIFEST_ACCEPT);
+        if (response.statusCode() == 404) {
             return Optional.empty();
         }
+        requireSuccess(response, "read manifest " + backendName + ":" + reference);
+        String digest = response.headers().firstValue("Docker-Content-Digest").orElse(null);
+        if (digest == null) {
+            throw invalidResponse("The registry returned manifest " + backendName + ":" + reference
+                    + " without a Docker-Content-Digest header", null);
+        }
+        JsonNode root;
+        try {
+            root = mapper.readTree(response.body());
+        } catch (IOException e) {
+            throw invalidResponse("The registry returned an unreadable manifest " + backendName + ":" + reference, e);
+        }
+        List<Map<String, Object>> layers = new ArrayList<>();
+        List<String> children = new ArrayList<>();
+        long total = 0;
+        for (JsonNode layer : root.path("layers")) {
+            Map<String, Object> l = new LinkedHashMap<>();
+            long size = layer.path("size").asLong();
+            l.put("digest", layer.path("digest").asText());
+            l.put("sizeInBytes", size);
+            l.put("timeCreated", Instant.now().toString());
+            layers.add(l);
+            total += size;
+        }
+        if (followIndex) {
+            for (JsonNode child : root.path("manifests")) {
+                String childDigest = child.path("digest").asText(null);
+                if (childDigest == null) {
+                    continue;
+                }
+                children.add(childDigest);
+                Optional<Manifest> platform = manifest(backendName, childDigest, false);
+                if (platform.isPresent()) {
+                    layers.addAll(platform.get().layers());
+                    total += platform.get().layersSize();
+                }
+            }
+        }
+        return Optional.of(new Manifest(digest, response.body().length, layers, total, children));
     }
 
+    /** Deletes one manifest. Already gone (404) is success; any other failure is raised. */
     private void deleteManifest(StoredContainerRepository r, String digest) {
-        if (mock() || registry == null || !registry.isStarted() || digest == null) {
+        if (mock() || registry == null || digest == null) {
             return;
         }
-        try {
-            send("DELETE", "/v2/" + backendRepository(r) + "/manifests/" + digest, null);
-        } catch (IOException e) {
-            LOG.warnv("Could not delete manifest {0} of {1}: {2}", digest, r.getDisplayName(), e.getMessage());
+        if (!registry.isStarted()) {
+            registry.ensureReady();
         }
+        HttpResponse<byte[]> response = registryCall("DELETE",
+                "/v2/" + backendRepository(r) + "/manifests/" + digest, null);
+        if (response.statusCode() != 404) {
+            requireSuccess(response, "delete manifest " + digest + " of " + r.getDisplayName());
+        }
+    }
+
+    /** A call to the registry sidecar; a connection failure is {@code 503 ExternalServerUnreachable}. */
+    private HttpResponse<byte[]> registryCall(String method, String path, String accept) {
+        try {
+            return send(method, path, accept);
+        } catch (IOException e) {
+            throw new OciException("ExternalServerUnreachable",
+                    "The OCIR registry could not be reached: " + e.getMessage(), 503);
+        }
+    }
+
+    private static void requireSuccess(HttpResponse<byte[]> response, String action) {
+        if (response.statusCode() / 100 != 2) {
+            throw invalidResponse("The OCIR registry could not " + action + ": HTTP " + response.statusCode(), null);
+        }
+    }
+
+    private static OciException invalidResponse(String message, Exception cause) {
+        if (cause != null) {
+            LOG.warnv(cause, "{0}", message);
+        }
+        return new OciException("ExternalServerInvalidResponse", message, 503);
     }
 
     private HttpResponse<byte[]> send(String method, String path, String accept) throws IOException {

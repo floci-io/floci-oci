@@ -2,12 +2,14 @@ package io.floci.oci.services.artifacts;
 
 import io.floci.oci.testing.TestCompartments;
 import io.quarkus.test.junit.QuarkusTest;
+import io.restassured.response.Response;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.Map;
 
 import static io.restassured.RestAssured.given;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.hamcrest.Matchers.*;
 
 /** The management plane in mock mode (the test profile sets artifacts.mock=true). */
@@ -56,6 +58,30 @@ class ArtifactsRestIntegrationTest {
         given().when().delete("/20160918/container/repositories/" + repositoryId).then().statusCode(204);
         given().when().get("/20160918/container/repositories/" + repositoryId)
             .then().statusCode(404).body("code", equalTo("NotAuthorizedOrNotFound"));
+    }
+
+    @Test
+    void remainingItemsCountIsZeroOnTheLastPage() {
+        String pagedCompartment = TestCompartments.create("itartifactspaged");
+        for (int i = 0; i < 3; i++) {
+            given().contentType("application/json")
+                    .body(Map.of("compartmentId", pagedCompartment,
+                            "displayName", "paged/app-" + i + "-" + System.nanoTime()))
+                .when().post("/20160918/container/repositories")
+                .then().statusCode(200);
+        }
+        String page = null;
+        for (int expectedRemaining = 2; expectedRemaining >= 0; expectedRemaining--) {
+            Response response = given().queryParam("compartmentId", pagedCompartment)
+                    .queryParam("limit", 1).queryParam("page", page == null ? "" : page)
+                .when().get("/20160918/container/repositories");
+            response.then().statusCode(200)
+                .body("items", hasSize(1))
+                .body("repositoryCount", equalTo(3))
+                .body("remainingItemsCount", equalTo(expectedRemaining));
+            page = response.getHeader("opc-next-page");
+        }
+        assertNull(page);
     }
 
     @Test

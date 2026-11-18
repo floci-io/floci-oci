@@ -61,7 +61,17 @@ public class OcirRegistryResource {
     /** {@code <key>.ocir.<domain>}, {@code <region>.ocir.<domain>} or {@code ocir.<region>.oci.<domain>}. */
     private static final Pattern REGION_FIRST = Pattern.compile("^([a-z0-9-]+)\\.ocir\\.", Pattern.CASE_INSENSITIVE);
     private static final Pattern OCIR_FIRST = Pattern.compile("^ocir\\.([a-z0-9-]+)\\.", Pattern.CASE_INSENSITIVE);
-    private static final Pattern REPOSITORY_OPERATION = Pattern.compile("^(.+?)/(manifests|blobs|tags)(/.*)?$");
+    /**
+     * The repository operations of the Registry HTTP API V2, each anchored at the end of the path.
+     * The name group is greedy, so a repository component spelled {@code blobs}, {@code tags} or
+     * {@code manifests} stays part of the name: only the final operation suffix is split off, as
+     * Docker Distribution's router does.
+     */
+    private static final List<Pattern> REPOSITORY_OPERATIONS = List.of(
+            Pattern.compile("^(.+)/(manifests)(/[^/]+)$"),
+            Pattern.compile("^(.+)/(tags)(/list)$"),
+            Pattern.compile("^(.+)/(blobs)(/[a-z0-9]+(?:[+._-][a-z0-9]+)*:[a-zA-Z0-9=_-]+)$"),
+            Pattern.compile("^(.+)/(blobs)(/uploads(?:/[^/]*)?)$"));
 
     private static final Set<String> HOP_BY_HOP = Set.of("connection", "content-length", "expect", "host",
             "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer", "transfer-encoding",
@@ -155,13 +165,14 @@ public class OcirRegistryResource {
             return Response.ok("{}", MediaType.APPLICATION_JSON)
                     .header("Docker-Distribution-API-Version", "registry/2.0").build();
         }
-        Matcher m = REPOSITORY_OPERATION.matcher(path);
-        if (!m.matches() || !m.group(1).contains("/")) {
+        Optional<RepositoryOperation> parsed = RepositoryOperation.parse(path);
+        if (parsed.isEmpty()) {
             return registryError(404, "UNSUPPORTED", "floci-oci serves repository operations only: " + path);
         }
-        String fullName = m.group(1);
-        String namespace = fullName.substring(0, fullName.indexOf('/'));
-        String repositoryName = fullName.substring(namespace.length() + 1);
+        RepositoryOperation operation = parsed.get();
+        String fullName = operation.namespace() + "/" + operation.repository();
+        String namespace = operation.namespace();
+        String repositoryName = operation.repository();
         Optional<String> tenancy = service.tenancyOfNamespace(namespace);
         if (tenancy.isEmpty()) {
             return registryError(404, "NAME_UNKNOWN", "namespace " + namespace + " is not known to this registry");
@@ -177,22 +188,21 @@ public class OcirRegistryResource {
                     + " does not exist; create it first or enable isRepositoryCreatedOnFirstPush");
         }
         StoredContainerRepository repo = repository.get();
-        boolean manifestPut = "PUT".equals(method) && "manifests".equals(m.group(2));
+        boolean manifestPut = "PUT".equals(method) && "manifests".equals(operation.kind());
         if (manifestPut && repo.isImmutable()) {
             return registryError(403, "DENIED", "repository " + repositoryName + " is immutable");
         }
 
         ArtifactsRegistryManager registry = service.registry();
-        registry.ensureStarted();
-        awaitReady(registry);
+        registry.ensureReady();
         String backendName = service.backendRepository(repo);
-        String backendPath = "/v2/" + backendName + "/" + m.group(2) + Optional.ofNullable(m.group(3)).orElse("");
+        String backendPath = "/v2/" + backendName + "/" + operation.kind() + operation.suffix();
         String query = uri.getRequestUri().getRawQuery();
         URI target = URI.create("http://" + registry.endpoint() + backendPath + (query == null ? "" : "?" + query));
         try {
             Response response = forward(registry, method, target, headers, body, backendName, fullName);
             if (manifestPut && response.getStatus() / 100 == 2) {
-                service.recordPush(repo);
+                service.recordPush(repo.getId(), response.getHeaderString("Docker-Content-Digest"));
             }
             return response;
         } catch (Exception e) {
@@ -278,21 +288,6 @@ public class OcirRegistryResource {
         return path.startsWith(backendPrefix) ? "/v2/" + clientName + "/" + path.substring(backendPrefix.length()) : path;
     }
 
-    private static void awaitReady(ArtifactsRegistryManager registry) {
-        long deadline = System.nanoTime() + Duration.ofSeconds(30).toNanos();
-        while (!registry.isReady()) {
-            if (System.nanoTime() > deadline) {
-                throw OciException.serviceUnavailable("The OCIR registry container did not become ready");
-            }
-            try {
-                Thread.sleep(200);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                throw OciException.serviceUnavailable("Interrupted while waiting for the OCIR registry");
-            }
-        }
-    }
-
     private static Response challenge(String host, UriInfo uri) {
         String scheme = uri.getRequestUri().getScheme() == null ? "http" : uri.getRequestUri().getScheme();
         String realm = scheme + "://" + host + "/" + SignatureAuthFilter.OCIR_TOKEN_PATH;
@@ -308,6 +303,29 @@ public class OcirRegistryResource {
         return Response.status(status).type(MediaType.APPLICATION_JSON)
                 .entity(Map.of("errors", List.of(Map.of("code", code, "message", message))))
                 .build();
+    }
+
+    /**
+     * A repository operation: {@code <namespace>/<repository>/<kind><suffix>}, where {@code kind} is
+     * {@code manifests}, {@code blobs} or {@code tags} and {@code suffix} keeps its leading slash.
+     */
+    record RepositoryOperation(String namespace, String repository, String kind, String suffix) {
+
+        static Optional<RepositoryOperation> parse(String path) {
+            for (Pattern pattern : REPOSITORY_OPERATIONS) {
+                Matcher m = pattern.matcher(path);
+                if (m.matches()) {
+                    String fullName = m.group(1);
+                    int slash = fullName.indexOf('/');
+                    if (slash <= 0 || slash == fullName.length() - 1) {
+                        return Optional.empty();
+                    }
+                    return Optional.of(new RepositoryOperation(fullName.substring(0, slash),
+                            fullName.substring(slash + 1), m.group(2), m.group(3)));
+                }
+            }
+            return Optional.empty();
+        }
     }
 
     /** The region a registry host names: a region key ({@code iad}) or identifier ({@code us-ashburn-1}). */

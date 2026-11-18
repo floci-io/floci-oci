@@ -27,6 +27,14 @@ stored in one shared `registry:2` sidecar container.
 - Image counts, layers and sizes are read from the registry, so they always match what
   was pushed. An image is one manifest digest; its tags are its `versions`. Image OCIDs are
   derived from the repository and the digest, so they stay the same across restarts.
+- An image whose tag moved to a newer push stays listed, untagged, as
+  `<repository>:unknown@<digest>`, until it is deleted.
+- A multi-platform image (an OCI image index or Docker manifest list) is one image. Its layers
+  and `layersSizeInBytes` are those of its platform manifests, which are not listed on their
+  own and are deleted with it.
+- When the registry cannot be reached or answers with an error, image reads and deletes fail
+  with `503 ExternalServerUnreachable` or `503 ExternalServerInvalidResponse`, and a repository
+  whose images could not be deleted is kept.
 - RemoveContainerVersion and RestoreContainerImage answer `501 MethodNotImplemented`:
   the registry API cannot remove one tag from a manifest.
 
@@ -67,8 +75,10 @@ docker push iad.ocir.localhost.floci.io:4599/floci-local/project/app:v1
 | `FLOCI_OCI_SERVICES_ARTIFACTS_REGISTRY_BASE_PORT` | `5200` | First host port for the registry sidecar |
 | `FLOCI_OCI_SERVICES_ARTIFACTS_REGISTRY_MAX_PORT` | `5299` | Last host port for the registry sidecar |
 
-The sidecar starts on the first data-plane request. `POST /_floci-oci/state/reset` removes
-it with its volume.
+The sidecar starts on the first data-plane request, or on the first image read of a
+repository that has had a push. Its images live in a Docker volume that outlives the container,
+so they survive a restart of the sidecar or of floci-oci. `POST /_floci-oci/state/reset`
+removes the sidecar with its volume.
 
 ## Notes and limitations
 
