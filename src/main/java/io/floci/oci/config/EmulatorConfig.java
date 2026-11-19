@@ -203,6 +203,8 @@ public interface EmulatorConfig {
 
         PsqlServiceConfig psql();
 
+        EventsServiceConfig events();
+
         NetworkingServiceConfig networking();
 
         ArtifactsServiceConfig artifacts();
@@ -218,6 +220,11 @@ public interface EmulatorConfig {
         }
 
         interface QueueServiceConfig {
+            @WithDefault("true")
+            boolean enabled();
+        }
+
+        interface EventsServiceConfig {
             @WithDefault("true")
             boolean enabled();
         }

@@ -96,6 +96,8 @@ floci-oci:
       enabled: true
     queue:
       enabled: true
+    events:
+      enabled: true
     networking:
       enabled: true
     kms:

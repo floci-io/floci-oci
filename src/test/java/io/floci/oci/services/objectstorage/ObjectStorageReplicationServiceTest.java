@@ -75,7 +75,7 @@ class ObjectStorageReplicationServiceTest {
 
     private void bucket(String regionName, String name) {
         in(regionName);
-        service.createBucket(NS, name, COMPARTMENT, null, null, null, null, null);
+        service.createBucket(NS, name, COMPARTMENT, null, null, null, null, null, null);
     }
 
     private StoredOsObject put(String bucket, String name, String content) {

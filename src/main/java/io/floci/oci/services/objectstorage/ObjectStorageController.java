@@ -89,7 +89,7 @@ public class ObjectStorageController {
             StoredBucket b = service.createBucket(namespaceName,
                     str(body, "name"), str(body, "compartmentId"), stringMap(body, "metadata"),
                     str(body, "publicAccessType"), str(body, "storageTier"),
-                    stringMap(body, "freeformTags"), definedTags(body));
+                    bool(body, "objectEventsEnabled"), stringMap(body, "freeformTags"), definedTags(body));
             return Response.ok(b).header("etag", b.getEtag())
                     .header("Location", "/n/" + service.namespace() + "/b/" + b.getName()).build();
         }
@@ -139,7 +139,7 @@ public class ObjectStorageController {
                                  Map<String, Object> body) {
         StoredBucket b = service.updateBucket(namespaceName, bucketName,
                 stringMap(body, "metadata"), str(body, "publicAccessType"),
-                stringMap(body, "freeformTags"), definedTags(body), ifMatch);
+                bool(body, "objectEventsEnabled"), stringMap(body, "freeformTags"), definedTags(body), ifMatch);
         return Response.ok(b).header("etag", b.getEtag()).build();
     }
 
@@ -790,4 +790,9 @@ public class ObjectStorageController {
                 })
                 .toList();
     }
+
+    private static Boolean bool(Map<String, Object> body, String key) {
+        return body != null && body.get(key) instanceof Boolean b ? b : null;
+    }
+
 }

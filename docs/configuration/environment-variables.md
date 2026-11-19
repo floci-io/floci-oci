@@ -29,6 +29,7 @@ All configuration lives under the `floci-oci.*` prefix; every property maps to a
 | `FLOCI_OCI_SERVICES_ORGANIZATIONS_ENABLED` | `true` | Enable/disable Organizations (child tenancies, organizations, links) |
 | `FLOCI_OCI_SERVICES_GOVERNANCERULES_ENABLED` | `true` | Enable/disable Governance Rules (rules, inclusion criteria, tenancy attachments) |
 | `FLOCI_OCI_SERVICES_FUNCTIONS_ENABLED` | `true` | Enable/disable Functions |
+| `FLOCI_OCI_SERVICES_EVENTS_ENABLED` | `true` | Enable/disable Events (rules, event delivery to Functions and Streaming) |
 | `FLOCI_OCI_SERVICES_FUNCTIONS_MOCK` | `false` | Skip the Fn sidecar; invocations return a synthetic body |
 | `FLOCI_OCI_SERVICES_FUNCTIONS_SERVER_IMAGE` | `fnproject/fnserver:latest` | Fn Project server image |
 | `FLOCI_OCI_SERVICES_ARTIFACTS_ENABLED` | `true` | Enable/disable Container Registry (OCIR) |
