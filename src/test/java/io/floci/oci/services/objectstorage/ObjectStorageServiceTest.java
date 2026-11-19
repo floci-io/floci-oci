@@ -53,7 +53,7 @@ class ObjectStorageServiceTest {
     }
 
     private StoredBucket bucket(String name) {
-        return service.createBucket(NS, name, COMPARTMENT, null, null, null, null, null, null);
+        return service.createBucket(NS, name, COMPARTMENT, null, null, null, null, null, null, null);
     }
 
     private StoredOsObject put(String bucket, String name, String content) {
@@ -85,12 +85,13 @@ class ObjectStorageServiceTest {
     }
 
     @Test
-    void deleteNonEmptyBucketIsConflict() {
+    void deleteNonEmptyBucketIsBucketNotEmpty() {
         bucket("full");
         put("full", "o1", "data");
         OciException e = assertThrows(OciException.class,
                 () -> service.deleteBucket(NS, "full", null));
         assertEquals(409, e.getHttpStatus());
+        assertEquals("BucketNotEmpty", e.getCode());
     }
 
     @Test
@@ -103,7 +104,7 @@ class ObjectStorageServiceTest {
         StoredOsObject fetched = service.getObject(NS, "data", "hello.txt");
         assertArrayEquals("hello world".getBytes(StandardCharsets.UTF_8), fetched.getData());
 
-        service.deleteObject(NS, "data", "hello.txt", null);
+        service.deleteObject(NS, "data", "hello.txt", null, null);
         OciException e = assertThrows(OciException.class,
                 () -> service.getObject(NS, "data", "hello.txt"));
         assertEquals("ObjectNotFound", e.getCode());
@@ -219,7 +220,7 @@ class ObjectStorageServiceTest {
         bucket("src");
         bucket("dst");
         put("src", "o", "payload");
-        String workRequestId = service.copyObject(NS, "src", "o", "us-ashburn-1", NS, "dst", "o-copy", null);
+        String workRequestId = service.copyObject(NS, "src", "o", "us-ashburn-1", NS, "dst", "o-copy", null, null);
         assertEquals("COMPLETED", workRequests.get(workRequestId).getStatus());
         assertArrayEquals("payload".getBytes(StandardCharsets.UTF_8),
                 service.getObject(NS, "dst", "o-copy").getData());
@@ -293,7 +294,7 @@ class ObjectStorageServiceTest {
         commitHelloMultipart("mp-src", "x");
         service.renameObject(NS, "mp-src", "x", "y", null, null, null);
         assertEquals("aMNH1FXeMAO9uahcKdysYw==-2", service.getObject(NS, "mp-src", "y").getMultipartMd5());
-        service.copyObject(NS, "mp-src", "y", "us-ashburn-1", NS, "mp-dst", "z", null);
+        service.copyObject(NS, "mp-src", "y", "us-ashburn-1", NS, "mp-dst", "z", null, null);
         assertEquals("aMNH1FXeMAO9uahcKdysYw==-2", service.getObject(NS, "mp-dst", "z").getMultipartMd5());
     }
 

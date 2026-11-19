@@ -35,10 +35,12 @@ import java.io.InputStream;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * OCI Object Storage API. Unversioned paths: {@code /n/{namespace}/b/{bucket}/o/{object}}.
@@ -47,6 +49,8 @@ import java.util.Map;
 @ApplicationScoped
 @Produces(MediaType.APPLICATION_JSON)
 public class ObjectStorageController {
+
+    private static final String VERSION_ID = "version-id";
 
     private static final DateTimeFormatter RFC_1123 =
             DateTimeFormatter.RFC_1123_DATE_TIME.withZone(ZoneOffset.UTC).withLocale(Locale.US);
@@ -89,7 +93,8 @@ public class ObjectStorageController {
             StoredBucket b = service.createBucket(namespaceName,
                     str(body, "name"), str(body, "compartmentId"), stringMap(body, "metadata"),
                     str(body, "publicAccessType"), str(body, "storageTier"),
-                    bool(body, "objectEventsEnabled"), stringMap(body, "freeformTags"), definedTags(body));
+                    bool(body, "objectEventsEnabled"), stringMap(body, "freeformTags"), definedTags(body),
+                    str(body, "versioning"));
             return Response.ok(b).header("etag", b.getEtag())
                     .header("Location", "/n/" + service.namespace() + "/b/" + b.getName()).build();
         }
@@ -139,7 +144,8 @@ public class ObjectStorageController {
                                  Map<String, Object> body) {
         StoredBucket b = service.updateBucket(namespaceName, bucketName,
                 stringMap(body, "metadata"), str(body, "publicAccessType"),
-                bool(body, "objectEventsEnabled"), stringMap(body, "freeformTags"), definedTags(body), ifMatch);
+                bool(body, "objectEventsEnabled"), stringMap(body, "freeformTags"), definedTags(body),
+                str(body, "versioning"), ifMatch);
         return Response.ok(b).header("etag", b.getEtag()).build();
     }
 
@@ -172,6 +178,7 @@ public class ObjectStorageController {
                 .header("etag", o.getEtag())
                 .header("opc-content-md5", o.getMd5())
                 .header("last-modified", RFC_1123.format(Instant.parse(o.getTimeModified())))
+                .header(VERSION_ID, o.getVersionId())
                 .build();
     }
 
@@ -180,10 +187,11 @@ public class ObjectStorageController {
     public Response getObject(@PathParam("namespaceName") String namespaceName,
                               @PathParam("bucketName") String bucketName,
                               @PathParam("objectName") String objectName,
+                              @QueryParam("versionId") String versionId,
                               @HeaderParam("Range") String range,
                               @HeaderParam("if-match") String ifMatch,
                               @HeaderParam("if-none-match") String ifNoneMatch) {
-        StoredOsObject o = service.getObject(namespaceName, bucketName, objectName);
+        StoredOsObject o = service.getObject(namespaceName, bucketName, objectName, versionId);
         if (ifMatch != null) {
             Etags.checkIfMatch(ifMatch, o.getEtag());
         }
@@ -194,8 +202,9 @@ public class ObjectStorageController {
     @Path("/n/{namespaceName}/b/{bucketName}/o/{objectName:.+}")
     public Response headObject(@PathParam("namespaceName") String namespaceName,
                                @PathParam("bucketName") String bucketName,
-                               @PathParam("objectName") String objectName) {
-        StoredOsObject o = service.getObject(namespaceName, bucketName, objectName);
+                               @PathParam("objectName") String objectName,
+                               @QueryParam("versionId") String versionId) {
+        StoredOsObject o = service.getObject(namespaceName, bucketName, objectName, versionId);
         return objectResponse(o, null, false);
     }
 
@@ -204,9 +213,16 @@ public class ObjectStorageController {
     public Response deleteObject(@PathParam("namespaceName") String namespaceName,
                                  @PathParam("bucketName") String bucketName,
                                  @PathParam("objectName") String objectName,
+                                 @QueryParam("versionId") String versionId,
                                  @HeaderParam("if-match") String ifMatch) {
-        service.deleteObject(namespaceName, bucketName, objectName, ifMatch);
-        return Response.noContent().build();
+        ObjectStorageService.ObjectDeletion deletion =
+                service.deleteObject(namespaceName, bucketName, objectName, ifMatch, versionId);
+        Response.ResponseBuilder builder = Response.noContent()
+                .header("last-modified", RFC_1123.format(deletion.lastModified()));
+        if (deletion.markerVersionId() != null) {
+            builder.header(VERSION_ID, deletion.markerVersionId()).header("is-delete-marker", "true");
+        }
+        return builder.build();
     }
 
     @GET
@@ -234,6 +250,36 @@ public class ObjectStorageController {
         return Response.ok(body).build();
     }
 
+    /**
+     * ListObjectVersions: {@code {"items":[...],"prefixes":[...]}}, paged with {@code opc-next-page}. Every
+     * item carries name, timeModified, versionId and isDeleteMarker; {@code fields} adds the rest.
+     */
+    @GET
+    @Path("/n/{namespaceName}/b/{bucketName}/objectversions")
+    public Response listObjectVersions(@PathParam("namespaceName") String namespaceName,
+                                       @PathParam("bucketName") String bucketName,
+                                       @QueryParam("prefix") String prefix,
+                                       @QueryParam("start") String start,
+                                       @QueryParam("end") String end,
+                                       @QueryParam("startAfter") String startAfter,
+                                       @QueryParam("delimiter") String delimiter,
+                                       @QueryParam("limit") Integer limit,
+                                       @QueryParam("fields") String fields,
+                                       @QueryParam("page") String page) {
+        ObjectStorageService.VersionListing listing = service.listObjectVersions(namespaceName, bucketName,
+                prefix, start, end, startAfter, delimiter, limit, page);
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("items", listing.items().stream().map(o -> versionSummary(o, fields)).toList());
+        if (!listing.prefixes().isEmpty()) {
+            body.put("prefixes", listing.prefixes());
+        }
+        Response.ResponseBuilder builder = Response.ok(body);
+        if (listing.nextPage() != null) {
+            builder.header(OciPage.OPC_NEXT_PAGE, listing.nextPage());
+        }
+        return builder.build();
+    }
+
     // ── Object actions ─────────────────────────────────────────────────────────
 
     @POST
@@ -252,6 +298,7 @@ public class ObjectStorageController {
         return Response.ok()
                 .header("etag", o.getEtag())
                 .header("last-modified", RFC_1123.format(Instant.parse(o.getTimeModified())))
+                .header(VERSION_ID, o.getVersionId())
                 .build();
     }
 
@@ -276,7 +323,7 @@ public class ObjectStorageController {
         }
         String workRequestId = service.copyObject(namespaceName, bucketName, sourceObjectName,
                 destinationRegion, destinationNamespace, destinationBucket, destinationObjectName,
-                str(body, "sourceObjectIfMatchETag"));
+                str(body, "sourceObjectIfMatchETag"), str(body, "sourceVersionId"));
         return Response.accepted().header("opc-work-request-id", workRequestId).build();
     }
 
@@ -361,6 +408,7 @@ public class ObjectStorageController {
                 .header("etag", o.getEtag())
                 .header("opc-multipart-md5", o.getMultipartMd5())
                 .header("last-modified", RFC_1123.format(Instant.parse(o.getTimeModified())))
+                .header(VERSION_ID, o.getVersionId())
                 .build();
     }
 
@@ -576,7 +624,8 @@ public class ObjectStorageController {
         Response.ResponseBuilder builder = Response.status(status)
                 .header("etag", o.getEtag())
                 .header("last-modified", RFC_1123.format(Instant.parse(o.getTimeModified())))
-                .header("storage-tier", o.getStorageTier());
+                .header("storage-tier", o.getStorageTier())
+                .header(VERSION_ID, o.getVersionId());
         if (o.getMultipartMd5() != null) {
             builder.header("opc-multipart-md5", o.getMultipartMd5());
         } else {
@@ -660,6 +709,41 @@ public class ObjectStorageController {
         }
         if (requested.contains("storageTier")) {
             summary.put("storageTier", o.getStorageTier());
+        }
+        return summary;
+    }
+
+    /** An ObjectVersionSummary. A delete marker has only the four fields every item carries. */
+    private static Map<String, Object> versionSummary(StoredOsObject o, String fields) {
+        Set<String> requested = new HashSet<>();
+        if (fields != null) {
+            for (String field : fields.split(",")) {
+                requested.add(field.trim().toLowerCase(Locale.ROOT));
+            }
+        }
+        Map<String, Object> summary = new LinkedHashMap<>();
+        summary.put("name", o.getName());
+        if (!o.isDeleteMarker()) {
+            if (requested.contains("size")) {
+                summary.put("size", o.getData().length);
+            }
+            if (requested.contains("timecreated")) {
+                summary.put("timeCreated", o.getTimeCreated());
+            }
+        }
+        summary.put("timeModified", o.getTimeModified());
+        if (!o.isDeleteMarker()) {
+            if (requested.contains("etag")) {
+                summary.put("etag", o.getEtag());
+            }
+            if (requested.contains("storagetier")) {
+                summary.put("storageTier", o.getStorageTier());
+            }
+        }
+        summary.put("versionId", o.getVersionId());
+        summary.put("isDeleteMarker", o.isDeleteMarker());
+        if (!o.isDeleteMarker() && requested.contains("md5")) {
+            summary.put("md5", o.getMd5());
         }
         return summary;
     }

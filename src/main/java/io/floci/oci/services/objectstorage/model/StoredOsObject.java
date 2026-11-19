@@ -18,6 +18,8 @@ public class StoredOsObject {
     private String timeCreated;
     private String timeModified;
     private Map<String, String> metadata;
+    private String versionId;
+    private boolean deleteMarker;
 
     public StoredOsObject() {
     }
@@ -100,5 +102,21 @@ public class StoredOsObject {
 
     public void setMetadata(Map<String, String> metadata) {
         this.metadata = metadata;
+    }
+
+    public String getVersionId() {
+        return versionId;
+    }
+
+    public void setVersionId(String versionId) {
+        this.versionId = versionId;
+    }
+
+    public boolean isDeleteMarker() {
+        return deleteMarker;
+    }
+
+    public void setDeleteMarker(boolean deleteMarker) {
+        this.deleteMarker = deleteMarker;
     }
 }

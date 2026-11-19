@@ -234,6 +234,14 @@ public class TenancyAwareStorageBackend<V> implements StorageBackend<String, V> 
         }
     }
 
+    /** The entries of {@code partition} of {@code store} whose key passes {@code keyFilter}; see {@link #getIn}. */
+    public static <V> List<V> scanIn(StorageBackend<String, V> store, String partition, Predicate<String> keyFilter) {
+        if (store instanceof TenancyAwareStorageBackend<V> tenancyAware) {
+            return tenancyAware.scanForTenancy(partition, keyFilter);
+        }
+        return store.scan(keyFilter);
+    }
+
     /** Every entry of every partition of {@code store}; all of it for a store that is not tenancy-aware. */
     public static <V> List<V> scanAll(StorageBackend<String, V> store) {
         if (store instanceof TenancyAwareStorageBackend<V> tenancyAware) {

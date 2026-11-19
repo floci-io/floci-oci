@@ -113,6 +113,10 @@ final class BucketReplication {
             throw OciException.replicationPolicyConflict("Bucket '" + destinationBucket + "' in " + destinationRegion
                     + " is already the destination of a replication policy.");
         }
+        if (ObjectVersions.isVersioned(destination)) {
+            throw OciException.replicationPolicyConflict("Bucket '" + destinationBucket + "' in " + destinationRegion
+                    + " has object versioning, and a replication destination cannot be versioned.");
+        }
 
         StoredReplicationPolicy policy = new StoredReplicationPolicy();
         policy.setId(UUID.randomUUID().toString());
@@ -252,6 +256,8 @@ final class BucketReplication {
             replica.setMetadata(written.getMetadata());
             replica.setTimeCreated(existing.map(StoredOsObject::getTimeCreated).orElse(now));
             replica.setTimeModified(now);
+            // Only the latest version is replicated, and it gets a version of its own at the destination.
+            replica.setVersionId(ObjectVersions.newVersionId());
             TenancyAwareStorageBackend.putIn(objects, destinationPartition, key, replica);
             synced(policy);
         });

@@ -105,6 +105,14 @@ public class OciException extends RuntimeException {
         return new OciException("BucketAlreadyExists", message, 409);
     }
 
+    /**
+     * Deleting a bucket that still holds objects or object versions. Not in Oracle's global error catalog;
+     * the Terraform provider stops retrying a 409 that carries this code (tfresource/retry.go).
+     */
+    public static OciException bucketNotEmpty(String message) {
+        return new OciException("BucketNotEmpty", message, 409);
+    }
+
     /** A replication policy conflicts with another: the real code for a second policy on one source bucket. */
     public static OciException replicationPolicyConflict(String message) {
         return new OciException("ReplicationPolicyConflict", message, 409);

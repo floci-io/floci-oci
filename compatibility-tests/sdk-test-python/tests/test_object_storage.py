@@ -166,3 +166,51 @@ def test_upload_manager_streams_large_object(object_storage, bucket):
 
     head = object_storage.head_object(NAMESPACE, bucket, "large.bin")
     assert int(head.headers["content-length"]) == len(data)
+
+
+def test_versioning_keeps_previous_versions_and_delete_markers(object_storage):
+    name = unique("py-versioned")
+    created = object_storage.create_bucket(
+        NAMESPACE,
+        oci.object_storage.models.CreateBucketDetails(
+            name=name, compartment_id=TENANCY, versioning="Enabled"
+        ),
+    ).data
+    assert created.versioning == "Enabled"
+
+    first = object_storage.put_object(NAMESPACE, name, "doc.txt", b"one").headers["version-id"]
+    second = object_storage.put_object(NAMESPACE, name, "doc.txt", b"two").headers["version-id"]
+    assert first != second
+
+    old = object_storage.get_object(NAMESPACE, name, "doc.txt", version_id=first)
+    assert old.data.content == b"one"
+    assert old.headers["version-id"] == first
+
+    deleted = object_storage.delete_object(NAMESPACE, name, "doc.txt")
+    marker = deleted.headers["version-id"]
+    assert deleted.headers["is-delete-marker"] == "true"
+    with pytest.raises(oci.exceptions.ServiceError) as err:
+        object_storage.get_object(NAMESPACE, name, "doc.txt")
+    assert err.value.code == "ObjectNotFound"
+
+    versions = oci.pagination.list_call_get_all_results(
+        object_storage.list_object_versions, NAMESPACE, name, fields="name,size"
+    ).data
+    assert [(v.version_id, v.is_delete_marker) for v in versions] == [
+        (marker, True),
+        (second, False),
+        (first, False),
+    ]
+    assert versions[1].size == 3
+
+    with pytest.raises(oci.exceptions.ServiceError) as err:
+        object_storage.delete_bucket(NAMESPACE, name)
+    assert err.value.status == 409
+    assert err.value.code == "BucketNotEmpty"
+
+    object_storage.delete_object(NAMESPACE, name, "doc.txt", version_id=marker)
+    assert object_storage.get_object(NAMESPACE, name, "doc.txt").data.content == b"two"
+
+    for version in (second, first):
+        object_storage.delete_object(NAMESPACE, name, "doc.txt", version_id=version)
+    object_storage.delete_bucket(NAMESPACE, name)

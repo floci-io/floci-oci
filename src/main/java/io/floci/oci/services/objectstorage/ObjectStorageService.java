@@ -7,6 +7,7 @@ import io.floci.oci.core.common.Etags;
 import io.floci.oci.core.common.OciContext;
 import io.floci.oci.core.common.OciEvents;
 import io.floci.oci.core.common.OciException;
+import io.floci.oci.core.common.OciPage;
 import io.floci.oci.core.common.Resettable;
 import io.floci.oci.core.common.Ocids;
 import io.floci.oci.core.common.ServiceDescriptor;
@@ -39,6 +40,7 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -59,6 +61,7 @@ public class ObjectStorageService implements CompartmentUsage, Resettable {
     private final StorageBackend<String, StoredOsObject> objects;
     private final StorageBackend<String, StoredMultipartUpload> uploads;
     private final StorageBackend<String, StoredPar> pars;
+    private final ObjectVersions versions;
     private final BucketReplication replication;
     private final EmulatorConfig config;
     private final OciContext ociContext;
@@ -89,6 +92,9 @@ public class ObjectStorageService implements CompartmentUsage, Resettable {
                 new TypeReference<Map<String, StoredMultipartUpload>>() {});
         this.pars = storageFactory.create("objectstorage", "objectstorage-pars.json",
                 new TypeReference<Map<String, StoredPar>>() {});
+        this.versions = new ObjectVersions(objects,
+                storageFactory.create("objectstorage", "objectstorage-object-versions.json",
+                        new TypeReference<Map<String, StoredOsObject>>() {}));
         this.replication = new BucketReplication(
                 storageFactory.create("objectstorage", "objectstorage-replication.json",
                         new TypeReference<Map<String, StoredReplicationPolicy>>() {}),
@@ -119,6 +125,7 @@ public class ObjectStorageService implements CompartmentUsage, Resettable {
         this.objects = objects;
         this.uploads = uploads;
         this.pars = pars;
+        this.versions = new ObjectVersions(objects, new InMemoryStorage<>());
         this.replication = new BucketReplication(policies, buckets, objects, ociContext);
         this.config = config;
         this.serviceRegistry = null;
@@ -231,13 +238,16 @@ public class ObjectStorageService implements CompartmentUsage, Resettable {
                                      Map<String, String> metadata, String publicAccessType,
                                      String storageTier, Boolean objectEventsEnabled,
                                      Map<String, String> freeformTags,
-                                     Map<String, Map<String, Object>> definedTags) {
+                                     Map<String, Map<String, Object>> definedTags,
+                                     String versioning) {
         if (name == null || name.isBlank()) {
             throw OciException.missingParameter("name is required");
         }
         if (compartmentId == null || compartmentId.isBlank()) {
             throw OciException.missingParameter("compartmentId is required");
         }
+        String initialVersioning = versioning == null ? ObjectVersions.DISABLED
+                : versioningValue(versioning, List.of(ObjectVersions.ENABLED, ObjectVersions.DISABLED));
         if (buckets.get(name).isPresent()) {
             throw OciException.bucketAlreadyExists(
                     "Either the bucket '" + name + "' already exists or you are not authorized to create it");
@@ -253,7 +263,7 @@ public class ObjectStorageService implements CompartmentUsage, Resettable {
         b.setPublicAccessType(publicAccessType != null ? publicAccessType : "NoPublicAccess");
         b.setStorageTier(storageTier != null ? storageTier : "Standard");
         b.setObjectEventsEnabled(Boolean.TRUE.equals(objectEventsEnabled));
-        b.setVersioning("Disabled");
+        b.setVersioning(initialVersioning);
         b.setId(Ocids.generate("bucket", ociContext.realm(), ociContext.regionCode()));
         b.setFreeformTags(freeformTags);
         b.setDefinedTags(definedTags);
@@ -285,28 +295,42 @@ public class ObjectStorageService implements CompartmentUsage, Resettable {
                                      Boolean objectEventsEnabled,
                                      Map<String, String> freeformTags,
                                      Map<String, Map<String, Object>> definedTags,
-                                     String ifMatch) {
-        StoredBucket b = getBucket(namespaceName, bucketName);
-        Etags.checkIfMatch(ifMatch, b.getEtag());
-        if (metadata != null) {
-            b.setMetadata(metadata);
-        }
-        if (publicAccessType != null) {
-            b.setPublicAccessType(publicAccessType);
-        }
-        if (objectEventsEnabled != null) {
-            b.setObjectEventsEnabled(objectEventsEnabled);
-        }
-        if (freeformTags != null) {
-            b.setFreeformTags(freeformTags);
-        }
-        if (definedTags != null) {
-            b.setDefinedTags(definedTags);
-        }
-        b.setEtag(Etags.newEtag());
-        buckets.put(bucketName, b);
-        emitBucketEvent("updatebucket", b);
-        return b;
+                                     String versioning, String ifMatch) {
+        // Under the bucket's replication lock, so the read-only check and a policy creation that checks this
+        // bucket's versioning cannot both pass.
+        return replication.writing(ociContext.region(), bucketName, () -> {
+            StoredBucket b = getBucket(namespaceName, bucketName);
+            Etags.checkIfMatch(ifMatch, b.getEtag());
+            if (versioning != null) {
+                // Versioning can be suspended but never disabled once a bucket exists.
+                String requested = versioningValue(versioning,
+                        List.of(ObjectVersions.ENABLED, ObjectVersions.SUSPENDED));
+                if (ObjectVersions.ENABLED.equals(requested) && b.getIsReadOnly()) {
+                    throw OciException.conflict("Bucket '" + bucketName + "' is the destination of a replication "
+                            + "policy. Versioning cannot be enabled on a replication destination.");
+                }
+                b.setVersioning(requested);
+            }
+            if (metadata != null) {
+                b.setMetadata(metadata);
+            }
+            if (publicAccessType != null) {
+                b.setPublicAccessType(publicAccessType);
+            }
+            if (objectEventsEnabled != null) {
+                b.setObjectEventsEnabled(objectEventsEnabled);
+            }
+            if (freeformTags != null) {
+                b.setFreeformTags(freeformTags);
+            }
+            if (definedTags != null) {
+                b.setDefinedTags(definedTags);
+            }
+            b.setEtag(Etags.newEtag());
+            buckets.put(bucketName, b);
+            emitBucketEvent("updatebucket", b);
+            return b;
+        });
     }
 
     public void deleteBucket(String namespaceName, String bucketName, String ifMatch) {
@@ -321,8 +345,9 @@ public class ObjectStorageService implements CompartmentUsage, Resettable {
                         + "Make it writable before deleting it.");
             }
             boolean hasObjects = !objects.scan(k -> k.startsWith(bucketName + "/")).isEmpty();
-            if (hasObjects) {
-                throw OciException.conflict("Bucket named '" + bucketName + "' is not empty. Delete all objects first.");
+            if (hasObjects || versions.hasPrevious(partition(), bucketName)) {
+                throw OciException.bucketNotEmpty("Bucket named '" + bucketName + "' is not empty. "
+                        + "Delete all object versions first.");
             }
             pars.scan(k -> true).stream()
                     .filter(p -> bucketName.equals(p.getBucket()))
@@ -351,9 +376,9 @@ public class ObjectStorageService implements CompartmentUsage, Resettable {
                                      byte[] data, String contentType, String contentMd5,
                                      Map<String, String> metadata,
                                      String ifMatch, String ifNoneMatch, String multipartMd5) {
-        replication.requireWritable(getBucket(namespaceName, bucketName));
-        String key = objectKey(bucketName, objectName);
-        StoredOsObject existing = objects.get(key).orElse(null);
+        StoredBucket bucket = getBucket(namespaceName, bucketName);
+        replication.requireWritable(bucket);
+        StoredOsObject existing = versions.latest(partition(), bucketName, objectName).orElse(null);
         Etags.checkIfMatch(ifMatch, existing != null ? existing.getEtag() : null);
         Etags.checkIfNoneMatch(ifNoneMatch, existing != null ? existing.getEtag() : null);
 
@@ -371,33 +396,80 @@ public class ObjectStorageService implements CompartmentUsage, Resettable {
         o.setEtag(Etags.newEtag());
         o.setContentType(contentType != null ? contentType : "application/octet-stream");
         o.setStorageTier("Standard");
-        String now = Instant.now().toString();
+        String now = ObjectVersions.now();
         o.setTimeCreated(existing != null ? existing.getTimeCreated() : now);
         o.setTimeModified(now);
         o.setMetadata(metadata == null ? Map.of() : metadata);
-        objects.put(key, o);
+        versions.writeLatest(partition(), bucket, o);
         replication.replicatePut(ociContext.region(), bucketName, o);
         emitObjectEvent(existing == null ? "createobject" : "updateobject", bucketName, o);
         return o;
     }
 
     public StoredOsObject getObject(String namespaceName, String bucketName, String objectName) {
-        getBucket(namespaceName, bucketName);
-        return objects.get(objectKey(bucketName, objectName))
-                .orElseThrow(() -> OciException.objectNotFound(
-                        "The object '" + objectName + "' does not exist in bucket '" + bucketName
-                                + "' with namespace '" + namespace() + "'"));
+        return getObject(namespaceName, bucketName, objectName, null);
     }
 
-    public void deleteObject(String namespaceName, String bucketName, String objectName, String ifMatch) {
-        replication.writing(ociContext.region(), bucketName, () -> {
-            replication.requireWritable(getBucket(namespaceName, bucketName));
-            StoredOsObject o = getObject(namespaceName, bucketName, objectName);
-            Etags.checkIfMatch(ifMatch, o.getEtag());
-            objects.delete(objectKey(bucketName, objectName));
-            replication.replicateDelete(ociContext.region(), bucketName, objectName);
-            emitObjectEvent("deleteobject", bucketName, o);
+    /** GetObject and HeadObject: the latest version, or the one {@code versionId} names. */
+    public StoredOsObject getObject(String namespaceName, String bucketName, String objectName, String versionId) {
+        getBucket(namespaceName, bucketName);
+        Optional<StoredOsObject> found = versionId == null
+                ? versions.latest(partition(), bucketName, objectName)
+                : versions.find(partition(), bucketName, objectName, versionId);
+        return found.orElseThrow(() -> OciException.objectNotFound(objectNotFound(bucketName, objectName, versionId)));
+    }
+
+    /** The response headers of a DeleteObject: a version ID only when the delete created a delete marker. */
+    public record ObjectDeletion(Instant lastModified, String markerVersionId) {
+    }
+
+    /**
+     * DeleteObject. Without a version ID it deletes the latest version, which on an Enabled bucket leaves a
+     * delete marker. With one it deletes that version for good, a delete marker included.
+     */
+    public ObjectDeletion deleteObject(String namespaceName, String bucketName, String objectName, String ifMatch,
+                                       String versionId) {
+        return replication.writing(ociContext.region(), bucketName, () -> {
+            StoredBucket bucket = getBucket(namespaceName, bucketName);
+            replication.requireWritable(bucket);
+            if (versionId != null) {
+                if (ifMatch != null) {
+                    Etags.checkIfMatch(ifMatch, getObject(namespaceName, bucketName, objectName, versionId).getEtag());
+                }
+                return deleteVersion(bucketName, objectName, versionId);
+            }
+            StoredOsObject latest = getObject(namespaceName, bucketName, objectName, null);
+            Etags.checkIfMatch(ifMatch, latest.getEtag());
+            ObjectVersions.Deletion deletion = versions.deleteLatest(partition(), bucket, latest);
+            replicateLatestChange(bucketName, objectName, versions.latest(partition(), bucketName, objectName));
+            emitObjectEvent("deleteobject", bucketName, latest);
+            return new ObjectDeletion(Instant.now(), deletion.createdMarker() ? deletion.marker().getVersionId() : null);
         });
+    }
+
+    /** Deleting a version that was the live latest one is a deletion of the object, and emits its event. */
+    private ObjectDeletion deleteVersion(String bucketName, String objectName, String versionId) {
+        Optional<StoredOsObject> latest = versions.latest(partition(), bucketName, objectName)
+                .filter(current -> versionId.equals(current.getVersionId()));
+        Optional<StoredOsObject> promoted = versions.deleteVersion(partition(), bucketName, objectName, versionId,
+                objectNotFound(bucketName, objectName, versionId));
+        if (latest.isPresent() || promoted.isPresent()) {
+            replicateLatestChange(bucketName, objectName, promoted);
+        }
+        latest.ifPresent(deleted -> emitObjectEvent("deleteobject", bucketName, deleted));
+        return new ObjectDeletion(Instant.now(), null);
+    }
+
+    /** Mirrors a change of the live latest version into a replication destination: a promotion or a removal. */
+    private void replicateLatestChange(String bucketName, String objectName, Optional<StoredOsObject> promoted) {
+        promoted.ifPresentOrElse(
+                latest -> replication.replicatePut(ociContext.region(), bucketName, latest),
+                () -> replication.replicateDelete(ociContext.region(), bucketName, objectName));
+    }
+
+    private String objectNotFound(String bucketName, String objectName, String versionId) {
+        return "The object '" + objectName + "'" + (versionId == null ? "" : " with version '" + versionId + "'")
+                + " does not exist in bucket '" + bucketName + "' with namespace '" + namespace() + "'";
     }
 
     record BatchDeleteItem(String objectName, String ifMatch) {
@@ -419,11 +491,7 @@ public class ObjectStorageService implements CompartmentUsage, Resettable {
             List<BatchDeleteResult.FailedDelete> failed = new ArrayList<>();
             for (BatchDeleteItem item : items) {
                 try {
-                    StoredOsObject o = getObject(namespaceName, bucketName, item.objectName());
-                    Etags.checkIfMatch(item.ifMatch(), o.getEtag());
-                    objects.delete(objectKey(bucketName, item.objectName()));
-                    replication.replicateDelete(ociContext.region(), bucketName, item.objectName());
-                    emitObjectEvent("deleteobject", bucketName, o);
+                    deleteObject(namespaceName, bucketName, item.objectName(), item.ifMatch(), null);
                     deleted.add(new BatchDeleteResult.DeletedObject(
                             item.objectName(), Instant.now()));
                 } catch (OciException e) {
@@ -477,31 +545,109 @@ public class ObjectStorageService implements CompartmentUsage, Resettable {
         return new ObjectListing(selected, List.copyOf(prefixes), nextStartWith);
     }
 
+    public record VersionListing(List<StoredOsObject> items, List<String> prefixes, String nextPage) {
+    }
+
+    /**
+     * ListObjectVersions: every version and delete marker, by name and then newest first, with the same
+     * {@code prefix}/{@code start}/{@code end}/{@code startAfter} filters and delimiter grouping as
+     * ListObjects. Unlike ListObjects it pages with {@code opc-next-page}. The page token names the last
+     * entry returned rather than an offset, so deleting the versions of one page, as the CLI's bulk delete
+     * does before asking for the next, does not skip any.
+     */
+    public VersionListing listObjectVersions(String namespaceName, String bucketName, String prefix, String start,
+                                             String end, String startAfter, String delimiter, Integer limit,
+                                             String page) {
+        getBucket(namespaceName, bucketName);
+        if (limit != null && limit < 1) {
+            throw OciException.invalidParameter("limit must be a positive integer");
+        }
+        int effectiveLimit = limit == null ? OciPage.MAX_LIMIT : Math.min(limit, OciPage.MAX_LIMIT);
+        ObjectVersions.Cursor after = ObjectVersions.Cursor.decode(page);
+        List<StoredOsObject> selected = new ArrayList<>();
+        Set<String> prefixes = new LinkedHashSet<>();
+        ObjectVersions.Cursor lastReturned = null;
+        String nextPage = null;
+        for (StoredOsObject version : versions.all(partition(), bucketName)) {
+            String name = version.getName();
+            if ((prefix != null && !name.startsWith(prefix))
+                    || (start != null && name.compareTo(start) < 0)
+                    || (end != null && name.compareTo(end) >= 0)
+                    || (startAfter != null && name.compareTo(startAfter) <= 0)) {
+                continue;
+            }
+            String commonPrefix = commonPrefix(name, prefix, delimiter);
+            if (commonPrefix != null && prefixes.contains(commonPrefix)) {
+                continue;
+            }
+            ObjectVersions.Cursor position = commonPrefix != null ? ObjectVersions.Cursor.ofPrefix(commonPrefix)
+                    : ObjectVersions.Cursor.of(version);
+            if (after != null && !after.isBefore(position)) {
+                continue;
+            }
+            if (selected.size() + prefixes.size() >= effectiveLimit) {
+                nextPage = lastReturned.encode();
+                break;
+            }
+            if (commonPrefix != null) {
+                prefixes.add(commonPrefix);
+            } else {
+                selected.add(version);
+            }
+            lastReturned = position;
+        }
+        return new VersionListing(selected, List.copyOf(prefixes), nextPage);
+    }
+
+    private static String commonPrefix(String name, String prefix, String delimiter) {
+        if (delimiter == null || delimiter.isEmpty()) {
+            return null;
+        }
+        String scope = prefix != null ? prefix : "";
+        int index = name.indexOf(delimiter, scope.length());
+        return index < 0 ? null : name.substring(0, index + delimiter.length());
+    }
+
     public StoredOsObject renameObject(String namespaceName, String bucketName,
                                        String sourceName, String newName,
                                        String srcIfMatch, String newIfMatch, String newIfNoneMatch) {
         return replication.writing(ociContext.region(), bucketName, () -> {
-            replication.requireWritable(getBucket(namespaceName, bucketName));
+            StoredBucket bucket = getBucket(namespaceName, bucketName);
+            replication.requireWritable(bucket);
             StoredOsObject source = getObject(namespaceName, bucketName, sourceName);
             Etags.checkIfMatch(srcIfMatch, source.getEtag());
-            StoredOsObject target = objects.get(objectKey(bucketName, newName)).orElse(null);
+            StoredOsObject target = versions.latest(partition(), bucketName, newName).orElse(null);
             Etags.checkIfMatch(newIfMatch, target != null ? target.getEtag() : null);
             Etags.checkIfNoneMatch(newIfNoneMatch, target != null ? target.getEtag() : null);
 
-            StoredOsObject removed = new StoredOsObject();
-            removed.setName(sourceName);
-            removed.setEtag(source.getEtag());
-            source.setName(newName);
-            source.setEtag(Etags.newEtag());
-            source.setTimeModified(Instant.now().toString());
-            objects.put(objectKey(bucketName, newName), source);
-            objects.delete(objectKey(bucketName, sourceName));
-            replication.replicatePut(ociContext.region(), bucketName, source);
-            replication.replicateDelete(ociContext.region(), bucketName, sourceName);
-            emitObjectEvent("deleteobject", bucketName, removed);
-            emitObjectEvent(target == null ? "createobject" : "updateobject", bucketName, source);
-            return source;
+            // Only the latest version is renamed. The rename deletes the source the way DeleteObject does, so
+            // on an Enabled bucket the source keeps its versions and gains a delete marker.
+            StoredOsObject renamed = copyOf(source, newName);
+            renamed.setTimeCreated(source.getTimeCreated());
+            versions.deleteLatest(partition(), bucket, source);
+            versions.writeLatest(partition(), bucket, renamed);
+            replication.replicatePut(ociContext.region(), bucketName, renamed);
+            replicateLatestChange(bucketName, sourceName, versions.latest(partition(), bucketName, sourceName));
+            emitObjectEvent("deleteobject", bucketName, source);
+            emitObjectEvent(target == null ? "createobject" : "updateobject", bucketName, renamed);
+            return renamed;
         });
+    }
+
+    private static StoredOsObject copyOf(StoredOsObject source, String name) {
+        StoredOsObject copy = new StoredOsObject();
+        copy.setName(name);
+        copy.setData(source.getData());
+        copy.setMd5(source.getMd5());
+        copy.setMultipartMd5(source.getMultipartMd5());
+        copy.setEtag(Etags.newEtag());
+        copy.setContentType(source.getContentType());
+        copy.setStorageTier(source.getStorageTier());
+        String now = ObjectVersions.now();
+        copy.setTimeCreated(now);
+        copy.setTimeModified(now);
+        copy.setMetadata(source.getMetadata());
+        return copy;
     }
 
     /**
@@ -512,9 +658,9 @@ public class ObjectStorageService implements CompartmentUsage, Resettable {
      */
     public String copyObject(String namespaceName, String bucketName, String sourceObjectName,
                              String destRegion, String destNamespace, String destBucket,
-                             String destObjectName, String sourceIfMatch) {
+                             String destObjectName, String sourceIfMatch, String sourceVersionId) {
         return replication.writing(destRegion, destBucket, () -> {
-            StoredOsObject source = getObject(namespaceName, bucketName, sourceObjectName);
+            StoredOsObject source = getObject(namespaceName, bucketName, sourceObjectName, sourceVersionId);
             Etags.checkIfMatch(sourceIfMatch, source.getEtag());
             String destPartition = TenancyAwareStorageBackend.regionalPartition(ociContext.tenancyId(), destRegion);
             StoredBucket destination = TenancyAwareStorageBackend.getIn(buckets, destPartition, destBucket)
@@ -523,21 +669,11 @@ public class ObjectStorageService implements CompartmentUsage, Resettable {
                             + " or you are not authorized to access it"));
             replication.requireWritable(destination);
 
-            StoredOsObject copy = new StoredOsObject();
-            copy.setName(destObjectName);
-            copy.setData(source.getData());
-            copy.setMd5(source.getMd5());
-            copy.setMultipartMd5(source.getMultipartMd5());
-            copy.setEtag(Etags.newEtag());
-            copy.setContentType(source.getContentType());
-            copy.setStorageTier(source.getStorageTier());
-            String now = Instant.now().toString();
-            copy.setTimeCreated(now);
-            copy.setTimeModified(now);
-            copy.setMetadata(source.getMetadata());
+            // A copy, of the latest version or a previous one, becomes the latest version at the destination.
+            StoredOsObject copy = copyOf(source, destObjectName);
             boolean replaced = TenancyAwareStorageBackend.getIn(objects, destPartition,
                     objectKey(destBucket, destObjectName)).isPresent();
-            TenancyAwareStorageBackend.putIn(objects, destPartition, objectKey(destBucket, destObjectName), copy);
+            versions.writeLatest(destPartition, destination, copy);
             replication.replicatePut(destRegion, destBucket, copy);
             if (destRegion == null || destRegion.equals(ociContext.region())) {
                 emitObjectEvent(replaced ? "updateobject" : "createobject", destBucket, copy);
@@ -820,6 +956,19 @@ public class ObjectStorageService implements CompartmentUsage, Resettable {
         } catch (RuntimeException e) {
             LOG.warnv("Could not emit {0} for {1}: {2}", event.eventType(), event.resourceName(), e.getMessage());
         }
+    }
+
+    private String partition() {
+        return TenancyAwareStorageBackend.regionalPartition(ociContext.tenancyId(), ociContext.region());
+    }
+
+    /** A versioning value from a request body, in the casing OCI returns, or 400 when {@code allowed} lacks it. */
+    private static String versioningValue(String requested, List<String> allowed) {
+        return allowed.stream()
+                .filter(value -> value.toLowerCase(Locale.ROOT).equals(requested.toLowerCase(Locale.ROOT)))
+                .findFirst()
+                .orElseThrow(() -> OciException.invalidParameter("Invalid versioning value '" + requested
+                        + "'. Supported values are: " + String.join(", ", allowed) + "."));
     }
 
     static String objectKey(String bucketName, String objectName) {

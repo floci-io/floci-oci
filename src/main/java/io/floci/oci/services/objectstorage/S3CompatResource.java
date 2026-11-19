@@ -122,11 +122,11 @@ public class S3CompatResource {
                         tags.put(S3Xml.childText(tag, "Key"), S3Xml.childText(tag, "Value"));
                     }
                 }
-                service.updateBucket(namespace, bucket, null, null, null, tags, null, null);
+                service.updateBucket(namespace, bucket, null, null, null, tags, null, null, null);
                 return Response.noContent().build();
             }
             String compartment = (String) service.namespaceMetadata(namespace).get("defaultS3CompartmentId");
-            service.createBucket(namespace, bucket, compartment, null, null, null, null, null, null);
+            service.createBucket(namespace, bucket, compartment, null, null, null, null, null, null, null);
             return Response.ok().header("Location", "/" + bucket).build();
         });
     }
@@ -152,7 +152,7 @@ public class S3CompatResource {
                 return unsupported;
             }
             if (has(uri, "tagging")) {
-                service.updateBucket(namespace, bucket, null, null, null, Map.of(), null, null);
+                service.updateBucket(namespace, bucket, null, null, null, Map.of(), null, null, null);
                 return Response.noContent().build();
             }
             service.deleteBucket(namespace, bucket, null);
@@ -372,7 +372,7 @@ public class S3CompatResource {
         } else {
             // The native ETag of the object just checked, so a source replaced meanwhile fails the copy.
             service.copyObject(namespace, sourceBucket, sourceKey, ociContext.region(), namespace, bucket, key,
-                    original.getEtag());
+                    original.getEtag(), null);
             copied = service.getObject(namespace, bucket, key);
         }
         return xmlResponse(200, S3Xml.document("CopyObjectResult")
@@ -442,7 +442,7 @@ public class S3CompatResource {
             }
             service.getBucket(namespace, bucket);
             try {
-                service.deleteObject(namespace, bucket, key, null);
+                service.deleteObject(namespace, bucket, key, null, null);
             } catch (OciException e) {
                 // S3 answers 204 for a key that is not there.
                 if (e.getHttpStatus() != 404) {
@@ -584,7 +584,7 @@ public class S3CompatResource {
                 case "BucketNotFound", "NamespaceNotFound" -> error(404, "NoSuchBucket", e.getMessage(), resource);
                 case "ObjectNotFound" -> error(404, "NoSuchKey", e.getMessage(), resource);
                 case "BucketAlreadyExists" -> error(409, "BucketAlreadyOwnedByYou", e.getMessage(), resource);
-                case "Conflict" -> error(409, "BucketNotEmpty", e.getMessage(), resource);
+                case "BucketNotEmpty", "Conflict" -> error(409, "BucketNotEmpty", e.getMessage(), resource);
                 case "NotAuthorizedOrNotFound" -> error(404, "NoSuchUpload", e.getMessage(), resource);
                 case "NoEtagMatch", "IfNoneMatchFailed" -> error(412, "PreconditionFailed", e.getMessage(), resource);
                 case "InvalidParameter", "MissingParameter" -> error(400, "InvalidArgument", e.getMessage(), resource);

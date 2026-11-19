@@ -7,10 +7,10 @@ OCI Object Storage — unversioned paths under `/n/{namespace}/b/{bucket}/o/{obj
 | Area | Operations |
 |---|---|
 | Namespace | GetNamespace (`/n`), GetNamespaceMetadata |
-| Buckets | Create, Get, Head, List, Update, Delete (must be empty) |
-| Objects | Put (Content-MD5 check, `opc-meta-*`, conditional headers), Get (Range → 206), Head, Delete |
-| Listing | ListObjects with `prefix`/`start`/`end`/`delimiter`/`limit`/`fields`, `nextStartWith` truncation |
-| Actions | RenameObject; CopyObject (async, work request, terminal status `COMPLETED`); BatchDeleteObjects (per-object success/failure results, optional per-entry `ifMatch`, `isSkipDeletedResult`) |
+| Buckets | Create, Get, Head, List, Update (including `versioning`), Delete (must hold no objects or object versions) |
+| Objects | Put (Content-MD5 check, `opc-meta-*`, conditional headers), Get (Range → 206), Head, Delete; `versionId` on Get, Head and Delete |
+| Listing | ListObjects with `prefix`/`start`/`end`/`delimiter`/`limit`/`fields`, `nextStartWith` truncation; ListObjectVersions (`/objectversions`), paged with `opc-next-page` |
+| Actions | RenameObject; CopyObject (`sourceVersionId`, async, work request, terminal status `COMPLETED`); BatchDeleteObjects (per-object success/failure results, optional per-entry `ifMatch`, `isSkipDeletedResult`) |
 | Multipart | CreateMultipartUpload, UploadPart, Commit, Abort, List |
 | Pre-authenticated requests | Create, Get, List, Delete; anonymous data path via `/p/{token}/…` |
 | Replication | CreateReplicationPolicy, GetReplicationPolicy, ListReplicationPolicies, DeleteReplicationPolicy, ListReplicationSources, MakeBucketWritable |
@@ -54,7 +54,44 @@ oci os object get $E --namespace floci-local --bucket-name demo \
 - `CommitMultipartUpload` returns `opc-multipart-md5`: the Base64 MD5 of the committed parts' binary
   MD5 digests in part-number order, followed by `-` and the part count. `GetObject` and `HeadObject`
   return the same value for multipart objects, in place of `content-md5`.
-- Object versioning, retention rules and lifecycle policies are not implemented yet.
+- Deleting a bucket that still holds objects, previous versions or delete markers answers
+  `409 BucketNotEmpty`.
+- Retention rules and lifecycle policies are not implemented yet.
+
+## Versioning
+
+A bucket's `versioning` is `Disabled` by default. Create a bucket with `"versioning": "Enabled"`, or
+update it to `Enabled` or `Suspended`. As on real OCI:
+
+- Versioning can be suspended but never disabled again: `"versioning": "Disabled"` on an update is
+  `400 InvalidParameter`.
+- Every object has a version ID, on unversioned buckets too. PutObject, GetObject, HeadObject,
+  CommitMultipartUpload and RenameObject return it in the `version-id` header.
+- On an `Enabled` bucket an upload keeps the object it replaces as a previous version, and a delete
+  without `versionId` keeps the object and adds a delete marker. That DeleteObject answers
+  `version-id` (the marker's) and `is-delete-marker: true`.
+- A delete with `versionId` removes that version, object or delete marker, for good, and answers
+  `last-modified` only. Deleting the delete marker brings the object back.
+- A `Suspended` bucket uploads and deletes like a `Disabled` one and keeps its earlier versions.
+- `GetObject` with `versionId` reads a previous version. `CopyObject` with `sourceVersionId` copies
+  one, and the copy becomes the latest version at the destination.
+- `ListObjectVersions` returns `{"items": [...], "prefixes": [...]}`, by name and then newest first.
+  Every item has `name`, `timeModified`, `versionId` and `isDeleteMarker`; `fields` adds `size`,
+  `etag`, `md5`, `timeCreated` and `storageTier` to object versions.
+- Only the latest version is replicated, and a replication destination cannot be versioned.
+
+floci-oci's own choices, where no OCI source states the behaviour:
+
+- When the latest version is deleted by `versionId`, or deleted on a `Suspended` bucket, the newest
+  previous version becomes the latest unless it is a delete marker.
+- GetObject and HeadObject on a delete marker's `versionId` answer `404 ObjectNotFound`, and a delete
+  without `versionId` on an object whose latest version is a marker does too.
+- RenameObject deletes the source the way DeleteObject does, so on an `Enabled` bucket the source
+  keeps its versions and gets a delete marker.
+- Enabling versioning on a replication destination answers `409 Conflict`, and creating a policy
+  towards a versioned bucket answers `409 ReplicationPolicyConflict`.
+- `opc-next-page` names the last entry of the page, not an offset, so deleting a page of versions
+  before asking for the next one skips nothing.
 
 ## Replication
 
