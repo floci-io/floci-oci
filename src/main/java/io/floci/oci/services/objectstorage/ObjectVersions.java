@@ -238,6 +238,9 @@ final class ObjectVersions {
         if (latest.isPresent() && versionId.equals(latest.get().getVersionId())) {
             TenancyAwareStorageBackend.deleteAllIn(objects, partition,
                     List.of(ObjectStorageService.objectKey(bucketName, name)));
+            // A stop in the middle of a promotion can leave a saved copy of this same version; it goes too,
+            // so the deleted version is not promoted back.
+            TenancyAwareStorageBackend.deleteAllIn(versions, partition, List.of(versionKey(bucketName, versionId)));
             return promote(partition, bucketName, name);
         }
         StoredOsObject version = previous(partition, bucketName, name, versionId)

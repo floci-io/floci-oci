@@ -52,4 +52,14 @@ class ObjectVersionsTest {
         assertEquals(2, listed.size());
         assertTrue(listed.containsAll(List.of("v0", "v1")));
     }
+
+    @Test
+    void deletingAVersionLeftInBothStoresRemovesBothCopies() {
+        TenancyAwareStorageBackend.putIn(objects, PARTITION, "b/o", object("o", "etag-1", "v1"));
+        TenancyAwareStorageBackend.putIn(previous, PARTITION, "b/v1", object("o", "etag-1", "v1"));
+
+        assertTrue(versions.deleteVersion(PARTITION, "b", "o", "v1", "not found").isEmpty());
+        assertTrue(versions.all(PARTITION, "b").isEmpty());
+        assertFalse(versions.hasPrevious(PARTITION, "b"));
+    }
 }
