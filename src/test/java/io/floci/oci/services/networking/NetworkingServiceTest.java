@@ -9,6 +9,7 @@ import io.floci.oci.services.networking.model.StoredNetworkResource;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -250,6 +251,20 @@ class NetworkingServiceTest {
         assertEquals("igw", stored.getDisplayName());
         assertEquals(true, stored.getAttributes().get("isEnabled"));
         assertEquals(etag, stored.getEtag());
+    }
+
+    @Test
+    void rulesAddedInOneBatchGetDistinctIds() {
+        StoredNetworkResource vcn = vcn("10.0.0.0/16", null);
+        StoredNetworkResource nsg = service.create(NetworkKind.NETWORK_SECURITY_GROUP, Map.of(
+                "compartmentId", COMPARTMENT, "vcnId", vcn.getId()));
+        List<Map<String, Object>> batch = new ArrayList<>();
+        for (int i = 0; i < 3000; i++) {
+            batch.add(Map.of("direction", "INGRESS", "protocol", "6", "source", "10.0.0.0/16"));
+        }
+
+        List<Map<String, Object>> added = service.addSecurityRules(nsg.getId(), batch);
+        assertEquals(3000, added.stream().map(rule -> rule.get("id")).distinct().count());
     }
 
     @Test

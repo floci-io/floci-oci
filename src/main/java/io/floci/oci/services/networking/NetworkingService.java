@@ -355,9 +355,11 @@ public class NetworkingService implements CompartmentUsage {
             rule.put("id", newRuleId(nsg));
             rule.put("isValid", true);
             rule.put("timeCreated", Instant.now().toString());
+            // Added at once, so newRuleId sees the IDs this batch already took. nsg is a copy, saved
+            // only after every rule passes.
+            nsg.getSecurityRules().add(rule);
             added.add(rule);
         }
-        nsg.getSecurityRules().addAll(added);
         nsg.setEtag(Etags.newEtag());
         resources.put(nsgId, nsg);
         return added;
