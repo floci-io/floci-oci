@@ -4,12 +4,14 @@
 |---|---|---|
 | [Identity (IAM)](identity.md) | `/20160918/…` | Compartments, users, groups, memberships, policies, reference data, work requests |
 | [Object Storage](object-storage.md) | `/n/{ns}/b/{bucket}/o/{object}` | Buckets, objects, listing, rename, copy, batch delete, multipart, pre-authenticated requests |
+| [Networking (VCN)](networking.md) | `/20160918/…` | VCNs with default route table, security list and DHCP options, subnets, internet, NAT and service gateways, route tables, security lists, network security groups and rules, DHCP options, CIDR validation |
 | [Queue](queue.md) | `/20210201/…` | Queues (work-request driven), messages with visibility timeouts and DLQ, stats, channels |
 | [Vault, KMS & Secrets](kms-vault.md) | `/20180608/…`, `/20190301/…` | Vaults, keys and versions, **real** AES-GCM/RSA/ECDSA crypto, secrets and bundles |
 | [Streaming](streaming.md) | `/20180418/…` | Streams, partitioned log, cursors (incl. group cursors), commit/heartbeat |
 | [Functions](functions.md) | `/20260325/…`, `/20181201/…` | Applications, functions, real invocation via an `fnproject/fnserver` sidecar |
 | [Events](events.md) | `/20181201/rules` | Rules with Oracle's condition matching (nesting, arrays, wildcards, child compartments); Object Storage bucket and object events delivered to Functions and Streaming |
 | [Container Engine for Kubernetes (OKE)](containerengine.md) | `/20180222/…` | Clusters CRUD, Node Pools CRUD, Options, Kubeconfig generation, work requests, real k3s sidecar |
+| [Container Registry (OCIR)](artifacts.md) | `/20160918/container/…`, `/v2/…` | Container repositories, images read live from the registry, container configuration with create-on-first-push; Docker push and pull through a real `registry:2` sidecar |
 | [Database with PostgreSQL](psql.md) | `/20220915/…` | DB systems CRUD, start/stop/restart, password reset, connection details with a CA certificate, shapes, custom configurations, default configurations, backups, restore and point-in-time recovery, instance patches, failover and replicas, Kerberos and insight settings, work requests, real PostgreSQL sidecar |
 | [Organizations](organizations.md) | `/20230401/…` | Child tenancies with their own home region and isolated storage, organizations, organization tenancies, transfer approval, links and link features, invitations, governance opt-in, domains and domain governance, subscriptions and subscription mappings, orders, work requests |
 | [Governance Rules](governance-rules.md) | `/20220504/…` | Governance rules (quota, tag, allowed regions), inclusion criteria, tenancy attachments, enforced rules, work requests; allowed regions enforced on region subscriptions |
@@ -47,12 +49,14 @@ Every service follows the OCI wire contract:
 FLOCI_OCI_SERVICES_IDENTITY_ENABLED=false
 FLOCI_OCI_SERVICES_OBJECTSTORAGE_ENABLED=false
 FLOCI_OCI_SERVICES_QUEUE_ENABLED=false
+FLOCI_OCI_SERVICES_NETWORKING_ENABLED=false
 FLOCI_OCI_SERVICES_KMS_ENABLED=false
 FLOCI_OCI_SERVICES_VAULT_ENABLED=false
 FLOCI_OCI_SERVICES_STREAMING_ENABLED=false
 FLOCI_OCI_SERVICES_FUNCTIONS_ENABLED=false
 FLOCI_OCI_SERVICES_EVENTS_ENABLED=false
 FLOCI_OCI_SERVICES_OKE_ENABLED=false
+FLOCI_OCI_SERVICES_ARTIFACTS_ENABLED=false
 FLOCI_OCI_SERVICES_PSQL_ENABLED=false
 ```
 

@@ -11,6 +11,7 @@ import io.floci.oci.core.common.Resettable;
 import io.floci.oci.core.common.Ocids;
 import io.floci.oci.core.common.ServiceDescriptor;
 import io.floci.oci.core.common.ServiceRegistry;
+import io.floci.oci.core.storage.InMemoryStorage;
 import io.floci.oci.core.storage.StorageBackend;
 import io.floci.oci.core.storage.StorageFactory;
 import io.floci.oci.core.storage.TenancyAwareStorageBackend;
@@ -20,6 +21,7 @@ import io.floci.oci.services.objectstorage.model.StoredBucket;
 import io.floci.oci.services.objectstorage.model.StoredMultipartUpload;
 import io.floci.oci.services.objectstorage.model.StoredOsObject;
 import io.floci.oci.services.objectstorage.model.StoredPar;
+import io.floci.oci.services.objectstorage.model.StoredReplicationPolicy;
 import io.quarkus.runtime.StartupEvent;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.Observes;
@@ -57,6 +59,7 @@ public class ObjectStorageService implements CompartmentUsage, Resettable {
     private final StorageBackend<String, StoredOsObject> objects;
     private final StorageBackend<String, StoredMultipartUpload> uploads;
     private final StorageBackend<String, StoredPar> pars;
+    private final BucketReplication replication;
     private final EmulatorConfig config;
     private final OciContext ociContext;
     private final ServiceRegistry serviceRegistry;
@@ -86,6 +89,10 @@ public class ObjectStorageService implements CompartmentUsage, Resettable {
                 new TypeReference<Map<String, StoredMultipartUpload>>() {});
         this.pars = storageFactory.create("objectstorage", "objectstorage-pars.json",
                 new TypeReference<Map<String, StoredPar>>() {});
+        this.replication = new BucketReplication(
+                storageFactory.create("objectstorage", "objectstorage-replication.json",
+                        new TypeReference<Map<String, StoredReplicationPolicy>>() {}),
+                buckets, objects, ociContext);
         storageFactory.afterLoad(this::migrateSavedNamespaces);
     }
 
@@ -95,11 +102,24 @@ public class ObjectStorageService implements CompartmentUsage, Resettable {
                          StorageBackend<String, StoredPar> pars,
                          EmulatorConfig config,
                          WorkRequestService workRequests) {
-        this.ociContext = OciContext.fromConfig(config);
+        this(buckets, objects, uploads, pars, new InMemoryStorage<>(), config, workRequests,
+                OciContext.fromConfig(config));
+    }
+
+    ObjectStorageService(StorageBackend<String, StoredBucket> buckets,
+                         StorageBackend<String, StoredOsObject> objects,
+                         StorageBackend<String, StoredMultipartUpload> uploads,
+                         StorageBackend<String, StoredPar> pars,
+                         StorageBackend<String, StoredReplicationPolicy> policies,
+                         EmulatorConfig config,
+                         WorkRequestService workRequests,
+                         OciContext ociContext) {
+        this.ociContext = ociContext;
         this.buckets = buckets;
         this.objects = objects;
         this.uploads = uploads;
         this.pars = pars;
+        this.replication = new BucketReplication(policies, buckets, objects, ociContext);
         this.config = config;
         this.serviceRegistry = null;
         this.workRequests = workRequests;
@@ -290,20 +310,29 @@ public class ObjectStorageService implements CompartmentUsage, Resettable {
     }
 
     public void deleteBucket(String namespaceName, String bucketName, String ifMatch) {
-        StoredBucket b = getBucket(namespaceName, bucketName);
-        Etags.checkIfMatch(ifMatch, b.getEtag());
-        boolean hasObjects = !objects.scan(k -> k.startsWith(bucketName + "/")).isEmpty();
-        if (hasObjects) {
-            throw OciException.conflict("Bucket named '" + bucketName + "' is not empty. Delete all objects first.");
-        }
-        pars.scan(k -> true).stream()
-                .filter(p -> bucketName.equals(p.getBucket()))
-                .forEach(p -> {
-                    pars.delete(p.getToken());
-                    parOwners.remove(p.getToken());
-                });
-        buckets.delete(bucketName);
-        emitBucketEvent("deletebucket", b);
+        replication.writing(ociContext.region(), bucketName, () -> {
+            StoredBucket b = getBucket(namespaceName, bucketName);
+            Etags.checkIfMatch(ifMatch, b.getEtag());
+            if (replication.isSource(bucketName)) {
+                throw OciException.bucketReplicationEnabled(bucketName);
+            }
+            if (b.getIsReadOnly()) {
+                throw OciException.conflict("Bucket '" + bucketName + "' is the destination of a replication policy. "
+                        + "Make it writable before deleting it.");
+            }
+            boolean hasObjects = !objects.scan(k -> k.startsWith(bucketName + "/")).isEmpty();
+            if (hasObjects) {
+                throw OciException.conflict("Bucket named '" + bucketName + "' is not empty. Delete all objects first.");
+            }
+            pars.scan(k -> true).stream()
+                    .filter(p -> bucketName.equals(p.getBucket()))
+                    .forEach(p -> {
+                        pars.delete(p.getToken());
+                        parOwners.remove(p.getToken());
+                    });
+            buckets.delete(bucketName);
+            emitBucketEvent("deletebucket", b);
+        });
     }
 
     // ── Objects ────────────────────────────────────────────────────────────────
@@ -312,15 +341,17 @@ public class ObjectStorageService implements CompartmentUsage, Resettable {
                                     byte[] data, String contentType, String contentMd5,
                                     Map<String, String> metadata,
                                     String ifMatch, String ifNoneMatch) {
-        return putObject(namespaceName, bucketName, objectName, data, contentType, contentMd5,
-                metadata, ifMatch, ifNoneMatch, null);
+        return replication.writing(ociContext.region(), bucketName, () -> {
+            return putObject(namespaceName, bucketName, objectName, data, contentType, contentMd5,
+                    metadata, ifMatch, ifNoneMatch, null);
+        });
     }
 
     private StoredOsObject putObject(String namespaceName, String bucketName, String objectName,
                                      byte[] data, String contentType, String contentMd5,
                                      Map<String, String> metadata,
                                      String ifMatch, String ifNoneMatch, String multipartMd5) {
-        getBucket(namespaceName, bucketName);
+        replication.requireWritable(getBucket(namespaceName, bucketName));
         String key = objectKey(bucketName, objectName);
         StoredOsObject existing = objects.get(key).orElse(null);
         Etags.checkIfMatch(ifMatch, existing != null ? existing.getEtag() : null);
@@ -345,6 +376,7 @@ public class ObjectStorageService implements CompartmentUsage, Resettable {
         o.setTimeModified(now);
         o.setMetadata(metadata == null ? Map.of() : metadata);
         objects.put(key, o);
+        replication.replicatePut(ociContext.region(), bucketName, o);
         emitObjectEvent(existing == null ? "createobject" : "updateobject", bucketName, o);
         return o;
     }
@@ -358,10 +390,14 @@ public class ObjectStorageService implements CompartmentUsage, Resettable {
     }
 
     public void deleteObject(String namespaceName, String bucketName, String objectName, String ifMatch) {
-        StoredOsObject o = getObject(namespaceName, bucketName, objectName);
-        Etags.checkIfMatch(ifMatch, o.getEtag());
-        objects.delete(objectKey(bucketName, objectName));
-        emitObjectEvent("deleteobject", bucketName, o);
+        replication.writing(ociContext.region(), bucketName, () -> {
+            replication.requireWritable(getBucket(namespaceName, bucketName));
+            StoredOsObject o = getObject(namespaceName, bucketName, objectName);
+            Etags.checkIfMatch(ifMatch, o.getEtag());
+            objects.delete(objectKey(bucketName, objectName));
+            replication.replicateDelete(ociContext.region(), bucketName, objectName);
+            emitObjectEvent("deleteobject", bucketName, o);
+        });
     }
 
     record BatchDeleteItem(String objectName, String ifMatch) {
@@ -377,23 +413,26 @@ public class ObjectStorageService implements CompartmentUsage, Resettable {
 
     BatchDeleteResult batchDeleteObjects(String namespaceName, String bucketName,
                                                 List<BatchDeleteItem> items) {
-        getBucket(namespaceName, bucketName);
-        List<BatchDeleteResult.DeletedObject> deleted = new ArrayList<>();
-        List<BatchDeleteResult.FailedDelete> failed = new ArrayList<>();
-        for (BatchDeleteItem item : items) {
-            try {
-                StoredOsObject o = getObject(namespaceName, bucketName, item.objectName());
-                Etags.checkIfMatch(item.ifMatch(), o.getEtag());
-                objects.delete(objectKey(bucketName, item.objectName()));
-                emitObjectEvent("deleteobject", bucketName, o);
-                deleted.add(new BatchDeleteResult.DeletedObject(
-                        item.objectName(), Instant.now()));
-            } catch (OciException e) {
-                failed.add(new BatchDeleteResult.FailedDelete(
-                        item.objectName(), e.getHttpStatus(), e.getMessage()));
+        return replication.writing(ociContext.region(), bucketName, () -> {
+            replication.requireWritable(getBucket(namespaceName, bucketName));
+            List<BatchDeleteResult.DeletedObject> deleted = new ArrayList<>();
+            List<BatchDeleteResult.FailedDelete> failed = new ArrayList<>();
+            for (BatchDeleteItem item : items) {
+                try {
+                    StoredOsObject o = getObject(namespaceName, bucketName, item.objectName());
+                    Etags.checkIfMatch(item.ifMatch(), o.getEtag());
+                    objects.delete(objectKey(bucketName, item.objectName()));
+                    replication.replicateDelete(ociContext.region(), bucketName, item.objectName());
+                    emitObjectEvent("deleteobject", bucketName, o);
+                    deleted.add(new BatchDeleteResult.DeletedObject(
+                            item.objectName(), Instant.now()));
+                } catch (OciException e) {
+                    failed.add(new BatchDeleteResult.FailedDelete(
+                            item.objectName(), e.getHttpStatus(), e.getMessage()));
+                }
             }
-        }
-        return new BatchDeleteResult(deleted, failed);
+            return new BatchDeleteResult(deleted, failed);
+        });
     }
 
     public record ObjectListing(List<StoredOsObject> objects, List<String> prefixes, String nextStartWith) {
@@ -441,23 +480,28 @@ public class ObjectStorageService implements CompartmentUsage, Resettable {
     public StoredOsObject renameObject(String namespaceName, String bucketName,
                                        String sourceName, String newName,
                                        String srcIfMatch, String newIfMatch, String newIfNoneMatch) {
-        StoredOsObject source = getObject(namespaceName, bucketName, sourceName);
-        Etags.checkIfMatch(srcIfMatch, source.getEtag());
-        StoredOsObject target = objects.get(objectKey(bucketName, newName)).orElse(null);
-        Etags.checkIfMatch(newIfMatch, target != null ? target.getEtag() : null);
-        Etags.checkIfNoneMatch(newIfNoneMatch, target != null ? target.getEtag() : null);
+        return replication.writing(ociContext.region(), bucketName, () -> {
+            replication.requireWritable(getBucket(namespaceName, bucketName));
+            StoredOsObject source = getObject(namespaceName, bucketName, sourceName);
+            Etags.checkIfMatch(srcIfMatch, source.getEtag());
+            StoredOsObject target = objects.get(objectKey(bucketName, newName)).orElse(null);
+            Etags.checkIfMatch(newIfMatch, target != null ? target.getEtag() : null);
+            Etags.checkIfNoneMatch(newIfNoneMatch, target != null ? target.getEtag() : null);
 
-        StoredOsObject removed = new StoredOsObject();
-        removed.setName(sourceName);
-        removed.setEtag(source.getEtag());
-        source.setName(newName);
-        source.setEtag(Etags.newEtag());
-        source.setTimeModified(Instant.now().toString());
-        objects.put(objectKey(bucketName, newName), source);
-        objects.delete(objectKey(bucketName, sourceName));
-        emitObjectEvent("deleteobject", bucketName, removed);
-        emitObjectEvent(target == null ? "createobject" : "updateobject", bucketName, source);
-        return source;
+            StoredOsObject removed = new StoredOsObject();
+            removed.setName(sourceName);
+            removed.setEtag(source.getEtag());
+            source.setName(newName);
+            source.setEtag(Etags.newEtag());
+            source.setTimeModified(Instant.now().toString());
+            objects.put(objectKey(bucketName, newName), source);
+            objects.delete(objectKey(bucketName, sourceName));
+            replication.replicatePut(ociContext.region(), bucketName, source);
+            replication.replicateDelete(ociContext.region(), bucketName, sourceName);
+            emitObjectEvent("deleteobject", bucketName, removed);
+            emitObjectEvent(target == null ? "createobject" : "updateobject", bucketName, source);
+            return source;
+        });
     }
 
     /**
@@ -469,40 +513,43 @@ public class ObjectStorageService implements CompartmentUsage, Resettable {
     public String copyObject(String namespaceName, String bucketName, String sourceObjectName,
                              String destRegion, String destNamespace, String destBucket,
                              String destObjectName, String sourceIfMatch) {
-        StoredOsObject source = getObject(namespaceName, bucketName, sourceObjectName);
-        Etags.checkIfMatch(sourceIfMatch, source.getEtag());
-        String destPartition = TenancyAwareStorageBackend.regionalPartition(ociContext.tenancyId(), destRegion);
-        if (TenancyAwareStorageBackend.getIn(buckets, destPartition, destBucket).isEmpty()) {
-            throw OciException.bucketNotFound("Either the bucket named '" + destBucket
-                    + "' does not exist in the namespace '" + destNamespace + "' in region " + destRegion
-                    + " or you are not authorized to access it");
-        }
+        return replication.writing(destRegion, destBucket, () -> {
+            StoredOsObject source = getObject(namespaceName, bucketName, sourceObjectName);
+            Etags.checkIfMatch(sourceIfMatch, source.getEtag());
+            String destPartition = TenancyAwareStorageBackend.regionalPartition(ociContext.tenancyId(), destRegion);
+            StoredBucket destination = TenancyAwareStorageBackend.getIn(buckets, destPartition, destBucket)
+                    .orElseThrow(() -> OciException.bucketNotFound("Either the bucket named '" + destBucket
+                            + "' does not exist in the namespace '" + destNamespace + "' in region " + destRegion
+                            + " or you are not authorized to access it"));
+            replication.requireWritable(destination);
 
-        StoredOsObject copy = new StoredOsObject();
-        copy.setName(destObjectName);
-        copy.setData(source.getData());
-        copy.setMd5(source.getMd5());
-        copy.setMultipartMd5(source.getMultipartMd5());
-        copy.setEtag(Etags.newEtag());
-        copy.setContentType(source.getContentType());
-        copy.setStorageTier(source.getStorageTier());
-        String now = Instant.now().toString();
-        copy.setTimeCreated(now);
-        copy.setTimeModified(now);
-        copy.setMetadata(source.getMetadata());
-        boolean replaced = TenancyAwareStorageBackend.getIn(objects, destPartition,
-                objectKey(destBucket, destObjectName)).isPresent();
-        TenancyAwareStorageBackend.putIn(objects, destPartition, objectKey(destBucket, destObjectName), copy);
-        if (destRegion == null || destRegion.equals(ociContext.region())) {
-            emitObjectEvent(replaced ? "updateobject" : "createobject", destBucket, copy);
-        }
+            StoredOsObject copy = new StoredOsObject();
+            copy.setName(destObjectName);
+            copy.setData(source.getData());
+            copy.setMd5(source.getMd5());
+            copy.setMultipartMd5(source.getMultipartMd5());
+            copy.setEtag(Etags.newEtag());
+            copy.setContentType(source.getContentType());
+            copy.setStorageTier(source.getStorageTier());
+            String now = Instant.now().toString();
+            copy.setTimeCreated(now);
+            copy.setTimeModified(now);
+            copy.setMetadata(source.getMetadata());
+            boolean replaced = TenancyAwareStorageBackend.getIn(objects, destPartition,
+                    objectKey(destBucket, destObjectName)).isPresent();
+            TenancyAwareStorageBackend.putIn(objects, destPartition, objectKey(destBucket, destObjectName), copy);
+            replication.replicatePut(destRegion, destBucket, copy);
+            if (destRegion == null || destRegion.equals(ociContext.region())) {
+                emitObjectEvent(replaced ? "updateobject" : "createobject", destBucket, copy);
+            }
 
-        StoredBucket bucket = getBucket(namespaceName, bucketName);
-        // Object Storage work requests terminate in COMPLETED (Identity uses SUCCEEDED).
-        return workRequests.completed("objectstorage", "COPY_OBJECT", bucket.getCompartmentId(),
-                List.of(WorkRequestService.resource("object", "CREATED", destObjectName,
-                        "/n/" + namespace() + "/b/" + destBucket + "/o/" + destObjectName)),
-                "COMPLETED");
+            StoredBucket bucket = getBucket(namespaceName, bucketName);
+            // Object Storage work requests terminate in COMPLETED (Identity uses SUCCEEDED).
+            return workRequests.completed("objectstorage", "COPY_OBJECT", bucket.getCompartmentId(),
+                    List.of(WorkRequestService.resource("object", "CREATED", destObjectName,
+                            "/n/" + namespace() + "/b/" + destBucket + "/o/" + destObjectName)),
+                    "COMPLETED");
+        });
     }
 
     // ── Multipart uploads ──────────────────────────────────────────────────────
@@ -510,20 +557,22 @@ public class ObjectStorageService implements CompartmentUsage, Resettable {
     public StoredMultipartUpload createMultipartUpload(String namespaceName, String bucketName,
                                                        String objectName, String contentType,
                                                        Map<String, String> metadata) {
-        getBucket(namespaceName, bucketName);
-        if (objectName == null || objectName.isBlank()) {
-            throw OciException.missingParameter("object is required");
-        }
-        StoredMultipartUpload u = new StoredMultipartUpload();
-        u.setNamespace(namespace());
-        u.setBucket(bucketName);
-        u.setObject(objectName);
-        u.setUploadId(UUID.randomUUID().toString());
-        u.setTimeCreated(Instant.now().toString());
-        u.setContentType(contentType);
-        u.setMetadata(metadata);
-        uploads.put(uploadKey(bucketName, u.getUploadId()), u);
-        return u;
+        return replication.writing(ociContext.region(), bucketName, () -> {
+            replication.requireWritable(getBucket(namespaceName, bucketName));
+            if (objectName == null || objectName.isBlank()) {
+                throw OciException.missingParameter("object is required");
+            }
+            StoredMultipartUpload u = new StoredMultipartUpload();
+            u.setNamespace(namespace());
+            u.setBucket(bucketName);
+            u.setObject(objectName);
+            u.setUploadId(UUID.randomUUID().toString());
+            u.setTimeCreated(Instant.now().toString());
+            u.setContentType(contentType);
+            u.setMetadata(metadata);
+            uploads.put(uploadKey(bucketName, u.getUploadId()), u);
+            return u;
+        });
     }
 
     public record UploadedPart(String etag, String md5) {
@@ -544,31 +593,33 @@ public class ObjectStorageService implements CompartmentUsage, Resettable {
     public StoredOsObject commitMultipartUpload(String namespaceName, String bucketName,
                                                 String objectName, String uploadId,
                                                 List<Map<String, Object>> partsToCommit) {
-        StoredMultipartUpload u = getUpload(bucketName, uploadId, objectName);
-        if (partsToCommit == null || partsToCommit.isEmpty()) {
-            throw OciException.invalidParameter("partsToCommit must contain at least one part");
-        }
-        ByteArrayOutputStream assembled = new ByteArrayOutputStream();
-        List<byte[]> committedParts = new ArrayList<>();
-        List<Map<String, Object>> ordered = partsToCommit.stream()
-                .sorted(Comparator.comparingInt(p -> ((Number) p.get("partNum")).intValue()))
-                .toList();
-        for (Map<String, Object> partRef : ordered) {
-            int partNum = ((Number) partRef.get("partNum")).intValue();
-            String etag = (String) partRef.get("etag");
-            StoredMultipartUpload.Part part = u.getParts().get(partNum);
-            if (part == null || !part.getEtag().equals(etag)) {
-                throw OciException.invalidParameter(
-                        "Part " + partNum + " with etag " + etag + " was not uploaded.");
+        return replication.writing(ociContext.region(), bucketName, () -> {
+            StoredMultipartUpload u = getUpload(bucketName, uploadId, objectName);
+            if (partsToCommit == null || partsToCommit.isEmpty()) {
+                throw OciException.invalidParameter("partsToCommit must contain at least one part");
             }
-            assembled.writeBytes(part.getData());
-            committedParts.add(part.getData());
-        }
-        byte[] data = assembled.toByteArray();
-        StoredOsObject o = putObject(namespaceName, bucketName, u.getObject(), data,
-                u.getContentType(), null, u.getMetadata(), null, null, multipartMd5(committedParts));
-        uploads.delete(uploadKey(bucketName, uploadId));
-        return o;
+            ByteArrayOutputStream assembled = new ByteArrayOutputStream();
+            List<byte[]> committedParts = new ArrayList<>();
+            List<Map<String, Object>> ordered = partsToCommit.stream()
+                    .sorted(Comparator.comparingInt(p -> ((Number) p.get("partNum")).intValue()))
+                    .toList();
+            for (Map<String, Object> partRef : ordered) {
+                int partNum = ((Number) partRef.get("partNum")).intValue();
+                String etag = (String) partRef.get("etag");
+                StoredMultipartUpload.Part part = u.getParts().get(partNum);
+                if (part == null || !part.getEtag().equals(etag)) {
+                    throw OciException.invalidParameter(
+                            "Part " + partNum + " with etag " + etag + " was not uploaded.");
+                }
+                assembled.writeBytes(part.getData());
+                committedParts.add(part.getData());
+            }
+            byte[] data = assembled.toByteArray();
+            StoredOsObject o = putObject(namespaceName, bucketName, u.getObject(), data,
+                    u.getContentType(), null, u.getMetadata(), null, null, multipartMd5(committedParts));
+            uploads.delete(uploadKey(bucketName, uploadId));
+            return o;
+        });
     }
 
     public void abortMultipartUpload(String namespaceName, String bucketName,
@@ -592,6 +643,42 @@ public class ObjectStorageService implements CompartmentUsage, Resettable {
             throw OciException.notAuthorizedOrNotFound("No such upload for object: " + objectName);
         }
         return u;
+    }
+
+    // ── Replication ────────────────────────────────────────────────────────────
+
+    public StoredReplicationPolicy createReplicationPolicy(String namespaceName, String bucketName, String name,
+                                                           String destinationRegionName,
+                                                           String destinationBucketName) {
+        getBucket(namespaceName, bucketName);
+        return replication.create(namespace(), bucketName, () -> getBucket(namespaceName, bucketName), name,
+                destinationRegionName, destinationBucketName);
+    }
+
+    public StoredReplicationPolicy getReplicationPolicy(String namespaceName, String bucketName,
+                                                        String replicationId) {
+        getBucket(namespaceName, bucketName);
+        return replication.get(bucketName, replicationId);
+    }
+
+    public List<StoredReplicationPolicy> listReplicationPolicies(String namespaceName, String bucketName) {
+        getBucket(namespaceName, bucketName);
+        return replication.list(bucketName);
+    }
+
+    public void deleteReplicationPolicy(String namespaceName, String bucketName, String replicationId) {
+        getBucket(namespaceName, bucketName);
+        replication.delete(bucketName, replicationId);
+    }
+
+    public List<StoredReplicationPolicy> listReplicationSources(String namespaceName, String bucketName) {
+        getBucket(namespaceName, bucketName);
+        return replication.sourcesOf(bucketName);
+    }
+
+    public void makeBucketWritable(String namespaceName, String bucketName) {
+        getBucket(namespaceName, bucketName);
+        replication.makeWritable(bucketName, () -> getBucket(namespaceName, bucketName));
     }
 
     // ── Pre-authenticated requests ─────────────────────────────────────────────
@@ -735,7 +822,7 @@ public class ObjectStorageService implements CompartmentUsage, Resettable {
         }
     }
 
-    private static String objectKey(String bucketName, String objectName) {
+    static String objectKey(String bucketName, String objectName) {
         return bucketName + "/" + objectName;
     }
 

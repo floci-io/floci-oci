@@ -18,7 +18,7 @@ setup() {
 @test "apply creates identity and object storage resources" {
     run "$TF_BIN" apply -auto-approve -input=false -no-color
     [ "$status" -eq 0 ]
-    [[ "$output" == *"Apply complete! Resources: 17 added"* ]]
+    [[ "$output" == *"Apply complete! Resources: 32 added"* ]]
 }
 
 @test "outputs reflect emulator state" {
@@ -61,6 +61,15 @@ setup() {
     run "$TF_BIN" output -raw cluster_type
     [ "$output" = "ENHANCED_CLUSTER" ]
 
+    run "$TF_BIN" output -raw vcn_domain_name
+    [ "$output" = "tfcompat.oraclevcn.com" ]
+
+    run "$TF_BIN" output -raw api_subnet_domain_name
+    [ "$output" = "api.tfcompat.oraclevcn.com" ]
+
+    run "$TF_BIN" output -raw container_repository_namespace
+    [ "$output" = "floci-local" ]
+
     run "$TF_BIN" output -raw rule_state
     [ "$output" = "ACTIVE" ]
 
@@ -96,7 +105,7 @@ setup() {
 @test "destroy removes every resource" {
     run "$TF_BIN" destroy -auto-approve -input=false -no-color
     [ "$status" -eq 0 ]
-    [[ "$output" == *"Destroy complete! Resources: 17 destroyed"* ]]
+    [[ "$output" == *"Destroy complete! Resources: 32 destroyed"* ]]
 
     run curl -s -o /dev/null -w '%{http_code}' \
         "${FLOCI_OCI_ENDPOINT:-http://localhost:4599}/n/floci-local/b/tf-compat-bucket"
