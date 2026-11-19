@@ -12,8 +12,10 @@ import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -157,15 +159,21 @@ final class ObjectVersions {
         }
     }
 
-    /** The live latest version of {@code name}, assigning a version ID to an object stored before versions existed. */
+    /**
+     * The live latest version of {@code name}. An object stored before versions existed has no version ID;
+     * it gets one derived from its name and ETag, the same on every read, without a write, so a read never
+     * races a concurrent write to the same key. The ID is stored once the object is next moved or replaced.
+     */
     Optional<StoredOsObject> latest(String partition, String bucketName, String name) {
-        String key = ObjectStorageService.objectKey(bucketName, name);
-        Optional<StoredOsObject> latest = TenancyAwareStorageBackend.getIn(objects, partition, key);
-        latest.filter(o -> o.getVersionId() == null).ifPresent(o -> {
-            o.setVersionId(newVersionId());
-            TenancyAwareStorageBackend.putIn(objects, partition, key, o);
-        });
+        Optional<StoredOsObject> latest = TenancyAwareStorageBackend.getIn(objects, partition,
+                ObjectStorageService.objectKey(bucketName, name));
+        latest.filter(o -> o.getVersionId() == null).ifPresent(o -> o.setVersionId(legacyVersionId(o)));
         return latest;
+    }
+
+    static String legacyVersionId(StoredOsObject o) {
+        return UUID.nameUUIDFromBytes((o.getName() + "\u0000" + o.getEtag()).getBytes(StandardCharsets.UTF_8))
+                .toString();
     }
 
     /** One version of {@code name}, the latest included; a delete marker is not an object and is not found. */
@@ -199,12 +207,14 @@ final class ObjectVersions {
      */
     Deletion deleteLatest(String partition, StoredBucket bucket, StoredOsObject latest) {
         String key = ObjectStorageService.objectKey(bucket.getName(), latest.getName());
-        TenancyAwareStorageBackend.deleteAllIn(objects, partition, List.of(key));
         if (!isEnabled(bucket)) {
+            TenancyAwareStorageBackend.deleteAllIn(objects, partition, List.of(key));
             promote(partition, bucket.getName(), latest.getName());
             return new Deletion(null);
         }
+        // Saved as a previous version before the live copy goes, so a stop in between loses nothing.
         keepAsPrevious(partition, bucket.getName(), latest);
+        TenancyAwareStorageBackend.deleteAllIn(objects, partition, List.of(key));
         StoredOsObject marker = new StoredOsObject();
         marker.setName(latest.getName());
         marker.setVersionId(newVersionId());
@@ -240,11 +250,17 @@ final class ObjectVersions {
     /** Every version in the bucket, latest ones included, in ListObjectVersions order. */
     List<StoredOsObject> all(String partition, String bucketName) {
         List<StoredOsObject> all = new ArrayList<>();
+        Set<String> live = new HashSet<>();
         for (StoredOsObject latest : TenancyAwareStorageBackend.scanIn(objects, partition,
                 k -> k.startsWith(bucketName + "/"))) {
-            all.add(latest(partition, bucketName, latest.getName()).orElse(latest));
+            StoredOsObject version = latest(partition, bucketName, latest.getName()).orElse(latest);
+            live.add(version.getVersionId());
+            all.add(version);
         }
-        all.addAll(TenancyAwareStorageBackend.scanIn(versions, partition, k -> k.startsWith(bucketName + "/")));
+        // A version can be in both stores only after a stop in the middle of a move; it is listed once.
+        TenancyAwareStorageBackend.scanIn(versions, partition, k -> k.startsWith(bucketName + "/")).stream()
+                .filter(previous -> !live.contains(previous.getVersionId()))
+                .forEach(all::add);
         all.sort(LISTING_ORDER);
         return all;
     }
@@ -266,9 +282,10 @@ final class ObjectVersions {
                 .min(NEWEST_FIRST)
                 .filter(o -> !o.isDeleteMarker());
         newest.ifPresent(o -> {
+            // Written live before the previous copy goes, so a stop in between loses nothing.
+            TenancyAwareStorageBackend.putIn(objects, partition, key, o);
             TenancyAwareStorageBackend.deleteAllIn(versions, partition,
                     List.of(versionKey(bucketName, o.getVersionId())));
-            TenancyAwareStorageBackend.putIn(objects, partition, key, o);
         });
         return newest;
     }

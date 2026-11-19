@@ -483,4 +483,45 @@ class ObjectStorageReplicationServiceTest {
             assertEquals(sourceEtag, service.getObject(NS, "dst", "hot").getEtag());
         }
     }
+
+    @Test
+    void concurrentPolicyCreateAndEnablingVersioningNeverLeaveAVersionedDestination() throws Exception {
+        bucket(ASHBURN, "src");
+        for (int round = 0; round < 20; round++) {
+            String destination = "race-" + round;
+            bucket(ASHBURN, destination);
+            ExecutorService pool = Executors.newFixedThreadPool(2);
+            CountDownLatch start = new CountDownLatch(1);
+            try {
+                Future<?> create = pool.submit(() -> {
+                    start.await();
+                    try {
+                        service.createReplicationPolicy(NS, "src", "p" + destination, ASHBURN, destination);
+                    } catch (OciException expected) {
+                        // The update won the race: the destination is versioned now.
+                    }
+                    return null;
+                });
+                Future<?> enable = pool.submit(() -> {
+                    start.await();
+                    try {
+                        service.updateBucket(NS, destination, null, null, null, null, null, "Enabled", null);
+                    } catch (OciException expected) {
+                        // The policy won the race: the destination is read-only now.
+                    }
+                    return null;
+                });
+                start.countDown();
+                create.get(10, TimeUnit.SECONDS);
+                enable.get(10, TimeUnit.SECONDS);
+            } finally {
+                pool.shutdownNow();
+            }
+            StoredBucket dst = service.getBucket(NS, destination);
+            assertFalse(dst.getIsReadOnly() && "Enabled".equals(dst.getVersioning()), destination);
+            for (StoredReplicationPolicy policy : service.listReplicationPolicies(NS, "src")) {
+                service.deleteReplicationPolicy(NS, "src", policy.getId());
+            }
+        }
+    }
 }

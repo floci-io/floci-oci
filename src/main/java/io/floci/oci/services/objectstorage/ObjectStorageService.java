@@ -296,36 +296,41 @@ public class ObjectStorageService implements CompartmentUsage, Resettable {
                                      Map<String, String> freeformTags,
                                      Map<String, Map<String, Object>> definedTags,
                                      String versioning, String ifMatch) {
-        StoredBucket b = getBucket(namespaceName, bucketName);
-        Etags.checkIfMatch(ifMatch, b.getEtag());
-        if (versioning != null) {
-            // Versioning can be suspended but never disabled once a bucket exists.
-            String requested = versioningValue(versioning, List.of(ObjectVersions.ENABLED, ObjectVersions.SUSPENDED));
-            if (ObjectVersions.ENABLED.equals(requested) && b.getIsReadOnly()) {
-                throw OciException.conflict("Bucket '" + bucketName + "' is the destination of a replication "
-                        + "policy. Versioning cannot be enabled on a replication destination.");
+        // Under the bucket's replication lock, so the read-only check and a policy creation that checks this
+        // bucket's versioning cannot both pass.
+        return replication.writing(ociContext.region(), bucketName, () -> {
+            StoredBucket b = getBucket(namespaceName, bucketName);
+            Etags.checkIfMatch(ifMatch, b.getEtag());
+            if (versioning != null) {
+                // Versioning can be suspended but never disabled once a bucket exists.
+                String requested = versioningValue(versioning,
+                        List.of(ObjectVersions.ENABLED, ObjectVersions.SUSPENDED));
+                if (ObjectVersions.ENABLED.equals(requested) && b.getIsReadOnly()) {
+                    throw OciException.conflict("Bucket '" + bucketName + "' is the destination of a replication "
+                            + "policy. Versioning cannot be enabled on a replication destination.");
+                }
+                b.setVersioning(requested);
             }
-            b.setVersioning(requested);
-        }
-        if (metadata != null) {
-            b.setMetadata(metadata);
-        }
-        if (publicAccessType != null) {
-            b.setPublicAccessType(publicAccessType);
-        }
-        if (objectEventsEnabled != null) {
-            b.setObjectEventsEnabled(objectEventsEnabled);
-        }
-        if (freeformTags != null) {
-            b.setFreeformTags(freeformTags);
-        }
-        if (definedTags != null) {
-            b.setDefinedTags(definedTags);
-        }
-        b.setEtag(Etags.newEtag());
-        buckets.put(bucketName, b);
-        emitBucketEvent("updatebucket", b);
-        return b;
+            if (metadata != null) {
+                b.setMetadata(metadata);
+            }
+            if (publicAccessType != null) {
+                b.setPublicAccessType(publicAccessType);
+            }
+            if (objectEventsEnabled != null) {
+                b.setObjectEventsEnabled(objectEventsEnabled);
+            }
+            if (freeformTags != null) {
+                b.setFreeformTags(freeformTags);
+            }
+            if (definedTags != null) {
+                b.setDefinedTags(definedTags);
+            }
+            b.setEtag(Etags.newEtag());
+            buckets.put(bucketName, b);
+            emitBucketEvent("updatebucket", b);
+            return b;
+        });
     }
 
     public void deleteBucket(String namespaceName, String bucketName, String ifMatch) {
