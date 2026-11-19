@@ -73,6 +73,14 @@ public final class OciPage {
         }
     }
 
+    /**
+     * How many of {@code totalSize} items come after {@code page}: the ones the following pages
+     * return, so zero on the last page. For collection bodies with a {@code remainingItemsCount}.
+     */
+    public static int remainingAfter(Page<?> page, int totalSize) {
+        return page.hasNextPage() ? totalSize - decode(page.nextPage()) : 0;
+    }
+
     /** Convenience: page token of the element after {@code lastIndex}, or null when done. */
     public static Optional<String> nextToken(int end, int totalSize) {
         return end < totalSize ? Optional.of(encode(end)) : Optional.empty();
