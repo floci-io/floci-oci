@@ -12,6 +12,16 @@ class OciPageTest {
     private static final List<Integer> ITEMS = IntStream.range(0, 25).boxed().toList();
 
     @Test
+    void remainingAfterCountsOnlyTheItemsOfLaterPages() {
+        OciPage.Page<Integer> first = OciPage.paginate(ITEMS, 10, null);
+        assertEquals(15, OciPage.remainingAfter(first, ITEMS.size()));
+        OciPage.Page<Integer> second = OciPage.paginate(ITEMS, 10, first.nextPage());
+        assertEquals(5, OciPage.remainingAfter(second, ITEMS.size()));
+        OciPage.Page<Integer> third = OciPage.paginate(ITEMS, 10, second.nextPage());
+        assertEquals(0, OciPage.remainingAfter(third, ITEMS.size()));
+    }
+
+    @Test
     void firstPageAndFollowUpsCoverAllItems() {
         OciPage.Page<Integer> first = OciPage.paginate(ITEMS, 10, null);
         assertEquals(10, first.items().size());

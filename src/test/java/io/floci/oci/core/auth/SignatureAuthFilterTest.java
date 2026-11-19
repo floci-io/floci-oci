@@ -27,5 +27,15 @@ class SignatureAuthFilterTest {
         assertFalse(SignatureAuthFilter.isExempt("/_flociX"));
         assertFalse(SignatureAuthFilter.isExempt("/healthz"));
         assertFalse(SignatureAuthFilter.isExempt("/p"));
+        assertFalse(SignatureAuthFilter.isExempt("/v2x"));
+        assertFalse(SignatureAuthFilter.isExempt("/20180419/docker/tokens"));
+    }
+
+    @Test
+    void registryProtocolIsExemptBecauseDockerNeverSignsOciRequests() {
+        assertTrue(SignatureAuthFilter.isExempt("/v2"));
+        assertTrue(SignatureAuthFilter.isExempt("/v2/"));
+        assertTrue(SignatureAuthFilter.isExempt("/v2/ns/app/manifests/v1"));
+        assertTrue(SignatureAuthFilter.isExempt("/20180419/docker/token"));
     }
 }
