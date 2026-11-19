@@ -1,9 +1,7 @@
 package io.floci.oci.services.objectstorage;
 
-import io.floci.oci.config.EmulatorConfig;
 import io.floci.oci.core.auth.AccessKeyResolver;
 import jakarta.annotation.Priority;
-import jakarta.inject.Inject;
 import jakarta.ws.rs.Priorities;
 import jakarta.ws.rs.container.ContainerRequestContext;
 import jakarta.ws.rs.container.ContainerRequestFilter;
@@ -31,16 +29,10 @@ public class S3CompatHostFilter implements ContainerRequestFilter {
 
     static final String ROOT = "/_s3compat/";
 
-    /** Injected lazily: this filter is instantiated during Quarkus static init. */
-    @Inject
-    // Qualified: jakarta.ws.rs.ext.Provider is imported for the @Provider annotation.
-    jakarta.inject.Provider<EmulatorConfig> configProvider;
-
     @Override
     public void filter(ContainerRequestContext ctx) {
-        if (!configProvider.get().services().objectstorage().enabled()) {
-            return;
-        }
+        // Rewritten whether or not Object Storage is enabled: a disabled service answers 503 on the
+        // S3 resource, and an S3 host never reaches a native route.
         Optional<String> namespace = namespaceOf(ctx.getHeaderString(HttpHeaders.HOST));
         if (namespace.isEmpty()) {
             return;

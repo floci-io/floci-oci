@@ -361,6 +361,102 @@ class S3CompatRestIntegrationTest {
     }
 
     @Test
+    void unsupportedBucketSubresourcesNeverRunTheBucketOperation() {
+        String bucket = bucket();
+        s3().when().put("/" + bucket).then().statusCode(200);
+
+        s3().when().delete("/" + bucket + "?policy")
+            .then().statusCode(501).body("Error.Code", equalTo("NotImplemented"));
+        s3().body("{}").when().put("/" + bucket + "?policy")
+            .then().statusCode(501).body("Error.Code", equalTo("NotImplemented"));
+        s3().when().get("/" + bucket + "?acl")
+            .then().statusCode(501).body("Error.Code", equalTo("NotImplemented"));
+        s3().when().head("/" + bucket).then().statusCode(200);
+        s3().when().delete("/" + bucket).then().statusCode(204);
+    }
+
+    @Test
+    void urlEncodingTypeEncodesNamesInListings() {
+        String bucket = bucket();
+        s3().when().put("/" + bucket).then().statusCode(200);
+        s3().body("x").when().put("/" + bucket + "/dir/a%20b%01c").then().statusCode(200);
+
+        s3().queryParam("encoding-type", "url").when().get("/" + bucket)
+            .then().statusCode(200)
+                .body("ListBucketResult.EncodingType", equalTo("url"))
+                .body("ListBucketResult.Contents.Key", equalTo("dir/a%20b%01c"));
+        s3().queryParam("list-type", "2").queryParam("encoding-type", "url").queryParam("delimiter", "/")
+            .when().get("/" + bucket)
+            .then().statusCode(200)
+                .body("ListBucketResult.EncodingType", equalTo("url"))
+                .body("ListBucketResult.CommonPrefixes.Prefix", equalTo("dir/"));
+    }
+
+    @Test
+    void conditionalReadsUseTheS3Etag() throws Exception {
+        String bucket = bucket();
+        s3().when().put("/" + bucket).then().statusCode(200);
+        byte[] data = "conditional".getBytes(StandardCharsets.UTF_8);
+        s3().body(data).when().put("/" + bucket + "/k").then().statusCode(200);
+        String etag = "\"" + md5Hex(data) + "\"";
+
+        s3().header("If-Match", etag).when().get("/" + bucket + "/k").then().statusCode(200);
+        s3().header("If-Match", "\"other\"").when().get("/" + bucket + "/k")
+            .then().statusCode(412).body("Error.Code", equalTo("PreconditionFailed"));
+        s3().header("If-Match", "\"other\"").header("Range", "bytes=0-1").when().get("/" + bucket + "/k")
+            .then().statusCode(412);
+        s3().header("If-None-Match", etag).when().get("/" + bucket + "/k")
+            .then().statusCode(304).header("ETag", etag);
+        s3().header("If-Match", "\"other\"").when().head("/" + bucket + "/k").then().statusCode(412);
+        s3().header("If-None-Match", etag).when().head("/" + bucket + "/k").then().statusCode(304);
+        s3().header("If-None-Match", "\"other\"").when().head("/" + bucket + "/k").then().statusCode(200);
+    }
+
+    @Test
+    void copySourceConditionsUseTheSourceEtag() throws Exception {
+        String bucket = bucket();
+        s3().when().put("/" + bucket).then().statusCode(200);
+        byte[] data = "source".getBytes(StandardCharsets.UTF_8);
+        s3().body(data).when().put("/" + bucket + "/src").then().statusCode(200);
+        String etag = "\"" + md5Hex(data) + "\"";
+
+        s3().header("x-amz-copy-source", "/" + bucket + "/src").header("x-amz-copy-source-if-match", "\"old\"")
+            .when().put("/" + bucket + "/dst")
+            .then().statusCode(412).body("Error.Code", equalTo("PreconditionFailed"));
+        s3().header("x-amz-copy-source", "/" + bucket + "/src").header("x-amz-copy-source-if-none-match", etag)
+                .header("x-amz-metadata-directive", "REPLACE")
+            .when().put("/" + bucket + "/dst")
+            .then().statusCode(412);
+        s3().when().head("/" + bucket + "/dst").then().statusCode(404);
+
+        s3().header("x-amz-copy-source", "/" + bucket + "/src").header("x-amz-copy-source-if-match", etag)
+            .when().put("/" + bucket + "/dst")
+            .then().statusCode(200);
+        s3().when().get("/" + bucket + "/dst").then().statusCode(200).body(equalTo("source"));
+    }
+
+    @Test
+    void startAfterInsideAFolderSkipsThatFolder() {
+        String bucket = bucket();
+        s3().when().put("/" + bucket).then().statusCode(200);
+        for (String key : new String[]{"a/1", "a/2", "b"}) {
+            s3().body(key).when().put("/" + bucket + "/" + key).then().statusCode(200);
+        }
+
+        s3().queryParam("list-type", "2").queryParam("delimiter", "/").queryParam("start-after", "a/1")
+                .queryParam("max-keys", "1")
+            .when().get("/" + bucket)
+            .then().statusCode(200)
+                .body("ListBucketResult.Contents.Key", equalTo("b"))
+                .body(not(containsString("<CommonPrefixes>")))
+                .body("ListBucketResult.IsTruncated", equalTo("false"));
+        s3().queryParam("list-type", "2").queryParam("start-after", "a/1")
+            .when().get("/" + bucket)
+            .then().statusCode(200)
+                .body("ListBucketResult.Contents.Key", hasItems("a/2", "b"));
+    }
+
+    @Test
     void nativeApiIsUntouchedWithoutTheCompatHost() {
         given().when().get("/n/" + NAMESPACE)
             .then().statusCode(200);

@@ -33,6 +33,16 @@ class ObjectStorageDisabledRestIntegrationTest {
                 .body("code", equalTo("ServiceUnavailable"));
     }
 
+    @Test
+    void anS3HostNeverReachesANativeRoute() {
+        given().header("Host", "floci-test.compat.objectstorage.us-ashburn-1.localhost.floci.io")
+                .queryParam("X-Amz-Credential", "anything/20261118/us-ashburn-1/s3/aws4_request")
+            .when().get("/20160918/users")
+            .then()
+                .statusCode(503)
+                .body("code", equalTo("ServiceUnavailable"));
+    }
+
     public static class DisabledObjectStorageProfile implements QuarkusTestProfile {
         @Override
         public Map<String, String> getConfigOverrides() {

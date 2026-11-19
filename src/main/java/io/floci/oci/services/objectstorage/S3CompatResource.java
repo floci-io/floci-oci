@@ -29,6 +29,7 @@ import org.xml.sax.SAXException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URLDecoder;
+import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.ZoneOffset;
@@ -41,6 +42,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -62,6 +64,14 @@ public class S3CompatResource {
     private static final DateTimeFormatter ISO_MILLIS =
             DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'").withZone(ZoneOffset.UTC);
     private static final String META_PREFIX = "x-amz-meta-";
+    /**
+     * Bucket subresources S3 defines. A request naming one floci-oci does not serve answers
+     * NotImplemented instead of falling through to the plain bucket operation.
+     */
+    private static final Set<String> BUCKET_SUBRESOURCES = Set.of("accelerate", "acl", "analytics", "cors",
+            "encryption", "intelligent-tiering", "inventory", "lifecycle", "location", "logging", "metrics",
+            "notification", "object-lock", "ownershipControls", "policy", "policyStatus", "publicAccessBlock",
+            "replication", "requestPayment", "tagging", "uploads", "versioning", "website");
 
     private final ObjectStorageService service;
     private final OciContext ociContext;
@@ -99,6 +109,10 @@ public class S3CompatResource {
                               @Context UriInfo uri, InputStream body) {
         return s3("/" + bucket, () -> {
             service.requireNamespace(namespace);
+            Response unsupported = unsupportedSubresource(uri, Set.of("tagging"), "/" + bucket);
+            if (unsupported != null) {
+                return unsupported;
+            }
             if (has(uri, "tagging")) {
                 Map<String, String> tags = new LinkedHashMap<>();
                 Document doc = S3Xml.parse(readAll(body));
@@ -133,6 +147,10 @@ public class S3CompatResource {
                                  @Context UriInfo uri) {
         return s3("/" + bucket, () -> {
             service.requireNamespace(namespace);
+            Response unsupported = unsupportedSubresource(uri, Set.of("tagging"), "/" + bucket);
+            if (unsupported != null) {
+                return unsupported;
+            }
             if (has(uri, "tagging")) {
                 service.updateBucket(namespace, bucket, null, null, null, Map.of(), null, null);
                 return Response.noContent().build();
@@ -148,6 +166,11 @@ public class S3CompatResource {
                               @Context UriInfo uri) {
         return s3("/" + bucket, () -> {
             service.requireNamespace(namespace);
+            Response unsupported = unsupportedSubresource(uri, Set.of("location", "tagging", "versioning", "uploads"),
+                    "/" + bucket);
+            if (unsupported != null) {
+                return unsupported;
+            }
             StoredBucket b = service.getBucket(namespace, bucket);
             if (has(uri, "location")) {
                 return xmlResponse(200, S3Xml.document("LocationConstraint").end("LocationConstraint")
@@ -219,7 +242,7 @@ public class S3CompatResource {
             String token = query.getFirst("continuation-token");
             String startAfter = query.getFirst("start-after");
             start = token != null ? resumeAfter(decodeToken(token), prefix, delimiter)
-                    : startAfter != null ? startAfter + '\u0000' : null;
+                    : startAfter != null ? startAfterPosition(startAfter, prefix, delimiter) : null;
         } else {
             String marker = query.getFirst("marker");
             start = marker != null ? resumeAfter(marker, prefix, delimiter) : null;
@@ -234,29 +257,34 @@ public class S3CompatResource {
             String after = resumeAfter(last, prefix, delimiter);
             truncated = !service.listObjects(namespace, bucket, prefix, after, null, null, 1).objects().isEmpty();
         }
+        // encoding-type=url: names are URL-encoded so keys with characters XML cannot carry still list.
+        boolean url = "url".equalsIgnoreCase(query.getFirst("encoding-type"));
         String root = "ListBucketResult";
         S3Xml xml = S3Xml.document(root)
                 .element("Name", bucket)
-                .element("Prefix", prefix == null ? "" : prefix)
-                .element("Delimiter", delimiter)
+                .element("Prefix", encodeName(prefix == null ? "" : prefix, url))
+                .element("Delimiter", encodeName(delimiter, url))
                 .element("MaxKeys", maxKeys)
                 .element("IsTruncated", truncated);
+        if (url) {
+            xml.element("EncodingType", "url");
+        }
         if (v2) {
             xml.element("KeyCount", listing.objects().size() + listing.prefixes().size());
             xml.element("ContinuationToken", query.getFirst("continuation-token"));
-            xml.element("StartAfter", query.getFirst("start-after"));
+            xml.element("StartAfter", encodeName(query.getFirst("start-after"), url));
             if (truncated) {
                 xml.element("NextContinuationToken", encodeToken(last));
             }
         } else {
-            xml.element("Marker", query.getFirst("marker") == null ? "" : query.getFirst("marker"));
+            xml.element("Marker", encodeName(query.getFirst("marker") == null ? "" : query.getFirst("marker"), url));
             if (truncated && delimiter != null) {
-                xml.element("NextMarker", last);
+                xml.element("NextMarker", encodeName(last, url));
             }
         }
         for (StoredOsObject o : listing.objects()) {
             xml.open("Contents")
-                    .element("Key", o.getName())
+                    .element("Key", encodeName(o.getName(), url))
                     .element("LastModified", iso(o.getTimeModified()))
                     .element("ETag", quotedEtag(o))
                     .element("Size", o.getData() == null ? 0 : o.getData().length)
@@ -264,7 +292,7 @@ public class S3CompatResource {
                     .close("Contents");
         }
         for (String p : listing.prefixes()) {
-            xml.open("CommonPrefixes").element("Prefix", p).close("CommonPrefixes");
+            xml.open("CommonPrefixes").element("Prefix", encodeName(p, url)).close("CommonPrefixes");
         }
         return xmlResponse(200, xml.end(root));
     }
@@ -326,15 +354,25 @@ public class S3CompatResource {
         }
         String sourceBucket = source.substring(0, slash);
         String sourceKey = source.substring(slash + 1);
+        StoredOsObject original = service.getObject(namespace, sourceBucket, sourceKey);
+        String sourceEtag = unquote(quotedEtag(original));
+        String sourceIfMatch = blankToNull(headers.getHeaderString("x-amz-copy-source-if-match"));
+        String sourceIfNoneMatch = blankToNull(headers.getHeaderString("x-amz-copy-source-if-none-match"));
+        if ((sourceIfMatch != null && !matchesAny(sourceIfMatch, sourceEtag))
+                || (sourceIfNoneMatch != null && matchesAny(sourceIfNoneMatch, sourceEtag))) {
+            return error(412, "PreconditionFailed", "At least one of the pre-conditions you specified did not hold",
+                    "/" + bucket + "/" + key);
+        }
         StoredOsObject copied;
         if ("REPLACE".equalsIgnoreCase(headers.getHeaderString("x-amz-metadata-directive"))) {
-            StoredOsObject original = service.getObject(namespace, sourceBucket, sourceKey);
             String contentType = headers.getHeaderString("Content-Type");
             copied = service.putObject(namespace, bucket, key, original.getData(),
                     contentType != null ? contentType : original.getContentType(), null, userMetadata(headers),
                     null, null);
         } else {
-            service.copyObject(namespace, sourceBucket, sourceKey, ociContext.region(), namespace, bucket, key, null);
+            // The native ETag of the object just checked, so a source replaced meanwhile fails the copy.
+            service.copyObject(namespace, sourceBucket, sourceKey, ociContext.region(), namespace, bucket, key,
+                    original.getEtag());
             copied = service.getObject(namespace, bucket, key);
         }
         return xmlResponse(200, S3Xml.document("CopyObjectResult")
@@ -354,6 +392,10 @@ public class S3CompatResource {
                 return listParts(bucket, key, uri.getQueryParameters().getFirst("uploadId"));
             }
             StoredOsObject o = service.getObject(namespace, bucket, key);
+            Response failed = readConditions(o, headers, resource);
+            if (failed != null) {
+                return failed;
+            }
             byte[] data = o.getData() == null ? new byte[0] : o.getData();
             String range = headers.getHeaderString("Range");
             if (range != null && range.startsWith("bytes=")) {
@@ -373,10 +415,15 @@ public class S3CompatResource {
     @HEAD
     @Path("/{bucket}/{key: .+}")
     public Response headObject(@PathParam("namespace") String namespace, @PathParam("bucket") String bucket,
-                               @PathParam("key") String key) {
-        return s3("/" + bucket + "/" + key, () -> {
+                               @PathParam("key") String key, @Context HttpHeaders headers) {
+        String resource = "/" + bucket + "/" + key;
+        return s3(resource, () -> {
             service.requireNamespace(namespace);
             StoredOsObject o = service.getObject(namespace, bucket, key);
+            Response failed = readConditions(o, headers, resource);
+            if (failed != null) {
+                return failed;
+            }
             return objectHeaders(Response.ok(), o)
                     .header("Content-Length", o.getData() == null ? 0 : o.getData().length).build();
         });
@@ -614,6 +661,61 @@ public class S3CompatResource {
 
     private static byte[] readAll(InputStream body) throws IOException {
         return body == null ? new byte[0] : body.readAllBytes();
+    }
+
+    /**
+     * GetObject and HeadObject conditions, against the S3 ETag: {@code If-Match} that fails is
+     * {@code 412 PreconditionFailed}, {@code If-None-Match} that matches is {@code 304 Not Modified}.
+     */
+    private static Response readConditions(StoredOsObject o, HttpHeaders headers, String resource) {
+        String etag = unquote(quotedEtag(o));
+        String ifMatch = blankToNull(headers.getHeaderString("If-Match"));
+        if (ifMatch != null && !matchesAny(ifMatch, etag)) {
+            return error(412, "PreconditionFailed", "At least one of the pre-conditions you specified did not hold",
+                    resource);
+        }
+        String ifNoneMatch = blankToNull(headers.getHeaderString("If-None-Match"));
+        if (ifNoneMatch != null && matchesAny(ifNoneMatch, etag)) {
+            return Response.notModified().header("ETag", quotedEtag(o)).build();
+        }
+        return null;
+    }
+
+    private static Response unsupportedSubresource(UriInfo uri, Set<String> supported, String resource) {
+        for (String parameter : uri.getQueryParameters().keySet()) {
+            if (BUCKET_SUBRESOURCES.contains(parameter) && !supported.contains(parameter)) {
+                return error(501, "NotImplemented", "The ?" + parameter + " bucket operation is not implemented",
+                        resource);
+            }
+        }
+        return null;
+    }
+
+    /** S3's {@code encoding-type=url}: percent-encoding, with spaces as {@code %20} and {@code /} kept. */
+    static String encodeName(String name, boolean url) {
+        if (!url || name == null) {
+            return name;
+        }
+        return URLEncoder.encode(name, StandardCharsets.UTF_8).replace("+", "%20").replace("%2F", "/");
+    }
+
+    /**
+     * Where a v2 listing with {@code start-after} begins. With a delimiter, a {@code start-after}
+     * inside a folder skips that whole folder: its common prefix sorts at or before {@code start-after},
+     * and S3 omits those.
+     */
+    static String startAfterPosition(String startAfter, String prefix, String delimiter) {
+        String folder = commonPrefixOf(startAfter, prefix, delimiter);
+        return folder != null ? folder + '\uffff' : startAfter + '\u0000';
+    }
+
+    private static String commonPrefixOf(String name, String prefix, String delimiter) {
+        String base = prefix == null ? "" : prefix;
+        if (delimiter == null || delimiter.isEmpty() || !name.startsWith(base)) {
+            return null;
+        }
+        int at = name.indexOf(delimiter, base.length());
+        return at < 0 ? null : name.substring(0, at + delimiter.length());
     }
 
     private static boolean has(UriInfo uri, String parameter) {

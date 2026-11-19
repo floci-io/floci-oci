@@ -113,8 +113,16 @@ reaches the native API as before.
 - PutObject honours `If-None-Match: *` and `If-Match`, compared with the hex MD5 ETag
   (`412 PreconditionFailed`). CompleteMultipartUpload needs every part's ETag and the parts in
   ascending order (`InvalidPart`, `InvalidPartOrder`).
+- GetObject and HeadObject honour `If-Match` (`412 PreconditionFailed`) and `If-None-Match`
+  (`304 Not Modified`). CopyObject honours `x-amz-copy-source-if-match` and
+  `x-amz-copy-source-if-none-match` against the source's ETag.
+- ListObjects and ListObjectsV2 honour `encoding-type=url`. In ListObjectsV2 with a delimiter, a
+  `start-after` inside a folder skips that folder's common prefix.
+- A bucket subresource floci-oci does not serve (`?policy`, `?acl`, `?cors`, ...) answers
+  `501 NotImplemented`; it never runs the plain bucket operation.
 - SigV4 credentials only count on the S3 host. Deleting an Identity user deletes its Customer
-  Secret Keys, and turning Object Storage off turns this API off too.
+  Secret Keys, and turning Object Storage off turns this API off too: an S3 host then answers 503
+  and never reaches a native route. Customer Secret Key writes are accepted only in the home region.
 - Oracle's supported list does not name CopyObject or ListObjectsV2; floci-oci serves them
   because boto3, the AWS CLI and rclone use them. SSE-C and KMS headers, ACLs, policies and
   the virtual-host `vhcompat` endpoint are not implemented.
