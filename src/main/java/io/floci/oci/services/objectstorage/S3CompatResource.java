@@ -108,11 +108,11 @@ public class S3CompatResource {
                         tags.put(S3Xml.childText(tag, "Key"), S3Xml.childText(tag, "Value"));
                     }
                 }
-                service.updateBucket(namespace, bucket, null, null, tags, null, null);
+                service.updateBucket(namespace, bucket, null, null, null, tags, null, null);
                 return Response.noContent().build();
             }
             String compartment = (String) service.namespaceMetadata(namespace).get("defaultS3CompartmentId");
-            service.createBucket(namespace, bucket, compartment, null, null, null, null, null);
+            service.createBucket(namespace, bucket, compartment, null, null, null, null, null, null);
             return Response.ok().header("Location", "/" + bucket).build();
         });
     }
@@ -134,7 +134,7 @@ public class S3CompatResource {
         return s3("/" + bucket, () -> {
             service.requireNamespace(namespace);
             if (has(uri, "tagging")) {
-                service.updateBucket(namespace, bucket, null, null, Map.of(), null, null);
+                service.updateBucket(namespace, bucket, null, null, null, Map.of(), null, null);
                 return Response.noContent().build();
             }
             service.deleteBucket(namespace, bucket, null);

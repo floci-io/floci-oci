@@ -16,20 +16,25 @@ All configuration lives under the `floci-oci.*` prefix; every property maps to a
 | `FLOCI_OCI_MAX_REQUEST_SIZE` | `2048` | Max request body size in MB |
 | `FLOCI_OCI_STORAGE_MODE` | `memory` | `memory`, `persistent`, `hybrid`, or `wal` |
 | `FLOCI_OCI_STORAGE_PERSISTENT_PATH` | `./data` | Where persisted state is written |
-| `FLOCI_OCI_AUTH_REQUIRE_SIGNATURE` | `false` | Reject unsigned requests with 401. `/health`, `/_floci/*`, `/_floci-oci/*` and pre-authenticated requests (`/p/*`) are always exempt |
+| `FLOCI_OCI_AUTH_REQUIRE_SIGNATURE` | `false` | Reject unsigned requests with 401. `/health`, `/_floci/*`, `/_floci-oci/*`, pre-authenticated requests (`/p/*`) and the OCIR registry protocol (`/v2/*` and its token endpoint) are always exempt |
 | `FLOCI_OCI_TLS_ENABLED` | `false` | Serve HTTPS + HTTP on the same port |
 | `FLOCI_OCI_TLS_HTTPS_PORT` | `443` | Extra HTTPS binding for clients that assume 443 (0 disables) |
 | `FLOCI_OCI_SERVICES_IDENTITY_ENABLED` | `true` | Enable/disable Identity |
 | `FLOCI_OCI_SERVICES_OBJECTSTORAGE_ENABLED` | `true` | Enable/disable Object Storage |
 | `FLOCI_OCI_SERVICES_QUEUE_ENABLED` | `true` | Enable/disable Queue |
+| `FLOCI_OCI_SERVICES_NETWORKING_ENABLED` | `true` | Enable/disable Networking (VCNs, subnets, gateways, route tables, security lists, NSGs, DHCP options) |
 | `FLOCI_OCI_SERVICES_KMS_ENABLED` | `true` | Enable/disable KMS (vaults, keys, crypto) |
 | `FLOCI_OCI_SERVICES_VAULT_ENABLED` | `true` | Enable/disable Vault secrets + bundles |
 | `FLOCI_OCI_SERVICES_STREAMING_ENABLED` | `true` | Enable/disable Streaming |
 | `FLOCI_OCI_SERVICES_ORGANIZATIONS_ENABLED` | `true` | Enable/disable Organizations (child tenancies, organizations, links) |
 | `FLOCI_OCI_SERVICES_GOVERNANCERULES_ENABLED` | `true` | Enable/disable Governance Rules (rules, inclusion criteria, tenancy attachments) |
 | `FLOCI_OCI_SERVICES_FUNCTIONS_ENABLED` | `true` | Enable/disable Functions |
+| `FLOCI_OCI_SERVICES_EVENTS_ENABLED` | `true` | Enable/disable Events (rules, event delivery to Functions and Streaming) |
 | `FLOCI_OCI_SERVICES_FUNCTIONS_MOCK` | `false` | Skip the Fn sidecar; invocations return a synthetic body |
 | `FLOCI_OCI_SERVICES_FUNCTIONS_SERVER_IMAGE` | `fnproject/fnserver:latest` | Fn Project server image |
+| `FLOCI_OCI_SERVICES_ARTIFACTS_ENABLED` | `true` | Enable/disable Container Registry (OCIR) |
+| `FLOCI_OCI_SERVICES_ARTIFACTS_MOCK` | `false` | Skip the registry sidecar; image lists are empty and `/v2/` answers 503 |
+| `FLOCI_OCI_SERVICES_ARTIFACTS_REGISTRY_IMAGE` | `registry:2` | Docker Distribution image for the OCIR data plane |
 | `FLOCI_OCI_SERVICES_OKE_ENABLED` | `true` | Enable/disable Container Engine for Kubernetes (OKE) |
 | `FLOCI_OCI_SERVICES_OKE_MOCK` | `false` | Skip the k3s sidecar; clusters become `ACTIVE` at once with synthetic endpoints |
 | `FLOCI_OCI_SERVICES_OKE_DEFAULT_IMAGE` | `rancher/k3s:v1.30.1-k3s1` | k3s image for cluster sidecars |

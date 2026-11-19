@@ -53,7 +53,7 @@ class ObjectStorageServiceTest {
     }
 
     private StoredBucket bucket(String name) {
-        return service.createBucket(NS, name, COMPARTMENT, null, null, null, null, null);
+        return service.createBucket(NS, name, COMPARTMENT, null, null, null, null, null, null);
     }
 
     private StoredOsObject put(String bucket, String name, String content) {

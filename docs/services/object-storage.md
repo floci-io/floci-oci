@@ -13,6 +13,7 @@ OCI Object Storage — unversioned paths under `/n/{namespace}/b/{bucket}/o/{obj
 | Actions | RenameObject; CopyObject (async, work request, terminal status `COMPLETED`); BatchDeleteObjects (per-object success/failure results, optional per-entry `ifMatch`, `isSkipDeletedResult`) |
 | Multipart | CreateMultipartUpload, UploadPart, Commit, Abort, List |
 | Pre-authenticated requests | Create, Get, List, Delete; anonymous data path via `/p/{token}/…` |
+| Replication | CreateReplicationPolicy, GetReplicationPolicy, ListReplicationPolicies, DeleteReplicationPolicy, ListReplicationSources, MakeBucketWritable |
 | Work requests | Get, List, errors, logs (unversioned at `/workRequests`) |
 | Amazon S3 Compatibility API | See [below](#amazon-s3-compatibility-api) |
 
@@ -47,11 +48,41 @@ oci os object get $E --namespace floci-local --bucket-name demo \
   must exist in that region and the copy lands there. The copy completes immediately; its work
   request (`COMPLETED`) is read from the source region.
 - `Content-MD5` is verified on upload; `opc-content-md5` is returned.
+- Buckets emit `createbucket`, `updatebucket` and `deletebucket` events, and objects emit
+  `createobject`, `updateobject` and `deleteobject` on buckets created or updated with
+  `objectEventsEnabled: true`. Rules in [Events](events.md) deliver them to Functions and Streaming.
 - `CommitMultipartUpload` returns `opc-multipart-md5`: the Base64 MD5 of the committed parts' binary
   MD5 digests in part-number order, followed by `-` and the part count. `GetObject` and `HeadObject`
   return the same value for multipart objects, in place of `content-md5`.
-- Object versioning, retention rules, lifecycle policies and replication are not implemented
-  yet.
+- Object versioning, retention rules and lifecycle policies are not implemented yet.
+
+## Replication
+
+A replication policy on a source bucket copies its writes into a destination bucket, in another
+region or the same one. As on real OCI:
+
+- A source has at most one policy (a second one is `409 ReplicationPolicyConflict`), a destination
+  has at most one source, and a destination cannot also be a source.
+- The destination bucket must exist first; policy creation does not create it.
+- Only changes made after the policy exists are replicated: puts, multipart commits, renames,
+  copies into the source, deletes and batch deletes. A replica keeps the source's name, data,
+  metadata, ETag and MD5.
+- The source reads `replicationEnabled: true` and cannot be deleted while it has a policy
+  (`403 BucketReplicationEnabled`). The destination reads `isReadOnly: true`.
+- The policy id is a UUID, and `timeLastSync` is `null` until the first change is replicated.
+- `MakeBucketWritable` on the destination stops replication: the bucket becomes writable, and the
+  source's policy moves to `CLIENT_ERROR` until it is deleted.
+- Deleting the policy makes both buckets ordinary again.
+
+floci-oci's own choices, where no OCI source states the behaviour:
+
+- Replication is synchronous: a change reaches the destination before the source request answers.
+  Real OCI replicates asynchronously with an unstated lag; a zero lag is one valid case of it.
+- A write or delete on a read-only destination (including through a pre-authenticated request),
+  and deleting a read-only destination bucket, answer `409 Conflict`.
+- A destination that already has a source, or is itself a source, answers
+  `409 ReplicationPolicyConflict`.
+- `MakeBucketWritable` on a bucket that is not a destination answers `409 Conflict`.
 
 ## Amazon S3 Compatibility API
 

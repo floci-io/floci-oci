@@ -337,13 +337,6 @@ public class IdentityController {
     // ── Work requests ──────────────────────────────────────────────────────────
 
     @GET
-    @Path("/workRequests/{workRequestId}")
-    public Response getWorkRequest(@PathParam("workRequestId") String workRequestId) {
-        StoredWorkRequest wr = workRequests.get("identity", workRequestId);
-        return Response.ok(wr.toWire()).build();
-    }
-
-    @GET
     @Path("/workRequests")
     public Response listWorkRequests(@QueryParam("compartmentId") String compartmentId,
                                      @QueryParam("limit") Integer limit,

@@ -12,6 +12,7 @@ import io.floci.oci.services.objectstorage.model.StoredBucket;
 import io.floci.oci.services.objectstorage.model.StoredMultipartUpload;
 import io.floci.oci.services.objectstorage.model.StoredOsObject;
 import io.floci.oci.services.objectstorage.model.StoredPar;
+import io.floci.oci.services.objectstorage.model.StoredReplicationPolicy;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.DELETE;
@@ -88,7 +89,7 @@ public class ObjectStorageController {
             StoredBucket b = service.createBucket(namespaceName,
                     str(body, "name"), str(body, "compartmentId"), stringMap(body, "metadata"),
                     str(body, "publicAccessType"), str(body, "storageTier"),
-                    stringMap(body, "freeformTags"), definedTags(body));
+                    bool(body, "objectEventsEnabled"), stringMap(body, "freeformTags"), definedTags(body));
             return Response.ok(b).header("etag", b.getEtag())
                     .header("Location", "/n/" + service.namespace() + "/b/" + b.getName()).build();
         }
@@ -138,7 +139,7 @@ public class ObjectStorageController {
                                  Map<String, Object> body) {
         StoredBucket b = service.updateBucket(namespaceName, bucketName,
                 stringMap(body, "metadata"), str(body, "publicAccessType"),
-                stringMap(body, "freeformTags"), definedTags(body), ifMatch);
+                bool(body, "objectEventsEnabled"), stringMap(body, "freeformTags"), definedTags(body), ifMatch);
         return Response.ok(b).header("etag", b.getEtag()).build();
     }
 
@@ -455,6 +456,70 @@ public class ObjectStorageController {
         return Response.ok(Map.of("items", List.of())).build();
     }
 
+    // ── Replication ────────────────────────────────────────────────────────────
+
+    @POST
+    @Path("/n/{namespaceName}/b/{bucketName}/replicationPolicies")
+    public Response createReplicationPolicy(@PathParam("namespaceName") String namespaceName,
+                                            @PathParam("bucketName") String bucketName,
+                                            Map<String, Object> body) {
+        StoredReplicationPolicy policy = service.createReplicationPolicy(namespaceName, bucketName,
+                str(body, "name"), str(body, "destinationRegionName"), str(body, "destinationBucketName"));
+        return Response.ok(replicationPolicyJson(policy)).build();
+    }
+
+    @GET
+    @Path("/n/{namespaceName}/b/{bucketName}/replicationPolicies/{replicationId}")
+    public Response getReplicationPolicy(@PathParam("namespaceName") String namespaceName,
+                                         @PathParam("bucketName") String bucketName,
+                                         @PathParam("replicationId") String replicationId) {
+        return Response.ok(replicationPolicyJson(
+                service.getReplicationPolicy(namespaceName, bucketName, replicationId))).build();
+    }
+
+    /** A bare JSON array of ReplicationPolicySummary, paged with {@code opc-next-page}. */
+    @GET
+    @Path("/n/{namespaceName}/b/{bucketName}/replicationPolicies")
+    public Response listReplicationPolicies(@PathParam("namespaceName") String namespaceName,
+                                            @PathParam("bucketName") String bucketName,
+                                            @QueryParam("limit") Integer limit,
+                                            @QueryParam("page") String page) {
+        List<Map<String, Object>> summaries = service.listReplicationPolicies(namespaceName, bucketName).stream()
+                .map(ObjectStorageController::replicationPolicyJson)
+                .toList();
+        return paged(summaries, limit, page);
+    }
+
+    @DELETE
+    @Path("/n/{namespaceName}/b/{bucketName}/replicationPolicies/{replicationId}")
+    public Response deleteReplicationPolicy(@PathParam("namespaceName") String namespaceName,
+                                            @PathParam("bucketName") String bucketName,
+                                            @PathParam("replicationId") String replicationId) {
+        service.deleteReplicationPolicy(namespaceName, bucketName, replicationId);
+        return Response.noContent().build();
+    }
+
+    /** A bare JSON array of ReplicationSource, paged with {@code opc-next-page}. */
+    @GET
+    @Path("/n/{namespaceName}/b/{bucketName}/replicationSources")
+    public Response listReplicationSources(@PathParam("namespaceName") String namespaceName,
+                                           @PathParam("bucketName") String bucketName,
+                                           @QueryParam("limit") Integer limit,
+                                           @QueryParam("page") String page) {
+        List<Map<String, Object>> sources = service.listReplicationSources(namespaceName, bucketName).stream()
+                .map(ObjectStorageController::replicationSourceJson)
+                .toList();
+        return paged(sources, limit, page);
+    }
+
+    @POST
+    @Path("/n/{namespaceName}/b/{bucketName}/actions/makeBucketWritable")
+    public Response makeBucketWritable(@PathParam("namespaceName") String namespaceName,
+                                       @PathParam("bucketName") String bucketName) {
+        service.makeBucketWritable(namespaceName, bucketName);
+        return Response.ok().build();
+    }
+
     // ── Work requests (Object Storage exposes them unversioned at the root) ────
 
     @GET
@@ -633,6 +698,37 @@ public class ObjectStorageController {
         return json;
     }
 
+    private static Map<String, Object> replicationPolicyJson(StoredReplicationPolicy policy) {
+        Map<String, Object> json = new LinkedHashMap<>();
+        json.put("id", policy.getId());
+        json.put("name", policy.getName());
+        json.put("destinationRegionName", policy.getDestinationRegionName());
+        json.put("destinationBucketName", policy.getDestinationBucketName());
+        json.put("timeCreated", policy.getTimeCreated());
+        // Mandatory in the model, yet null on real OCI until the first change is replicated.
+        json.put("timeLastSync", policy.getTimeLastSync());
+        json.put("status", policy.getStatus());
+        json.put("statusMessage", policy.getStatusMessage());
+        return json;
+    }
+
+    private static Map<String, Object> replicationSourceJson(StoredReplicationPolicy policy) {
+        Map<String, Object> json = new LinkedHashMap<>();
+        json.put("policyName", policy.getName());
+        json.put("sourceRegionName", policy.getSourceRegionName());
+        json.put("sourceBucketName", policy.getSourceBucketName());
+        return json;
+    }
+
+    private static Response paged(List<Map<String, Object>> all, Integer limit, String page) {
+        OciPage.Page<Map<String, Object>> result = OciPage.paginate(all, limit, page);
+        Response.ResponseBuilder builder = Response.ok(result.items());
+        if (result.hasNextPage()) {
+            builder.header(OciPage.OPC_NEXT_PAGE, result.nextPage());
+        }
+        return builder.build();
+    }
+
     private static Map<String, String> opcMeta(HttpHeaders headers) {
         Map<String, String> meta = new LinkedHashMap<>();
         headers.getRequestHeaders().forEach((name, values) -> {
@@ -694,4 +790,9 @@ public class ObjectStorageController {
                 })
                 .toList();
     }
+
+    private static Boolean bool(Map<String, Object> body, String key) {
+        return body != null && body.get(key) instanceof Boolean b ? b : null;
+    }
+
 }

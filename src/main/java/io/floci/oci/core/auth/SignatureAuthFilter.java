@@ -36,6 +36,9 @@ import java.util.Optional;
 @Priority(Priorities.AUTHENTICATION)
 public class SignatureAuthFilter implements ContainerRequestFilter {
 
+    /** The token endpoint the OCIR data plane advertises in its Bearer challenge. */
+    public static final String OCIR_TOKEN_PATH = "20180419/docker/token";
+
     /**
      * Injected lazily: this filter is instantiated during Quarkus static init,
      * before runtime config mappings are registered.
@@ -112,6 +115,9 @@ public class SignatureAuthFilter implements ContainerRequestFilter {
         return relative.equals("health")
                 || relative.equals("_floci") || relative.startsWith("_floci/")
                 || relative.equals("_floci-oci") || relative.startsWith("_floci-oci/")
-                || relative.startsWith("p/");
+                || relative.startsWith("p/")
+                // Docker clients speak the registry protocol and never sign OCI requests.
+                || relative.equals("v2") || relative.startsWith("v2/")
+                || relative.equals(OCIR_TOKEN_PATH);
     }
 }

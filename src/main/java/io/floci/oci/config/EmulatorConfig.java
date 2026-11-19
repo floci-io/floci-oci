@@ -203,6 +203,12 @@ public interface EmulatorConfig {
 
         PsqlServiceConfig psql();
 
+        EventsServiceConfig events();
+
+        NetworkingServiceConfig networking();
+
+        ArtifactsServiceConfig artifacts();
+
         interface IdentityServiceConfig {
             @WithDefault("true")
             boolean enabled();
@@ -216,6 +222,39 @@ public interface EmulatorConfig {
         interface QueueServiceConfig {
             @WithDefault("true")
             boolean enabled();
+        }
+
+        interface EventsServiceConfig {
+            @WithDefault("true")
+            boolean enabled();
+        }
+
+        interface NetworkingServiceConfig {
+            @WithDefault("true")
+            boolean enabled();
+        }
+
+        interface ArtifactsServiceConfig {
+            @WithDefault("true")
+            boolean enabled();
+
+            /**
+             * When {@code true}, no registry container is started: repositories and the container
+             * configuration work fully, image lists are empty and the {@code /v2/} data plane answers
+             * 503. The only container toggle for this service. Env: FLOCI_OCI_SERVICES_ARTIFACTS_MOCK
+             */
+            @WithDefault("false")
+            boolean mock();
+
+            /** The Docker Distribution image backing the OCIR data plane. */
+            @WithDefault("registry:2")
+            String registryImage();
+
+            @WithDefault("5200")
+            int registryBasePort();
+
+            @WithDefault("5299")
+            int registryMaxPort();
         }
 
         interface PsqlServiceConfig {

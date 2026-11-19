@@ -96,6 +96,10 @@ floci-oci:
       enabled: true
     queue:
       enabled: true
+    events:
+      enabled: true
+    networking:
+      enabled: true
     kms:
       enabled: true
     vault:
@@ -113,6 +117,12 @@ floci-oci:
       server-base-port: 8085
       server-max-port: 8095
       startup-timeout-seconds: 120
+    artifacts:
+      enabled: true
+      mock: false            # true = no Docker; image lists are empty and /v2/ answers 503
+      registry-image: "registry:2"
+      registry-base-port: 5200
+      registry-max-port: 5299
     oke:
       enabled: true
       mock: false            # true = no Docker; cluster creation returns synthetic endpoints
