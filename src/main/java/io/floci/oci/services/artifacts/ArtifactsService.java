@@ -35,6 +35,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -42,6 +43,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.regex.Pattern;
 
 /**
@@ -247,7 +249,7 @@ public class ArtifactsService implements Resettable, CompartmentUsage {
         StoredContainerRepository r = getRepository(repositoryId);
         Etags.checkIfMatch(ifMatch, r.getEtag());
         for (ImageEntry image : imageEntries(r)) {
-            deleteImageManifests(r, image);
+            deleteImageManifests(r, image, List.of());
         }
         repositories.delete(repositoryId);
     }
@@ -278,7 +280,10 @@ public class ArtifactsService implements Resettable, CompartmentUsage {
         }
         StoredContainerRepository r = current.get();
         if (digest != null && !r.getPushedDigests().contains(digest)) {
-            r.getPushedDigests().add(digest);
+            // Copy on write: image reads walk the list outside this lock.
+            List<String> pushed = new ArrayList<>(r.getPushedDigests());
+            pushed.add(digest);
+            r.setPushedDigests(pushed);
         }
         r.setTimeLastPushed(Instant.now().toString());
         repositories.put(r.getId(), r);
@@ -352,9 +357,10 @@ public class ArtifactsService implements Resettable, CompartmentUsage {
 
     public synchronized void deleteImage(String imageId) {
         for (StoredContainerRepository r : repositories.scan(k -> true)) {
-            for (ImageEntry image : imageEntries(r)) {
+            List<ImageEntry> images = imageEntries(r);
+            for (ImageEntry image : images) {
                 if (imageId.equals(image.wire().get("id"))) {
-                    deleteImageManifests(r, image);
+                    deleteImageManifests(r, image, images.stream().filter(other -> other != image).toList());
                     return;
                 }
             }
@@ -365,18 +371,26 @@ public class ArtifactsService implements Resettable, CompartmentUsage {
 
     /**
      * Deletes an image's manifest, and the platform manifests of an image index with it, then forgets
-     * their digests. A registry failure is raised, so nothing is reported deleted that still exists.
+     * their digests. A platform manifest that one of {@code remaining} also lists is kept, since two
+     * releases of a multi-platform image can share one. A registry failure is raised, so nothing is
+     * reported deleted that still exists.
      */
-    private void deleteImageManifests(StoredContainerRepository r, ImageEntry image) {
+    private void deleteImageManifests(StoredContainerRepository r, ImageEntry image, List<ImageEntry> remaining) {
         String digest = image.digest();
         deleteManifest(r, digest);
-        List<String> children = image.childDigests();
+        Set<String> shared = new HashSet<>();
+        for (ImageEntry other : remaining) {
+            shared.addAll(other.childDigests());
+        }
+        List<String> children = image.childDigests().stream().filter(child -> !shared.contains(child)).toList();
         for (String child : children) {
             deleteManifest(r, child);
         }
         repositories.get(r.getId()).ifPresent(stored -> {
-            stored.getPushedDigests().remove(digest);
-            stored.getPushedDigests().removeAll(children);
+            List<String> pushed = new ArrayList<>(stored.getPushedDigests());
+            pushed.remove(digest);
+            pushed.removeAll(children);
+            stored.setPushedDigests(pushed);
             repositories.put(stored.getId(), stored);
         });
     }
@@ -400,8 +414,9 @@ public class ArtifactsService implements Resettable, CompartmentUsage {
         if (mock() || registry == null) {
             return List.of();
         }
+        List<String> pushedDigests = List.copyOf(r.getPushedDigests());
         if (!registry.isStarted()) {
-            if (r.getPushedDigests().isEmpty()) {
+            if (pushedDigests.isEmpty()) {
                 return List.of();
             }
             registry.ensureReady();
@@ -428,7 +443,7 @@ public class ArtifactsService implements Resettable, CompartmentUsage {
                 image.put("displayName", r.getDisplayName() + ":" + tag);
             }
         }
-        for (String digest : r.getPushedDigests()) {
+        for (String digest : pushedDigests) {
             if (byDigest.containsKey(digest)) {
                 continue;
             }

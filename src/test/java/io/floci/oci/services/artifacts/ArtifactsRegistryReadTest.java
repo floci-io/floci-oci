@@ -19,6 +19,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -175,6 +176,46 @@ class ArtifactsRegistryReadTest {
         service.deleteImage((String) images.get(0).get("id"));
         assertTrue(manifests.isEmpty());
         assertTrue(service.images(service.getRepository(r.getId())).isEmpty());
+    }
+
+    private static String index(String... platformDigests) {
+        List<String> entries = new ArrayList<>();
+        for (String digest : platformDigests) {
+            entries.add("{\"mediaType\":\"" + IMAGE_MANIFEST + "\",\"digest\":\"" + digest + "\",\"size\":1}");
+        }
+        return "{\"schemaVersion\":2,\"mediaType\":\"" + IMAGE_INDEX + "\",\"manifests\":["
+                + String.join(",", entries) + "]}";
+    }
+
+    @Test
+    void deletingAnIndexKeepsPlatformManifestsAnotherIndexShares() {
+        StoredContainerRepository r = repository();
+        push(r, null, "sha256:amd64", new Stored(IMAGE_MANIFEST, imageManifest(100)));
+        push(r, null, "sha256:arm64-old", new Stored(IMAGE_MANIFEST, imageManifest(90)));
+        push(r, null, "sha256:arm64-new", new Stored(IMAGE_MANIFEST, imageManifest(91)));
+        push(r, "v1", "sha256:index1", new Stored(IMAGE_INDEX, index("sha256:amd64", "sha256:arm64-old")));
+        push(r, "v2", "sha256:index2", new Stored(IMAGE_INDEX, index("sha256:amd64", "sha256:arm64-new")));
+
+        List<Map<String, Object>> images = service.images(service.getRepository(r.getId()));
+        Map<String, Object> v1 = images.stream().filter(i -> "sha256:index1".equals(i.get("digest"))).findFirst()
+                .orElseThrow();
+        service.deleteImage((String) v1.get("id"));
+
+        assertEquals(Set.of("sha256:amd64", "sha256:arm64-new", "sha256:index2"), manifests.keySet());
+        List<Map<String, Object>> left = service.images(service.getRepository(r.getId()));
+        assertEquals(List.of("sha256:index2"), left.stream().map(i -> i.get("digest")).toList());
+        assertEquals(191L, ((Number) left.get(0).get("layersSizeInBytes")).longValue());
+    }
+
+    @Test
+    void aPushReplacesTheDigestListInsteadOfChangingTheOneReadersHold() {
+        StoredContainerRepository r = repository();
+        push(r, "v1", "sha256:one", new Stored(IMAGE_MANIFEST, imageManifest(1)));
+        List<String> held = service.getRepository(r.getId()).getPushedDigests();
+
+        push(r, "v2", "sha256:two", new Stored(IMAGE_MANIFEST, imageManifest(2)));
+        assertEquals(List.of("sha256:one"), held);
+        assertEquals(List.of("sha256:one", "sha256:two"), service.getRepository(r.getId()).getPushedDigests());
     }
 
     @Test
