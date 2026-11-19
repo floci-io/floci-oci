@@ -24,6 +24,8 @@ public class StoredBucket {
     private String id;
     private Map<String, String> freeformTags;
     private Map<String, Map<String, Object>> definedTags;
+    private boolean replicationEnabled;
+    private boolean isReadOnly;
 
     public StoredBucket() {
     }
@@ -138,5 +140,23 @@ public class StoredBucket {
 
     public void setDefinedTags(Map<String, Map<String, Object>> definedTags) {
         this.definedTags = definedTags;
+    }
+
+    /** True while the bucket is the source of a replication policy. Always on the wire. */
+    public boolean getReplicationEnabled() {
+        return replicationEnabled;
+    }
+
+    public void setReplicationEnabled(boolean replicationEnabled) {
+        this.replicationEnabled = replicationEnabled;
+    }
+
+    /** True while the bucket is the destination of a replication policy. Always on the wire. */
+    public boolean getIsReadOnly() {
+        return isReadOnly;
+    }
+
+    public void setIsReadOnly(boolean isReadOnly) {
+        this.isReadOnly = isReadOnly;
     }
 }

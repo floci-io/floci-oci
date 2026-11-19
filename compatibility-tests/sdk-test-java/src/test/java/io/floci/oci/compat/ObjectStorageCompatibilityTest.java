@@ -10,22 +10,32 @@ import com.oracle.bmc.objectstorage.model.CommitMultipartUploadPartDetails;
 import com.oracle.bmc.objectstorage.model.CopyObjectDetails;
 import com.oracle.bmc.objectstorage.model.CreateBucketDetails;
 import com.oracle.bmc.objectstorage.model.CreateMultipartUploadDetails;
+import com.oracle.bmc.objectstorage.model.CreateReplicationPolicyDetails;
 import com.oracle.bmc.objectstorage.model.DeletedObjectResult;
 import com.oracle.bmc.objectstorage.model.FailedObjectResult;
 import com.oracle.bmc.objectstorage.model.RenameObjectDetails;
+import com.oracle.bmc.objectstorage.model.ReplicationPolicy;
+import com.oracle.bmc.objectstorage.model.ReplicationPolicySummary;
+import com.oracle.bmc.objectstorage.model.ReplicationSource;
 import com.oracle.bmc.objectstorage.requests.BatchDeleteObjectsRequest;
 import com.oracle.bmc.objectstorage.requests.CommitMultipartUploadRequest;
 import com.oracle.bmc.objectstorage.requests.CopyObjectRequest;
 import com.oracle.bmc.objectstorage.requests.CreateBucketRequest;
 import com.oracle.bmc.objectstorage.requests.CreateMultipartUploadRequest;
+import com.oracle.bmc.objectstorage.requests.CreateReplicationPolicyRequest;
 import com.oracle.bmc.objectstorage.requests.DeleteBucketRequest;
 import com.oracle.bmc.objectstorage.requests.DeleteObjectRequest;
+import com.oracle.bmc.objectstorage.requests.DeleteReplicationPolicyRequest;
 import com.oracle.bmc.objectstorage.requests.GetBucketRequest;
 import com.oracle.bmc.objectstorage.requests.GetNamespaceRequest;
 import com.oracle.bmc.objectstorage.requests.GetObjectRequest;
+import com.oracle.bmc.objectstorage.requests.GetReplicationPolicyRequest;
 import com.oracle.bmc.objectstorage.requests.GetWorkRequestRequest;
 import com.oracle.bmc.objectstorage.requests.HeadObjectRequest;
 import com.oracle.bmc.objectstorage.requests.ListObjectsRequest;
+import com.oracle.bmc.objectstorage.requests.ListReplicationPoliciesRequest;
+import com.oracle.bmc.objectstorage.requests.ListReplicationSourcesRequest;
+import com.oracle.bmc.objectstorage.requests.MakeBucketWritableRequest;
 import com.oracle.bmc.objectstorage.requests.PutObjectRequest;
 import com.oracle.bmc.objectstorage.requests.RenameObjectRequest;
 import com.oracle.bmc.objectstorage.requests.UploadPartRequest;
@@ -310,5 +320,72 @@ class ObjectStorageCompatibilityTest {
                 .namespaceName(namespace).bucketName(bucket).objectName("assembled.bin").build());
         client.deleteBucket(DeleteBucketRequest.builder()
                 .namespaceName(namespace).bucketName(bucket).build());
+    }
+
+    /**
+     * Replication within one region, as Oracle's own CLI recording does: the suite reaches the emulator
+     * through one host, so it cannot address a second region.
+     */
+    @Test
+    void replicationPolicyLifecycle() throws Exception {
+        String source = createBucket("sdk-repl-src");
+        String destination = createBucket("sdk-repl-dst");
+
+        ReplicationPolicy policy = client.createReplicationPolicy(CreateReplicationPolicyRequest.builder()
+                .namespaceName(namespace).bucketName(source)
+                .createReplicationPolicyDetails(CreateReplicationPolicyDetails.builder()
+                        .name("sdk-policy").destinationRegionName("us-ashburn-1")
+                        .destinationBucketName(destination).build())
+                .build()).getReplicationPolicy();
+        assertThat(policy.getStatus()).isEqualTo(ReplicationPolicy.Status.Active);
+        assertThat(policy.getTimeLastSync()).isNull();
+        assertThat(policy.getTimeCreated()).isNotNull();
+        assertThat(client.getBucket(GetBucketRequest.builder().namespaceName(namespace).bucketName(source).build())
+                .getBucket().getReplicationEnabled()).isTrue();
+        assertThat(client.getBucket(GetBucketRequest.builder().namespaceName(namespace).bucketName(destination)
+                .build()).getBucket().getIsReadOnly()).isTrue();
+
+        byte[] payload = "replicated by the sdk".getBytes(StandardCharsets.UTF_8);
+        client.putObject(PutObjectRequest.builder()
+                .namespaceName(namespace).bucketName(source).objectName("a.txt")
+                .putObjectBody(new ByteArrayInputStream(payload)).contentLength((long) payload.length)
+                .build());
+        GetObjectResponse replica = client.getObject(GetObjectRequest.builder()
+                .namespaceName(namespace).bucketName(destination).objectName("a.txt").build());
+        assertThat(replica.getInputStream().readAllBytes()).isEqualTo(payload);
+
+        List<ReplicationPolicySummary> policies = client.listReplicationPolicies(ListReplicationPoliciesRequest
+                .builder().namespaceName(namespace).bucketName(source).build()).getItems();
+        assertThat(policies).extracting(ReplicationPolicySummary::getId).containsExactly(policy.getId());
+        assertThat(client.getReplicationPolicy(GetReplicationPolicyRequest.builder()
+                .namespaceName(namespace).bucketName(source).replicationId(policy.getId()).build())
+                .getReplicationPolicy().getTimeLastSync()).isNotNull();
+        List<ReplicationSource> sources = client.listReplicationSources(ListReplicationSourcesRequest.builder()
+                .namespaceName(namespace).bucketName(destination).build()).getItems();
+        assertThat(sources).extracting(ReplicationSource::getSourceBucketName, ReplicationSource::getPolicyName)
+                .containsExactly(tuple(source, "sdk-policy"));
+
+        assertThatThrownBy(() -> client.deleteBucket(DeleteBucketRequest.builder()
+                .namespaceName(namespace).bucketName(source).build()))
+                .isInstanceOfSatisfying(BmcException.class, e -> {
+                    assertThat(e.getStatusCode()).isEqualTo(403);
+                    assertThat(e.getServiceCode()).isEqualTo("BucketReplicationEnabled");
+                });
+
+        client.makeBucketWritable(MakeBucketWritableRequest.builder()
+                .namespaceName(namespace).bucketName(destination).build());
+        assertThat(client.getReplicationPolicy(GetReplicationPolicyRequest.builder()
+                .namespaceName(namespace).bucketName(source).replicationId(policy.getId()).build())
+                .getReplicationPolicy().getStatus()).isEqualTo(ReplicationPolicy.Status.ClientError);
+
+        client.deleteReplicationPolicy(DeleteReplicationPolicyRequest.builder()
+                .namespaceName(namespace).bucketName(source).replicationId(policy.getId()).build());
+        assertThat(client.getBucket(GetBucketRequest.builder().namespaceName(namespace).bucketName(source).build())
+                .getBucket().getReplicationEnabled()).isFalse();
+        for (String bucket : List.of(source, destination)) {
+            client.deleteObject(DeleteObjectRequest.builder()
+                    .namespaceName(namespace).bucketName(bucket).objectName("a.txt").build());
+            client.deleteBucket(DeleteBucketRequest.builder().namespaceName(namespace).bucketName(bucket).build());
+        }
     }
 }
