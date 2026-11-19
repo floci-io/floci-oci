@@ -110,6 +110,17 @@ class EventsServiceTest {
     }
 
     @Test
+    void matchingFiltersTheEnvelopeThatIsDelivered() {
+        StoredRule rule = service.createRule(ruleBody("{\"eventID\":\"fixed-*\"}", true));
+        Map<String, Object> envelope = new HashMap<>(service.envelope(createObject("b")));
+        envelope.put("eventID", "fixed-1");
+
+        assertEquals(List.of(rule.getId()),
+                service.matchingRules(createObject("b"), envelope).stream().map(StoredRule::getId).toList());
+        assertTrue(service.matchingRules(createObject("b")).isEmpty());
+    }
+
+    @Test
     void matchingUsesConditionAndSkipsDisabledRules() {
         StoredRule matching = service.createRule(ruleBody(
                 "{\"eventType\":\"com.oraclecloud.objectstorage.createobject\","

@@ -226,11 +226,12 @@ public class EventsService implements OciEvents, CompartmentUsage {
             return;
         }
         try {
-            List<StoredRule> matched = matchingRules(event);
+            // One envelope for matching and delivery, so eventID and eventTime are the ones filtered on.
+            Map<String, Object> envelope = envelope(event);
+            List<StoredRule> matched = matchingRules(event, envelope);
             if (matched.isEmpty()) {
                 return;
             }
-            Map<String, Object> envelope = envelope(event);
             byte[] payload = mapper.writeValueAsBytes(envelope);
             for (StoredRule rule : matched) {
                 for (Map<String, Object> action : rule.getActions()) {
@@ -251,8 +252,11 @@ public class EventsService implements OciEvents, CompartmentUsage {
 
     /** The enabled rules whose compartment is the event's compartment or one of its ancestors, and whose condition matches. */
     List<StoredRule> matchingRules(Event event) {
+        return matchingRules(event, envelope(event));
+    }
+
+    List<StoredRule> matchingRules(Event event, Map<String, Object> envelope) {
         Set<String> scope = compartmentAndAncestors(event.compartmentId());
-        Map<String, Object> envelope = envelope(event);
         List<StoredRule> matched = new ArrayList<>();
         for (StoredRule rule : rules.scan(k -> true)) {
             if (!rule.isEnabled() || !scope.contains(rule.getCompartmentId())) {
