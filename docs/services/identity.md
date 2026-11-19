@@ -80,6 +80,9 @@ oci iam compartment list --endpoint http://localhost:4599 --compartment-id "$TEN
   `CreateRegionSubscription` is accepted in every region: the SDKs do not tie it to the home
   region, so floci-oci does not either.
 - Policy statements are stored verbatim; the policy language is not parsed or enforced.
+- Customer Secret Keys (`/20160918/users/{userId}/customerSecretKeys`) are served for the
+  [Amazon S3 Compatibility API](object-storage.md#amazon-s3-compatibility-api): create returns the
+  secret once, list returns summaries without it.
 - Identity domains, API keys, auth tokens, dynamic groups and tag namespaces are not
   implemented yet.
 

@@ -4,3 +4,5 @@
 oci==2.190.0
 pytest>=8.0
 cryptography>=42.0
+# The Amazon S3 Compatibility API tests (tests/test_s3_compat.py).
+boto3>=1.36

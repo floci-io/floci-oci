@@ -15,6 +15,7 @@ OCI Object Storage — unversioned paths under `/n/{namespace}/b/{bucket}/o/{obj
 | Pre-authenticated requests | Create, Get, List, Delete; anonymous data path via `/p/{token}/…` |
 | Replication | CreateReplicationPolicy, GetReplicationPolicy, ListReplicationPolicies, DeleteReplicationPolicy, ListReplicationSources, MakeBucketWritable |
 | Work requests | Get, List, errors, logs (unversioned at `/workRequests`) |
+| Amazon S3 Compatibility API | See [below](#amazon-s3-compatibility-api) |
 
 ## Quickstart
 
@@ -53,8 +54,7 @@ oci os object get $E --namespace floci-local --bucket-name demo \
 - `CommitMultipartUpload` returns `opc-multipart-md5`: the Base64 MD5 of the committed parts' binary
   MD5 digests in part-number order, followed by `-` and the part count. `GetObject` and `HeadObject`
   return the same value for multipart objects, in place of `content-md5`.
-- Object versioning, retention rules, lifecycle policies and the Amazon S3 Compatibility API are
-  not implemented yet.
+- Object versioning, retention rules and lifecycle policies are not implemented yet.
 
 ## Replication
 
@@ -83,3 +83,57 @@ floci-oci's own choices, where no OCI source states the behaviour:
 - A destination that already has a source, or is itself a source, answers
   `409 ReplicationPolicyConflict`.
 - `MakeBucketWritable` on a bucket that is not a destination answers `409 Conflict`.
+
+## Amazon S3 Compatibility API
+
+S3 clients reach the same buckets and objects on OCI's S3 host,
+`<namespace>.compat.objectstorage.<region>.<domain>`, path style (`/<bucket>/<object>`).
+Locally that is `http://<namespace>.compat.objectstorage.<region>.localhost.floci.io:4599`,
+which resolves to 127.0.0.1. A request is recognised by that Host alone; every other request
+reaches the native API as before.
+
+| Area | Operations |
+|---|---|
+| Service | ListBuckets (GetService) |
+| Buckets | PutBucket, HeadBucket, DeleteBucket, GetBucketLocation, GetBucketVersioning (always unversioned), Get/Put/DeleteBucketTagging (the bucket's freeform tags) |
+| Objects | PutObject, GetObject (Range), HeadObject, DeleteObject, DeleteObjects, CopyObject (`x-amz-copy-source`, `x-amz-metadata-directive`) |
+| Listing | ListObjects (v1, `marker`) and ListObjectsV2 (`continuation-token`, `start-after`), with `prefix`, `delimiter`, `max-keys` |
+| Multipart | CreateMultipartUpload, UploadPart, CompleteMultipartUpload, AbortMultipartUpload, ListParts, ListMultipartUploads |
+
+- Requests are signed with SigV4 and a Customer Secret Key (Identity
+  `/20160918/users/{userId}/customerSecretKeys`). The access key decides the tenancy and user;
+  an access key no key owns reaches the default tenancy. Signatures are never checked.
+- Buckets created over S3 land in the namespace's `defaultS3CompartmentId` (the root
+  compartment), as on real OCI.
+- ETags are the hex MD5 S3 clients expect; a multipart object's is the hex MD5 of the part
+  MD5s followed by `-<parts>`. `x-amz-meta-*` maps to `opc-meta-*`.
+- `aws-chunked` uploads (`STREAMING-*` payloads, with or without trailing checksums) are
+  decoded; chunk signatures and trailing checksums are not checked.
+- Errors are S3 XML (`NoSuchBucket`, `NoSuchKey`, `BucketNotEmpty`, `NoSuchUpload`, ...).
+- PutObject honours `If-None-Match: *` and `If-Match`, compared with the hex MD5 ETag
+  (`412 PreconditionFailed`). CompleteMultipartUpload needs every part's ETag and the parts in
+  ascending order (`InvalidPart`, `InvalidPartOrder`).
+- GetObject and HeadObject honour `If-Match` (`412 PreconditionFailed`) and `If-None-Match`
+  (`304 Not Modified`). CopyObject honours `x-amz-copy-source-if-match` and
+  `x-amz-copy-source-if-none-match` against the source's ETag.
+- ListObjects and ListObjectsV2 honour `encoding-type=url`. In ListObjectsV2 with a delimiter, a
+  `start-after` inside a folder skips that folder's common prefix.
+- A bucket subresource floci-oci does not serve (`?policy`, `?acl`, `?cors`, ...) answers
+  `501 NotImplemented`; it never runs the plain bucket operation.
+- SigV4 credentials only count on the S3 host. Deleting an Identity user deletes its Customer
+  Secret Keys, and turning Object Storage off turns this API off too: an S3 host then answers 503
+  and never reaches a native route. Customer Secret Key writes are accepted only in the home region.
+- Oracle's supported list does not name CopyObject or ListObjectsV2; floci-oci serves them
+  because boto3, the AWS CLI and rclone use them. SSE-C and KMS headers, ACLs, policies and
+  the virtual-host `vhcompat` endpoint are not implemented.
+
+```python
+import boto3
+from botocore.config import Config
+
+s3 = boto3.client("s3", region_name="us-ashburn-1",
+                  endpoint_url="http://floci-local.compat.objectstorage.us-ashburn-1.localhost.floci.io:4599",
+                  aws_access_key_id="<customer secret key id>", aws_secret_access_key="<key>",
+                  config=Config(s3={"addressing_style": "path"}))
+s3.put_object(Bucket="demo", Key="hello.txt", Body=b"hello")
+```

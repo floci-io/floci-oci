@@ -6,6 +6,7 @@ import io.floci.oci.core.common.Regions;
 import io.floci.oci.core.common.RequestContext;
 import io.floci.oci.core.tenancy.TenancyRegistry;
 import jakarta.annotation.Priority;
+import jakarta.enterprise.inject.Instance;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.Priorities;
 import jakarta.ws.rs.container.ContainerRequestContext;
@@ -52,6 +53,10 @@ public class SignatureAuthFilter implements ContainerRequestFilter {
     @Inject
     RequestContext requestContext;
 
+    /** Resolves S3 Compatibility API access keys; unresolvable when Identity serves none. */
+    @Inject
+    Instance<AccessKeyResolver> accessKeys;
+
     @Override
     public void filter(ContainerRequestContext ctx) {
         EmulatorConfig config = configProvider.get();
@@ -59,6 +64,16 @@ public class SignatureAuthFilter implements ContainerRequestFilter {
 
         String authorization = ctx.getHeaderString(HttpHeaders.AUTHORIZATION);
         Optional<AuthContext> auth = OciSignatureParser.parse(authorization);
+        // SigV4 credentials count only on the S3 Compatibility API host: a native route keeps its
+        // OCI signature requirement whatever S3-looking header or query it carries.
+        Optional<String> s3AccessKey = AccessKeyResolver.isS3CompatHost(ctx.getHeaderString(HttpHeaders.HOST))
+                ? AccessKeyResolver.sigV4AccessKey(authorization)
+                        .or(() -> AccessKeyResolver.presignedAccessKey(
+                                ctx.getUriInfo().getQueryParameters().getFirst("X-Amz-Credential")))
+                : Optional.empty();
+        if (auth.isEmpty() && s3AccessKey.isPresent() && accessKeys.isResolvable()) {
+            auth = accessKeys.get().resolve(s3AccessKey.get());
+        }
 
         if (auth.isPresent()) {
             requestContext.setTenancyId(auth.get().tenancyId());
@@ -67,7 +82,9 @@ public class SignatureAuthFilter implements ContainerRequestFilter {
             // a later default-region change.
             tenancies.get().get(auth.get().tenancyId());
         } else {
-            if (!exempt && config.auth().requireSignature()) {
+            // An S3 Compatibility API request is signed with SigV4; an access key no Customer
+            // Secret Key owns still reaches the default tenancy, since signatures are never checked.
+            if (!exempt && s3AccessKey.isEmpty() && config.auth().requireSignature()) {
                 ctx.abortWith(Response.status(401)
                         .type(MediaType.APPLICATION_JSON)
                         .entity(new OciErrorResponse("NotAuthenticated",

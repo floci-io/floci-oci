@@ -27,7 +27,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * IAM writes are only accepted at the tenancy's home region. The routes are read from
- * {@link IdentityController} itself, so a write added there is checked without touching this test.
+ * {@link IdentityController} and {@link CustomerSecretKeyController} themselves, so a write added
+ * there is checked without touching this test.
  */
 @QuarkusTest
 class IdentityHomeRegionRestIntegrationTest {
@@ -114,7 +115,9 @@ class IdentityHomeRegionRestIntegrationTest {
 
     private static List<Method> writes(boolean anyRegion) {
         List<Method> writes = new ArrayList<>();
-        for (Method method : IdentityController.class.getDeclaredMethods()) {
+        List<Method> methods = new ArrayList<>(List.of(IdentityController.class.getDeclaredMethods()));
+        methods.addAll(List.of(CustomerSecretKeyController.class.getDeclaredMethods()));
+        for (Method method : methods) {
             boolean write = method.isAnnotationPresent(POST.class) || method.isAnnotationPresent(PUT.class)
                     || method.isAnnotationPresent(DELETE.class);
             if (write && method.isAnnotationPresent(AnyRegionWrite.class) == anyRegion) {
@@ -131,7 +134,9 @@ class IdentityHomeRegionRestIntegrationTest {
 
     /** As {@link #send(Method, String)}, signed as {@code tenancyId} when one is given. */
     private static Response send(Method route, String host, String tenancyId) {
-        String path = "/20160918" + route.getAnnotation(Path.class).value()
+        Path methodPath = route.getAnnotation(Path.class);
+        String path = (route.getDeclaringClass().getAnnotation(Path.class).value()
+                + (methodPath == null ? "" : methodPath.value()))
                 .replace("{tenancyId}", tenancyId == null ? TENANCY : tenancyId)
                 .replaceAll("\\{[^}]+}", "ocid1.placeholder.oc1..none");
         String verb = route.isAnnotationPresent(POST.class) ? "POST"

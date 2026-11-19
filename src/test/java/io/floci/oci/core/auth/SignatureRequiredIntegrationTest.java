@@ -37,6 +37,30 @@ class SignatureRequiredIntegrationTest {
     }
 
     @Test
+    void s3CredentialsDoNotExemptANativeRoute() {
+        given().queryParam("X-Amz-Credential", "anything/20261118/us-ashburn-1/s3/aws4_request")
+            .when().get("/20160918/users")
+            .then()
+                .statusCode(401)
+                .body("code", equalTo("NotAuthenticated"));
+        given().header("Authorization", "AWS4-HMAC-SHA256 Credential=anything/20261118/us-ashburn-1/s3/aws4_request,"
+                        + " SignedHeaders=host, Signature=00")
+            .when().get("/20160918/users")
+            .then()
+                .statusCode(401)
+                .body("code", equalTo("NotAuthenticated"));
+    }
+
+    @Test
+    void s3CredentialsCountOnTheS3CompatibilityHost() {
+        given().header("Host", "floci-test.compat.objectstorage.us-ashburn-1.localhost.floci.io")
+                .header("Authorization", "AWS4-HMAC-SHA256 Credential=anything/20261118/us-ashburn-1/s3/aws4_request,"
+                        + " SignedHeaders=host, Signature=00")
+            .when().get("/")
+            .then().statusCode(200);
+    }
+
+    @Test
     void healthAnswersUnsigned() {
         given()
             .when().get("/health")
