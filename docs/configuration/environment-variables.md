@@ -22,6 +22,7 @@ All configuration lives under the `floci-oci.*` prefix; every property maps to a
 | `FLOCI_OCI_SERVICES_IDENTITY_ENABLED` | `true` | Enable/disable Identity |
 | `FLOCI_OCI_SERVICES_OBJECTSTORAGE_ENABLED` | `true` | Enable/disable Object Storage |
 | `FLOCI_OCI_SERVICES_QUEUE_ENABLED` | `true` | Enable/disable Queue |
+| `FLOCI_OCI_SERVICES_NETWORKING_ENABLED` | `true` | Enable/disable Networking (VCNs, subnets, gateways, route tables, security lists, NSGs, DHCP options) |
 | `FLOCI_OCI_SERVICES_KMS_ENABLED` | `true` | Enable/disable KMS (vaults, keys, crypto) |
 | `FLOCI_OCI_SERVICES_VAULT_ENABLED` | `true` | Enable/disable Vault secrets + bundles |
 | `FLOCI_OCI_SERVICES_STREAMING_ENABLED` | `true` | Enable/disable Streaming |

@@ -1,6 +1,6 @@
 # Exercises the floci-oci emulator through the real oracle/oci provider:
-# Identity (users, groups, memberships, policies) and Object Storage
-# (namespace data source, bucket, object).
+# Identity (users, groups, memberships, policies), Object Storage
+# (namespace data source, bucket, object), Networking (VCN) and the services built on it.
 
 data "oci_objectstorage_namespace" "ns" {
   compartment_id = var.tenancy_ocid
@@ -140,6 +140,164 @@ output "stream_messages_endpoint" {
   value = oci_streaming_stream.tf_stream.messages_endpoint
 }
 
+# ── Networking (VCN) ───────────────────────────────────────────────────────
+
+data "oci_core_services" "all" {
+  filter {
+    name   = "name"
+    values = ["All .* Services In Oracle Services Network"]
+    regex  = true
+  }
+}
+
+resource "oci_core_vcn" "tf_vcn" {
+  compartment_id = var.tenancy_ocid
+  display_name   = "tf-compat-vcn"
+  cidr_blocks    = ["10.0.0.0/16"]
+  dns_label      = "tfcompat"
+}
+
+resource "oci_core_internet_gateway" "tf_igw" {
+  compartment_id = var.tenancy_ocid
+  vcn_id         = oci_core_vcn.tf_vcn.id
+  display_name   = "tf-compat-igw"
+  enabled        = true
+}
+
+resource "oci_core_nat_gateway" "tf_nat" {
+  compartment_id = var.tenancy_ocid
+  vcn_id         = oci_core_vcn.tf_vcn.id
+  display_name   = "tf-compat-nat"
+}
+
+resource "oci_core_service_gateway" "tf_sgw" {
+  compartment_id = var.tenancy_ocid
+  vcn_id         = oci_core_vcn.tf_vcn.id
+  display_name   = "tf-compat-sgw"
+
+  services {
+    service_id = data.oci_core_services.all.services[0].id
+  }
+}
+
+resource "oci_core_route_table" "tf_public_rt" {
+  compartment_id = var.tenancy_ocid
+  vcn_id         = oci_core_vcn.tf_vcn.id
+  display_name   = "tf-compat-public-rt"
+
+  route_rules {
+    destination       = "0.0.0.0/0"
+    destination_type  = "CIDR_BLOCK"
+    network_entity_id = oci_core_internet_gateway.tf_igw.id
+  }
+}
+
+resource "oci_core_route_table" "tf_private_rt" {
+  compartment_id = var.tenancy_ocid
+  vcn_id         = oci_core_vcn.tf_vcn.id
+  display_name   = "tf-compat-private-rt"
+
+  route_rules {
+    destination       = "0.0.0.0/0"
+    network_entity_id = oci_core_nat_gateway.tf_nat.id
+  }
+
+  route_rules {
+    destination       = data.oci_core_services.all.services[0].cidr_block
+    destination_type  = "SERVICE_CIDR_BLOCK"
+    network_entity_id = oci_core_service_gateway.tf_sgw.id
+  }
+}
+
+resource "oci_core_security_list" "tf_sl" {
+  compartment_id = var.tenancy_ocid
+  vcn_id         = oci_core_vcn.tf_vcn.id
+  display_name   = "tf-compat-sl"
+
+  egress_security_rules {
+    destination = "0.0.0.0/0"
+    protocol    = "all"
+  }
+
+  ingress_security_rules {
+    source   = "10.0.0.0/16"
+    protocol = "6"
+
+    tcp_options {
+      min = 5432
+      max = 5432
+    }
+  }
+}
+
+resource "oci_core_network_security_group" "tf_nsg" {
+  compartment_id = var.tenancy_ocid
+  vcn_id         = oci_core_vcn.tf_vcn.id
+  display_name   = "tf-compat-nsg"
+}
+
+resource "oci_core_network_security_group_security_rule" "tf_nsg_https" {
+  network_security_group_id = oci_core_network_security_group.tf_nsg.id
+  direction                 = "INGRESS"
+  protocol                  = "6"
+  source                    = "0.0.0.0/0"
+  source_type               = "CIDR_BLOCK"
+
+  tcp_options {
+    destination_port_range {
+      min = 443
+      max = 443
+    }
+  }
+}
+
+resource "oci_core_dhcp_options" "tf_dhcp" {
+  compartment_id = var.tenancy_ocid
+  vcn_id         = oci_core_vcn.tf_vcn.id
+  display_name   = "tf-compat-dhcp"
+
+  options {
+    type        = "DomainNameServer"
+    server_type = "VcnLocalPlusInternet"
+  }
+}
+
+resource "oci_core_subnet" "tf_api_subnet" {
+  compartment_id    = var.tenancy_ocid
+  vcn_id            = oci_core_vcn.tf_vcn.id
+  display_name      = "tf-compat-api-subnet"
+  cidr_block        = "10.0.0.0/28"
+  dns_label         = "api"
+  route_table_id    = oci_core_route_table.tf_public_rt.id
+  security_list_ids = [oci_core_security_list.tf_sl.id]
+  dhcp_options_id   = oci_core_dhcp_options.tf_dhcp.id
+}
+
+resource "oci_core_subnet" "tf_lb_subnet" {
+  compartment_id = var.tenancy_ocid
+  vcn_id         = oci_core_vcn.tf_vcn.id
+  display_name   = "tf-compat-lb-subnet"
+  cidr_block     = "10.0.1.0/24"
+  route_table_id = oci_core_route_table.tf_public_rt.id
+}
+
+resource "oci_core_subnet" "tf_private_subnet" {
+  compartment_id             = var.tenancy_ocid
+  vcn_id                     = oci_core_vcn.tf_vcn.id
+  display_name               = "tf-compat-private-subnet"
+  cidr_block                 = "10.0.2.0/24"
+  route_table_id             = oci_core_route_table.tf_private_rt.id
+  prohibit_public_ip_on_vnic = true
+}
+
+output "vcn_domain_name" {
+  value = oci_core_vcn.tf_vcn.vcn_domain_name
+}
+
+output "api_subnet_domain_name" {
+  value = oci_core_subnet.tf_api_subnet.subnet_domain_name
+}
+
 # ── Container Registry (OCIR) ───────────────────────────────────────────────
 
 resource "oci_artifacts_container_configuration" "tf_container_configuration" {
@@ -170,14 +328,14 @@ output "container_repository_namespace" {
 resource "oci_containerengine_cluster" "tf_cluster" {
   compartment_id     = var.tenancy_ocid
   name               = "tf-compat-cluster"
-  vcn_id             = "ocid1.vcn.oc1.iad.tfvcn"
+  vcn_id             = oci_core_vcn.tf_vcn.id
   kubernetes_version = "v1.30.1"
   type               = "ENHANCED_CLUSTER"
 
   endpoint_config {
-    subnet_id            = "ocid1.subnet.oc1.iad.tfapisubnet"
+    subnet_id            = oci_core_subnet.tf_api_subnet.id
     is_public_ip_enabled = false
-    nsg_ids              = []
+    nsg_ids              = [oci_core_network_security_group.tf_nsg.id]
   }
 
   cluster_pod_network_options {
@@ -185,7 +343,7 @@ resource "oci_containerengine_cluster" "tf_cluster" {
   }
 
   options {
-    service_lb_subnet_ids = ["ocid1.subnet.oc1.iad.tflbsubnet"]
+    service_lb_subnet_ids = [oci_core_subnet.tf_lb_subnet.id]
 
     kubernetes_network_config {
       pods_cidr     = "10.244.0.0/16"
@@ -244,7 +402,7 @@ resource "oci_psql_db_system" "tf_db_system" {
   shape          = "PostgreSQL.VM.Standard.E4.Flex.2.32GB"
 
   network_details {
-    subnet_id = "ocid1.subnet.oc1.iad.tfsubnet"
+    subnet_id = oci_core_subnet.tf_private_subnet.id
   }
 
   storage_details {

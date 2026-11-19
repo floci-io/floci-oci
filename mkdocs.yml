@@ -68,6 +68,7 @@ nav:
     - Overview: services/index.md
     - Identity (IAM): services/identity.md
     - Object Storage: services/object-storage.md
+    - Networking (VCN): services/networking.md
     - Queue: services/queue.md
     - Vault, KMS & Secrets: services/kms-vault.md
     - Streaming: services/streaming.md
