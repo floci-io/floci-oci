@@ -189,7 +189,7 @@ flowchart LR
 | Category | Services |
 |---|---|
 | Identity | Compartments, users, groups, user-group memberships, policies, availability domains, regions, region subscriptions, tenancies |
-| Storage | Object Storage: namespaces, buckets, objects, listing, rename, copy, batch delete, multipart uploads, pre-authenticated requests |
+| Storage | Object Storage: namespaces, buckets, objects, versioning, listing, rename, copy, batch delete, multipart uploads, pre-authenticated requests |
 | Messaging | Queue (visibility timeouts, dead-letter queues, channels), Streaming (partitioned log, cursors, consumer groups) |
 | Security | Vault + KMS (vaults, keys, key versions, **real** AES-GCM / RSA / ECDSA crypto), Secrets and secret bundles |
 | Serverless | Functions on API versions `20260325` and `20181201` (applications, functions, work requests, runtime catalog, real invocation through an Fn Project sidecar) |
@@ -206,7 +206,7 @@ For operation-level compatibility, see the [Services Overview](https://floci.io/
 | Service | How it works | Notable features |
 |---|---|---|
 | Identity (IAM) | In-process | Compartment CRUD incl. `compartmentIdInSubtree` listing and async delete via work request; users, groups, memberships; policies (statements stored verbatim); reference data (3 ADs, regions, tenancy); etag concurrency on every mutation |
-| Object Storage | In-process | Bucket CRUD (delete requires empty); objects with `Content-MD5` verification, `opc-meta-*` metadata, Range/206 reads, conditional headers; ListObjects with `prefix`/`start`/`end`/`delimiter`/`fields` and `nextStartWith` truncation; rename; async copy via work request; batch delete with per-object success/failure results; multipart uploads (per-part `etag` + `opc-content-md5`); pre-authenticated requests with anonymous `/p/{token}/…` data path; replication policies, same-region or cross-region, with a read-only destination and `MakeBucketWritable`; Amazon S3 Compatibility API on `<namespace>.compat.objectstorage.<region>…` (SigV4 with Customer Secret Keys, path style, multipart, aws-chunked) |
+| Object Storage | In-process | Bucket CRUD (delete requires empty); objects with `Content-MD5` verification, `opc-meta-*` metadata, Range/206 reads, conditional headers; ListObjects with `prefix`/`start`/`end`/`delimiter`/`fields` and `nextStartWith` truncation; rename; async copy via work request; batch delete with per-object success/failure results; multipart uploads (per-part `etag` + `opc-content-md5`); pre-authenticated requests with anonymous `/p/{token}/…` data path; replication policies, same-region or cross-region, with a read-only destination and `MakeBucketWritable`; object versioning with delete markers and ListObjectVersions; Amazon S3 Compatibility API on `<namespace>.compat.objectstorage.<region>…` (SigV4 with Customer Secret Keys, path style, multipart, aws-chunked) |
 | Networking (VCN) | In-process | VCNs with the default route table, security list and DHCP options real OCI creates; subnets with CIDR containment and overlap checks; internet, NAT and service gateways; route tables, security lists, network security groups with rule actions, DHCP options; dependency checks on delete; state only, no Docker networks |
 | Queue | In-process | Work-request-driven control plane (mutations return no body); data plane with visibility timeouts, `0`-visibility peeks, long polling, dead-letter queues, per-channel filtering, stats; wrapped `{"items":[…]}` list shape |
 | Streaming | In-process | Partitioned append-only log with key-hash placement; opaque cursors (`TRIM_HORIZON`/`LATEST`/`AT_OFFSET`/`AFTER_OFFSET`/`AT_TIME`), group cursors with commit + resume, `opc-next-cursor` paging; CreateStream returns body *and* work request |
@@ -221,7 +221,7 @@ For operation-level compatibility, see the [Services Overview](https://floci.io/
 | Governance Rules | In-process | Governance rules (`/20220504`) of type `QUOTA`, `TAG` and `ALLOWED_REGIONS`, inclusion criteria, tenancy attachments for children opted in to governance, enforced rules as the child sees them; `ALLOWED_REGIONS` refuses a governed child's region subscription outside the list |
 | Work Requests | In-process | `202` + `opc-work-request-id` responses, pollable per service (`/20160918`, `/20210201`, `/20180418`, `/20180222` and unversioned `/workRequests`) with errors/logs endpoints |
 
-Not implemented yet: identity domains, API keys/auth tokens, dynamic groups, tag namespaces, object versioning, retention rules (stubbed empty for Terraform compatibility), lifecycle policies, queue consumer groups, stream pools' Kafka settings and connect harnesses, KMS key backup and replication, secret rotation, and pre-built functions (PBF).
+Not implemented yet: identity domains, API keys/auth tokens, dynamic groups, tag namespaces, retention rules (stubbed empty for Terraform compatibility), lifecycle policies, queue consumer groups, stream pools' Kafka settings and connect harnesses, KMS key backup and replication, secret rotation, and pre-built functions (PBF).
 
 </details>
 

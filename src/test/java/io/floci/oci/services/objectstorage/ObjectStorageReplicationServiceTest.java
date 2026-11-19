@@ -75,7 +75,7 @@ class ObjectStorageReplicationServiceTest {
 
     private void bucket(String regionName, String name) {
         in(regionName);
-        service.createBucket(NS, name, COMPARTMENT, null, null, null, null, null, null);
+        service.createBucket(NS, name, COMPARTMENT, null, null, null, null, null, null, null);
     }
 
     private StoredOsObject put(String bucket, String name, String content) {
@@ -112,6 +112,27 @@ class ObjectStorageReplicationServiceTest {
     }
 
     // ── Policies ───────────────────────────────────────────────────────────────
+
+    @Test
+    void versionedBucketCannotBeADestination() {
+        bucket(PHOENIX, "dst");
+        service.updateBucket(NS, "dst", null, null, null, null, null, "Enabled", null);
+        bucket(ASHBURN, "src");
+        assertError(409, "ReplicationPolicyConflict",
+                () -> service.createReplicationPolicy(NS, "src", "to-phoenix", PHOENIX, "dst"));
+    }
+
+    @Test
+    void destinationCannotEnableVersioningAndReplicasGetTheirOwnVersion() {
+        replicateAshburnToPhoenix();
+        StoredOsObject written = put("src", "a.txt", "hello");
+
+        in(PHOENIX);
+        assertError(409, "Conflict", () -> service.updateBucket(NS, "dst", null, null, null, null, null, "Enabled", null));
+        String replicaVersion = service.getObject(NS, "dst", "a.txt").getVersionId();
+        assertNotNull(replicaVersion);
+        assertNotEquals(written.getVersionId(), replicaVersion);
+    }
 
     @Test
     void createPolicy_marksBothBucketsAndStartsWithNoSync() {
@@ -249,7 +270,7 @@ class ObjectStorageReplicationServiceTest {
         assertEquals(second.getEtag(), service.getObject(NS, "dst", "a.txt").getEtag());
 
         in(ASHBURN);
-        service.deleteObject(NS, "src", "a.txt", null);
+        service.deleteObject(NS, "src", "a.txt", null, null);
         assertFalse(existsIn(PHOENIX, "dst", "a.txt"));
     }
 
@@ -292,7 +313,7 @@ class ObjectStorageReplicationServiceTest {
         replicateAshburnToPhoenix();
         bucket(ASHBURN, "plain");
         put("plain", "seed", "copied");
-        service.copyObject(NS, "plain", "seed", ASHBURN, NS, "src", "seed-copy", null);
+        service.copyObject(NS, "plain", "seed", ASHBURN, NS, "src", "seed-copy", null, null);
 
         assertTrue(existsIn(PHOENIX, "dst", "seed-copy"));
     }
@@ -306,14 +327,14 @@ class ObjectStorageReplicationServiceTest {
         in(PHOENIX);
 
         assertError(409, "Conflict", () -> put("dst", "direct", "x"));
-        assertError(409, "Conflict", () -> service.deleteObject(NS, "dst", "replicated", null));
+        assertError(409, "Conflict", () -> service.deleteObject(NS, "dst", "replicated", null, null));
         assertError(409, "Conflict", () -> service.batchDeleteObjects(NS, "dst",
                 List.of(new BatchDeleteItem("replicated", null))));
         assertError(409, "Conflict", () -> service.renameObject(NS, "dst", "replicated", "moved", null, null, null));
         assertError(409, "Conflict", () -> service.createMultipartUpload(NS, "dst", "big", null, null));
         assertError(409, "Conflict", () -> service.deleteBucket(NS, "dst", null));
         in(ASHBURN);
-        assertError(409, "Conflict", () -> service.copyObject(NS, "src", "replicated", PHOENIX, NS, "dst", "c", null));
+        assertError(409, "Conflict", () -> service.copyObject(NS, "src", "replicated", PHOENIX, NS, "dst", "c", null, null));
     }
 
     @Test
@@ -347,7 +368,7 @@ class ObjectStorageReplicationServiceTest {
         in(ASHBURN);
         service.deleteReplicationPolicy(NS, "src", policy.getId());
         assertFalse(bucketIn(ASHBURN, "src").getReplicationEnabled());
-        service.deleteObject(NS, "src", "after", null);
+        service.deleteObject(NS, "src", "after", null, null);
         assertDoesNotThrow(() -> service.deleteBucket(NS, "src", null));
     }
 
@@ -435,7 +456,7 @@ class ObjectStorageReplicationServiceTest {
                     start.await();
                     if (delete) {
                         try {
-                            service.deleteObject(NS, "src", "hot", null);
+                            service.deleteObject(NS, "src", "hot", null, null);
                         } catch (OciException expected) {
                             // Another writer may have deleted it already.
                         }

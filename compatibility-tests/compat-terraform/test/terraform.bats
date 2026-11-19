@@ -35,6 +35,12 @@ setup() {
     run "$TF_BIN" output -raw object_md5
     [ -n "$output" ]
 
+    run "$TF_BIN" output -raw bucket_versioning
+    [ "$output" = "Enabled" ]
+
+    run "$TF_BIN" output -raw object_version_id
+    [ -n "$output" ]
+
     run "$TF_BIN" output -raw queue_messages_endpoint
     [ -n "$output" ]
 

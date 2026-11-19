@@ -68,7 +68,8 @@ public class ParAccessController {
         StoredPar par = authorize(parToken, namespaceName, bucketName, objectName, WRITE_TYPES);
         StoredOsObject o = service.putObject(namespaceName, par.getBucket(), objectName,
                 body.readAllBytes(), contentType, contentMd5, null, null, null);
-        return Response.ok().header("etag", o.getEtag()).header("opc-content-md5", o.getMd5()).build();
+        return Response.ok().header("etag", o.getEtag()).header("opc-content-md5", o.getMd5())
+                .header("version-id", o.getVersionId()).build();
     }
 
     /**

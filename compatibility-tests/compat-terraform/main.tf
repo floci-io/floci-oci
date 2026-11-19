@@ -37,6 +37,7 @@ resource "oci_objectstorage_bucket" "tf_bucket" {
   compartment_id = var.tenancy_ocid
   namespace      = data.oci_objectstorage_namespace.ns.namespace
   name           = "tf-compat-bucket"
+  versioning     = "Enabled"
 
   object_events_enabled = true
 }
@@ -47,6 +48,8 @@ resource "oci_objectstorage_object" "tf_object" {
   object      = "terraform/hello.txt"
   content     = "hello from terraform"
   content_type = "text/plain"
+  # The bucket is versioned: destroy must remove every version for the bucket delete to succeed.
+  delete_all_object_versions = true
 }
 
 output "namespace" {
@@ -67,6 +70,14 @@ output "bucket_name" {
 
 output "object_md5" {
   value = oci_objectstorage_object.tf_object.content_md5
+}
+
+output "bucket_versioning" {
+  value = oci_objectstorage_bucket.tf_bucket.versioning
+}
+
+output "object_version_id" {
+  value = oci_objectstorage_object.tf_object.version_id
 }
 
 # ── Queue (work-request driven control plane) ────────────────────────────────
