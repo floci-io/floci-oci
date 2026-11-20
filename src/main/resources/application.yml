@@ -33,6 +33,7 @@ quarkus:
       - --initialize-at-run-time=io.floci.oci.core.tls.CertificateGenerator
       - --initialize-at-run-time=io.floci.oci.services.kms.KmsService
       - --initialize-at-run-time=io.floci.oci.services.oke.OkeService
+      - --initialize-at-run-time=io.floci.oci.services.notifications.NotificationsService
 
 floci-oci:
   port: 4599
@@ -97,6 +98,8 @@ floci-oci:
     queue:
       enabled: true
     events:
+      enabled: true
+    notifications:
       enabled: true
     networking:
       enabled: true

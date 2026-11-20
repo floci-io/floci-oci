@@ -5,9 +5,11 @@ import io.floci.oci.testing.TestCompartments;
 import io.quarkus.test.junit.QuarkusTest;
 import io.restassured.response.ExtractableResponse;
 import io.restassured.response.Response;
+import io.restassured.response.ValidatableResponse;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.Test;
 
+import java.net.URI;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -229,6 +231,76 @@ class RetryTokenIntegrationTest {
                 .body("code", equalTo("InvalidatedRetryToken"))
                 .body("message", equalTo("The provided retry token was used in an earlier request that resulted"
                         + " in a system update, but a subsequent operation invalidated the token."));
+    }
+
+    @Test
+    void deletingANotificationsTopicInvalidatesItsToken() {
+        String compartment = TestCompartments.create("retrytopic");
+        String retryToken = token("topic-invalidated");
+        Map<String, Object> body = Map.of("name", "retry-topic-" + System.nanoTime(), "compartmentId", compartment);
+        String topicId = given().contentType("application/json").header("opc-retry-token", retryToken).body(body)
+            .when().post("/20181201/topics")
+            .then().statusCode(200).extract().jsonPath().getString("topicId");
+
+        given().when().delete("/20181201/topics/{id}", topicId).then().statusCode(204);
+
+        given().contentType("application/json").header("opc-retry-token", retryToken).body(body)
+            .when().post("/20181201/topics")
+            .then()
+                .statusCode(409)
+                .body("code", equalTo("InvalidatedRetryToken"));
+    }
+
+    @Test
+    void unsubscribingThroughTheLinkInvalidatesTheSubscriptionsToken() {
+        String compartment = TestCompartments.create("retryunsub");
+        String topicId = given().contentType("application/json")
+                .body(Map.of("name", "retry-unsub-" + System.nanoTime(), "compartmentId", compartment))
+            .when().post("/20181201/topics")
+            .then().statusCode(200).extract().jsonPath().getString("topicId");
+        String retryToken = token("subscription-unsubscribed");
+        Map<String, Object> body = Map.of("topicId", topicId, "compartmentId", compartment, "protocol", "EMAIL",
+                "endpoint", "unsub-" + System.nanoTime() + "@example.com");
+        String subscriptionId = given().contentType("application/json").header("opc-retry-token", retryToken)
+                .body(body)
+            .when().post("/20181201/subscriptions")
+            .then().statusCode(200).extract().jsonPath().getString("id");
+        String confirmationUrl = given().queryParam("subscriptionId", subscriptionId)
+            .when().get("/_floci-oci/notifications/messages")
+            .then().statusCode(200).extract().path("messages[0].confirmationUrl");
+        String unsubscribeUrl = follow(confirmationUrl).statusCode(200).extract().path("unsubscribeUrl");
+
+        follow(unsubscribeUrl).statusCode(200);
+
+        given().contentType("application/json").header("opc-retry-token", retryToken).body(body)
+            .when().post("/20181201/subscriptions")
+            .then().statusCode(409).body("code", equalTo("InvalidatedRetryToken"));
+    }
+
+    @Test
+    void deletingATopicInvalidatesTheTokensOfItsSubscriptions() {
+        String compartment = TestCompartments.create("retrytopicsubs");
+        String topicId = given().contentType("application/json")
+                .body(Map.of("name", "retry-topic-subs-" + System.nanoTime(), "compartmentId", compartment))
+            .when().post("/20181201/topics")
+            .then().statusCode(200).extract().jsonPath().getString("topicId");
+        String retryToken = token("subscription-topic-deleted");
+        Map<String, Object> body = Map.of("topicId", topicId, "compartmentId", compartment, "protocol", "SMS",
+                "endpoint", "+14255550100");
+        given().contentType("application/json").header("opc-retry-token", retryToken).body(body)
+            .when().post("/20181201/subscriptions")
+            .then().statusCode(200);
+
+        given().when().delete("/20181201/topics/{id}", topicId).then().statusCode(204);
+
+        given().contentType("application/json").header("opc-retry-token", retryToken).body(body)
+            .when().post("/20181201/subscriptions")
+            .then().statusCode(409).body("code", equalTo("InvalidatedRetryToken"));
+    }
+
+    private static ValidatableResponse follow(String link) {
+        URI uri = URI.create(link);
+        return given().urlEncodingEnabled(false).when().get(uri.getRawPath() + "?" + uri.getRawQuery()).then();
     }
 
     @Test

@@ -1,7 +1,7 @@
 # Events
 
 OCI Events, API version `20181201`. Rules match the events floci-oci services emit and
-deliver them to Functions and Streaming. Served on port 4599 beside the Functions API,
+deliver them to Functions, Streaming and Notifications. Served on port 4599 beside the Functions API,
 which shares the same version prefix.
 
 ## Supported operations
@@ -21,7 +21,7 @@ which shares the same version prefix.
   It must parse as a JSON object (`400 InvalidParameter` otherwise, `null` included).
 - UpdateRule with `actions` replaces the whole list. Every supplied field is validated first,
   so a rejected update leaves the rule unchanged.
-- An OSS action needs a `streamId`. A `functionId` or `streamId` that does not exist is
+- An OSS action needs a `streamId`. A `functionId`, `streamId` or `topicId` that does not exist is
   `400 RelatedResourceNotAuthorizedOrNotFound` while that service is enabled.
 - Rule OCIDs use the `eventrule` resource type. No local Oracle source shows a real rule
   OCID, so treat the type as unconfirmed.
@@ -82,11 +82,11 @@ The payload is the CloudEvents 0.1 envelope from Oracle's examples:
 |---|---|
 | `FAAS` | The function is invoked with the envelope as its JSON body (a synthetic result in Functions mock mode) |
 | `OSS` | The envelope is put on the stream as one message, base64-encoded in `value` |
-| `ONS` | Stored and validated, not delivered: Notifications is not emulated yet |
+| `ONS` | The envelope is published to the topic as a JSON message (see [Notifications](notifications.md)) |
 
 Delivery runs in the background after the request that caused the event has returned. A
 failed delivery is logged and never fails that request. An action whose target service
-(Functions or Streaming) is disabled is skipped.
+(Functions, Streaming or Notifications) is disabled is skipped.
 
 ## Quickstart
 

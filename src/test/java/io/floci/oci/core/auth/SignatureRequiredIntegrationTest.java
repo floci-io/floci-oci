@@ -113,6 +113,25 @@ class SignatureRequiredIntegrationTest {
     }
 
     @Test
+    void notificationsSubscriptionLinksAnswerUnsigned() {
+        // An unknown token is the Notifications handler's own 404, not the auth filter's 401.
+        for (String action : new String[] {"confirmation", "unsubscription"}) {
+            given()
+                .queryParam("token", "unknown.token").queryParam("protocol", "HTTPS")
+                .when().get("/20181201/subscriptions/ocid1.onssubscription.oc1.iad.unknown/" + action)
+                .then()
+                    .statusCode(404)
+                    .body("code", equalTo("NotAuthorizedOrNotFound"))
+                    .header("opc-request-id", notNullValue());
+        }
+        given()
+            .when().get("/20181201/subscriptions/ocid1.onssubscription.oc1.iad.unknown")
+            .then()
+                .statusCode(401)
+                .body("code", equalTo("NotAuthenticated"));
+    }
+
+    @Test
     void anUnsignedServiceRequestIsNotAuthenticated() {
         given()
             .queryParam("compartmentId", TENANCY)

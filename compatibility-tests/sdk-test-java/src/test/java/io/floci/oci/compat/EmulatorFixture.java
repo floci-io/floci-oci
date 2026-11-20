@@ -11,6 +11,8 @@ import com.oracle.bmc.keymanagement.KmsCryptoClient;
 import com.oracle.bmc.keymanagement.KmsManagementClient;
 import com.oracle.bmc.keymanagement.KmsVaultClient;
 import com.oracle.bmc.objectstorage.ObjectStorageClient;
+import com.oracle.bmc.ons.NotificationControlPlaneClient;
+import com.oracle.bmc.ons.NotificationDataPlaneClient;
 import com.oracle.bmc.psql.PostgresqlClient;
 import com.oracle.bmc.queue.QueueAdminClient;
 import com.oracle.bmc.queue.QueueClient;
@@ -140,6 +142,20 @@ public final class EmulatorFixture {
 
     public static WorkRequestClient organizationsWorkRequests() {
         WorkRequestClient client = WorkRequestClient.builder()
+                .region(Region.US_ASHBURN_1).build(AUTH);
+        client.setEndpoint(ENDPOINT);
+        return client;
+    }
+
+    public static NotificationControlPlaneClient notificationControlPlane() {
+        NotificationControlPlaneClient client = NotificationControlPlaneClient.builder()
+                .region(Region.US_ASHBURN_1).build(AUTH);
+        client.setEndpoint(ENDPOINT);
+        return client;
+    }
+
+    public static NotificationDataPlaneClient notificationDataPlane() {
+        NotificationDataPlaneClient client = NotificationDataPlaneClient.builder()
                 .region(Region.US_ASHBURN_1).build(AUTH);
         client.setEndpoint(ENDPOINT);
         return client;
