@@ -101,6 +101,9 @@ floci-oci:
       enabled: true
     notifications:
       enabled: true
+    monitoring:
+      enabled: true
+      alarm-evaluation-interval-seconds: 60
     networking:
       enabled: true
     kms:

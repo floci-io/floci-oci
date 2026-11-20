@@ -183,6 +183,25 @@ output "subscription_state" {
   value = oci_ons_subscription.tf_subscription.state
 }
 
+# ── Monitoring ──────────────────────────────────────────────────────────────
+
+resource "oci_monitoring_alarm" "tf_alarm" {
+  compartment_id        = var.tenancy_ocid
+  metric_compartment_id = var.tenancy_ocid
+  display_name          = "tf-compat-alarm"
+  namespace             = "tf_compat"
+  query                 = "Latency[1m]{host = \"web-1\"}.max() > 500"
+  severity              = "CRITICAL"
+  destinations          = [oci_ons_notification_topic.tf_topic.id]
+  is_enabled            = true
+  pending_duration      = "PT5M"
+  body                  = "Latency is above 500 ms"
+}
+
+output "alarm_state" {
+  value = oci_monitoring_alarm.tf_alarm.state
+}
+
 # NOTE: oci_functions_application is deliberately NOT exercised here — the provider
 # hardcodes a 5-minute post-destroy sleep (ExtraWaitPostDelete) outside httpreplay
 # mode, which would dominate the suite's runtime. Functions coverage lives in the

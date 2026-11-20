@@ -207,6 +207,8 @@ public interface EmulatorConfig {
 
         NotificationsServiceConfig notifications();
 
+        MonitoringServiceConfig monitoring();
+
         NetworkingServiceConfig networking();
 
         ArtifactsServiceConfig artifacts();
@@ -234,6 +236,15 @@ public interface EmulatorConfig {
         interface NotificationsServiceConfig {
             @WithDefault("true")
             boolean enabled();
+        }
+
+        interface MonitoringServiceConfig {
+            @WithDefault("true")
+            boolean enabled();
+
+            /** Seconds between alarm evaluations; OCI evaluates alarms once per minute. */
+            @WithDefault("60")
+            int alarmEvaluationIntervalSeconds();
         }
 
         interface NetworkingServiceConfig {
