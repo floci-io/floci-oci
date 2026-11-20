@@ -38,4 +38,13 @@ class SignatureAuthFilterTest {
         assertTrue(SignatureAuthFilter.isExempt("/v2/ns/app/manifests/v1"));
         assertTrue(SignatureAuthFilter.isExempt("/20180419/docker/token"));
     }
+
+    @Test
+    void notificationsSubscriptionLinksAreExemptBecauseTheyCarryTheirOwnToken() {
+        assertTrue(SignatureAuthFilter.isExempt("/20181201/subscriptions/ocid1.onssubscription.oc1.iad.x/confirmation"));
+        assertTrue(SignatureAuthFilter.isExempt("/20181201/subscriptions/ocid1.onssubscription.oc1.iad.x/unsubscription"));
+        assertFalse(SignatureAuthFilter.isExempt("/20181201/subscriptions/ocid1.onssubscription.oc1.iad.x"));
+        assertFalse(SignatureAuthFilter.isExempt("/20181201/subscriptions/ocid1.onssubscription.oc1.iad.x/actions/resendConfirmation"));
+        assertFalse(SignatureAuthFilter.isExempt("/20181201/subscriptions/a/b/confirmation"));
+    }
 }

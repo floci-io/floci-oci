@@ -6,6 +6,7 @@ import io.floci.oci.core.common.ServiceDescriptor;
 import io.floci.oci.core.common.ServiceRegistry;
 import io.floci.oci.core.storage.StorageBackend;
 import io.floci.oci.core.storage.StorageFactory;
+import io.floci.oci.core.storage.TenancyAwareStorageBackend;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
@@ -17,7 +18,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
@@ -133,19 +136,40 @@ public class RetryTokenStore implements Resettable {
      * The OCID is also remembered for {@link #DELETED_MEMORY}, for a receipt saved after the delete.
      */
     public synchronized void deletedResource(String storageKey, String resourceId, String workRequestId) {
+        StorageBackend<String, StoredRetryReceipt> receipts = receipts(storageKey);
+        recordDeletion(receipts.keys(), receipts::get, updated -> receipts.putAllAndDelete(updated, List.of()),
+                resourceId, workRequestId);
+    }
+
+    /**
+     * Invalidates the receipts in {@code tenancyId} that created {@code resourceId}, for a resource removed
+     * by a request that carries no tenancy of its own (an unsigned unsubscribe link) or as a side effect of
+     * deleting another resource (the subscriptions of a deleted topic).
+     */
+    public synchronized void deletedResourceIn(String storageKey, String tenancyId, String resourceId) {
+        StorageBackend<String, StoredRetryReceipt> receipts = receipts(storageKey);
+        Set<String> keys = receipts instanceof TenancyAwareStorageBackend<StoredRetryReceipt> tenancyAware
+                ? tenancyAware.keysForTenancy(tenancyId)
+                : receipts.keys();
+        recordDeletion(keys, key -> TenancyAwareStorageBackend.getIn(receipts, tenancyId, key),
+                updated -> TenancyAwareStorageBackend.putAllIn(receipts, tenancyId, updated), resourceId, null);
+    }
+
+    private void recordDeletion(Set<String> keys, Function<String, Optional<StoredRetryReceipt>> read,
+                                Consumer<Map<String, StoredRetryReceipt>> write, String resourceId,
+                                String workRequestId) {
         Instant now = clock.instant();
         recentlyDeleted.values().removeIf(deletion -> !now.isBefore(deletion.forgetAt()));
         recentlyDeleted.put(resourceId, new Deletion(workRequestId, now.plus(DELETED_MEMORY)));
-        StorageBackend<String, StoredRetryReceipt> receipts = receipts(storageKey);
         Map<String, StoredRetryReceipt> updated = new LinkedHashMap<>();
-        for (String key : receipts.keys()) {
-            receipts.get(key)
+        for (String key : keys) {
+            read.apply(key)
                     .filter(receipt -> resourceId.equals(receipt.createdId()) && !receipt.invalidated()
                             && now.isBefore(receipt.expiresAt()))
                     .ifPresent(receipt -> updated.put(key, receipt.deleted(workRequestId)));
         }
         if (!updated.isEmpty()) {
-            receipts.putAllAndDelete(updated, List.of());
+            write.accept(updated);
         }
     }
 

@@ -46,4 +46,14 @@ class RequestContextPropagationTest {
 
         assertEquals(DEFAULT_TENANCY + " us-ashburn-1", seen.get());
     }
+
+    @Test
+    void runAsGivesBackgroundWorkTheNamedTenancyAndRegion() throws InterruptedException {
+        AtomicReference<String> seen = new AtomicReference<>();
+
+        Thread.ofVirtual().start(() -> propagation.runAs(TENANCY, "eu-frankfurt-1",
+                () -> seen.set(ociContext.tenancyId() + " " + ociContext.region()))).join();
+
+        assertEquals(TENANCY + " eu-frankfurt-1", seen.get());
+    }
 }
