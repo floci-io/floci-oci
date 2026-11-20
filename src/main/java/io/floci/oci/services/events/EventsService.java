@@ -19,6 +19,7 @@ import io.floci.oci.services.events.model.StoredRule;
 import io.floci.oci.services.functions.FunctionsService;
 import io.floci.oci.services.identity.IdentityService;
 import io.floci.oci.services.identity.model.StoredCompartment;
+import io.floci.oci.services.notifications.NotificationsService;
 import io.floci.oci.services.streaming.StreamingService;
 import io.quarkus.runtime.StartupEvent;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -41,8 +42,7 @@ import java.util.function.Consumer;
 
 /**
  * OCI Events: rules ({@code /20181201/rules}) that match emitted events against a condition and
- * deliver them to Functions (FAAS) and Streaming (OSS) actions. Notifications (ONS) actions are
- * stored and validated but not delivered, because floci-oci does not serve Notifications yet.
+ * deliver them to Functions (FAAS), Streaming (OSS) and Notifications (ONS) actions.
  *
  * <p>Matching runs on the request thread that emitted the event, so the rule lookup and the
  * compartment ancestry see the caller's tenancy and region; delivery runs on a virtual thread
@@ -63,20 +63,22 @@ public class EventsService implements OciEvents, CompartmentUsage {
     private final IdentityService identity;
     private final FunctionsService functions;
     private final StreamingService streaming;
+    private final NotificationsService notifications;
     private final RequestContextPropagation contextPropagation;
     private final ObjectMapper mapper;
 
     @Inject
     public EventsService(StorageFactory storageFactory, EmulatorConfig config, ServiceRegistry serviceRegistry,
                          OciContext ociContext, IdentityService identity, FunctionsService functions,
-                         StreamingService streaming, RequestContextPropagation contextPropagation,
-                         ObjectMapper mapper) {
+                         StreamingService streaming, NotificationsService notifications,
+                         RequestContextPropagation contextPropagation, ObjectMapper mapper) {
         this.config = config;
         this.ociContext = ociContext;
         this.serviceRegistry = serviceRegistry;
         this.identity = identity;
         this.functions = functions;
         this.streaming = streaming;
+        this.notifications = notifications;
         this.contextPropagation = contextPropagation;
         this.mapper = mapper;
         this.rules = storageFactory.create("events", "events-rules.json",
@@ -84,11 +86,11 @@ public class EventsService implements OciEvents, CompartmentUsage {
     }
 
     EventsService(StorageBackend<String, StoredRule> rules, EmulatorConfig config, ObjectMapper mapper) {
-        this(rules, config, mapper, null, null);
+        this(rules, config, mapper, null, null, null);
     }
 
     EventsService(StorageBackend<String, StoredRule> rules, EmulatorConfig config, ObjectMapper mapper,
-                  FunctionsService functions, StreamingService streaming) {
+                  FunctionsService functions, StreamingService streaming, NotificationsService notifications) {
         this.rules = rules;
         this.config = config;
         this.ociContext = OciContext.fromConfig(config);
@@ -96,6 +98,7 @@ public class EventsService implements OciEvents, CompartmentUsage {
         this.identity = null;
         this.functions = functions;
         this.streaming = streaming;
+        this.notifications = notifications;
         this.contextPropagation = null;
         this.mapper = mapper;
     }
@@ -289,6 +292,15 @@ public class EventsService implements OciEvents, CompartmentUsage {
                     message.put("value", Base64.getEncoder().encodeToString(payload));
                     streaming.putMessages((String) action.get("streamId"), List.of(message));
                 }
+                case "ONS" -> {
+                    String topicId = (String) action.get("topicId");
+                    if (topicId == null) {
+                        LOG.debugv("Rule {0}: ONS action {1} has no topicId, nothing to deliver", rule.getId(),
+                                action.get("id"));
+                    } else {
+                        notifications.publishEvent(topicId, payload);
+                    }
+                }
                 default -> LOG.debugv("Rule {0}: {1} actions are not delivered by floci-oci", rule.getId(), type);
             }
         } catch (RuntimeException e) {
@@ -302,6 +314,7 @@ public class EventsService implements OciEvents, CompartmentUsage {
         return switch (actionType) {
             case "FAAS" -> config.services().functions().enabled();
             case "OSS" -> config.services().streaming().enabled();
+            case "ONS" -> config.services().notifications().enabled();
             default -> true;
         };
     }
@@ -423,7 +436,7 @@ public class EventsService implements OciEvents, CompartmentUsage {
             switch (type) {
                 case "FAAS" -> putReference(action, input, "functionId", false, this::requireFunction);
                 case "OSS" -> putReference(action, input, "streamId", true, this::requireStream);
-                default -> putReference(action, input, "topicId", false, id -> { });
+                default -> putReference(action, input, "topicId", false, this::requireTopic);
             }
             actions.add(action);
         }
@@ -462,6 +475,17 @@ public class EventsService implements OciEvents, CompartmentUsage {
             streaming.getStream(streamId);
         } catch (OciException e) {
             throw relatedNotFound("stream", streamId, e);
+        }
+    }
+
+    private void requireTopic(String topicId) {
+        if (notifications == null || !config.services().notifications().enabled()) {
+            return;
+        }
+        try {
+            notifications.getTopic(topicId);
+        } catch (OciException e) {
+            throw relatedNotFound("topic", topicId, e);
         }
     }
 

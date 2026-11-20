@@ -7,6 +7,7 @@ import io.floci.oci.core.common.OciException;
 import io.floci.oci.core.storage.InMemoryStorage;
 import io.floci.oci.services.events.model.StoredRule;
 import io.floci.oci.services.functions.FunctionsService;
+import io.floci.oci.services.notifications.NotificationsService;
 import io.floci.oci.services.streaming.StreamingService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -207,10 +208,12 @@ class EventsServiceTest {
     void actionsToADisabledServiceAreNotDelivered() {
         FunctionsService functions = mock(FunctionsService.class);
         StreamingService streaming = mock(StreamingService.class);
+        NotificationsService notifications = mock(NotificationsService.class);
         EventsService delivering = new EventsService(new InMemoryStorage<>(), config, new ObjectMapper(),
-                functions, streaming);
+                functions, streaming, notifications);
         when(config.services().functions().enabled()).thenReturn(false);
         when(config.services().streaming().enabled()).thenReturn(false);
+        when(config.services().notifications().enabled()).thenReturn(false);
         StoredRule rule = new StoredRule();
         rule.setId("ocid1.eventrule.oc1.iad.x");
         byte[] payload = "{}".getBytes();
@@ -218,13 +221,18 @@ class EventsServiceTest {
         delivering.deliver(rule, Map.of("actionType", "FAAS", "functionId", "ocid1.fnfunc.oc1.iad.f"), payload);
         delivering.deliver(rule, Map.of("actionType", "OSS", "streamId", "ocid1.stream.oc1.iad.s"), payload);
         verify(functions, never()).invoke(anyString(), any(), anyString());
+        delivering.deliver(rule, Map.of("actionType", "ONS", "topicId", "ocid1.onstopic.oc1.iad.t"), payload);
         verify(streaming, never()).putMessages(anyString(), anyList());
+        verify(notifications, never()).publishEvent(anyString(), any());
 
         when(config.services().functions().enabled()).thenReturn(true);
         when(config.services().streaming().enabled()).thenReturn(true);
+        when(config.services().notifications().enabled()).thenReturn(true);
         delivering.deliver(rule, Map.of("actionType", "FAAS", "functionId", "ocid1.fnfunc.oc1.iad.f"), payload);
         delivering.deliver(rule, Map.of("actionType", "OSS", "streamId", "ocid1.stream.oc1.iad.s"), payload);
+        delivering.deliver(rule, Map.of("actionType", "ONS", "topicId", "ocid1.onstopic.oc1.iad.t"), payload);
         verify(functions).invoke("ocid1.fnfunc.oc1.iad.f", payload, "application/json");
         verify(streaming).putMessages(anyString(), anyList());
+        verify(notifications).publishEvent("ocid1.onstopic.oc1.iad.t", payload);
     }
 }
