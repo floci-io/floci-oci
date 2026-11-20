@@ -10,6 +10,7 @@
 | [Streaming](streaming.md) | `/20180418/…` | Streams, partitioned log, cursors (incl. group cursors), commit/heartbeat |
 | [Functions](functions.md) | `/20260325/…`, `/20181201/…` | Applications, functions, real invocation via an `fnproject/fnserver` sidecar |
 | [Events](events.md) | `/20181201/rules` | Rules with Oracle's condition matching (nesting, arrays, wildcards, child compartments); Object Storage bucket and object events delivered to Functions, Streaming and Notifications |
+| [Logging](logging.md) | `/20200531/…`, `/20200831/…`, `/20190909/search` | Log groups and logs (work-request driven), saved searches, PutLogs ingestion in Oracle's log format, SearchLogs with the Logging query language (search, where, sort, top, dedup, select, count, summarize) |
 | [Monitoring](monitoring.md) | `/20180401/…` | Custom metrics (PostMetricData, SummarizeMetricsData with MQL, ListMetrics), alarms evaluated every minute with pending duration, overrides and repeat notifications to Notifications and Streaming, alarm status, history, dimension states, suppressions |
 | [Notifications](notifications.md) | `/20181201/topics`, `/20181201/subscriptions` | Topics, subscriptions with confirmation and unsubscribe links, PublishMessage; real HTTPS POST and Functions delivery with retries, email, Slack, PagerDuty and SMS recorded in an inspection endpoint |
 | [Container Engine for Kubernetes (OKE)](containerengine.md) | `/20180222/…` | Clusters CRUD, Node Pools CRUD, Options, Kubeconfig generation, work requests, real k3s sidecar |

@@ -209,6 +209,8 @@ public interface EmulatorConfig {
 
         MonitoringServiceConfig monitoring();
 
+        LoggingServiceConfig logging();
+
         NetworkingServiceConfig networking();
 
         ArtifactsServiceConfig artifacts();
@@ -234,6 +236,11 @@ public interface EmulatorConfig {
         }
 
         interface NotificationsServiceConfig {
+            @WithDefault("true")
+            boolean enabled();
+        }
+
+        interface LoggingServiceConfig {
             @WithDefault("true")
             boolean enabled();
         }
