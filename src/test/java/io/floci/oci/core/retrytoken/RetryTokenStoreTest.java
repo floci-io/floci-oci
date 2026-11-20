@@ -1,6 +1,7 @@
 package io.floci.oci.core.retrytoken;
 
 import io.floci.oci.core.storage.InMemoryStorage;
+import io.floci.oci.core.storage.TenancyAwareStorageBackend;
 import io.floci.oci.testing.MutableClock;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -10,6 +11,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -107,6 +109,26 @@ class RetryTokenStoreTest {
         assertTrue(store.find(QUEUE, "created-q1").orElseThrow().invalidated());
         assertFalse(store.find(QUEUE, "created-q2").orElseThrow().invalidated());
         assertEquals("ocid1.queue.oc1.iad.q1", store.find(QUEUE, "created-q1").orElseThrow().createdId());
+    }
+
+    @Test
+    void aDeleteInANamedTenancyInvalidatesOnlyThatTenancysReceipts() {
+        InMemoryStorage<String, StoredRetryReceipt> shared = new InMemoryStorage<>();
+        AtomicReference<String> currentTenancy = new AtomicReference<>("ocid1.tenancy.oc1..a");
+        RetryTokenStore partitioned = new RetryTokenStore(
+                storageKey -> new TenancyAwareStorageBackend<>(shared, currentTenancy::get), List::of, clock);
+        String subscription = "ocid1.onssubscription.oc1.iad.s1";
+        partitioned.save("notifications", "k", partitioned.generation(), "fp", 200, null, Map.of(), null,
+                subscription);
+        currentTenancy.set("ocid1.tenancy.oc1..b");
+        partitioned.save("notifications", "k", partitioned.generation(), "fp", 200, null, Map.of(), null,
+                subscription);
+
+        partitioned.deletedResourceIn("notifications", "ocid1.tenancy.oc1..a", subscription);
+
+        assertFalse(partitioned.find("notifications", "k").orElseThrow().invalidated());
+        currentTenancy.set("ocid1.tenancy.oc1..a");
+        assertTrue(partitioned.find("notifications", "k").orElseThrow().invalidated());
     }
 
     @Test

@@ -205,6 +205,8 @@ public interface EmulatorConfig {
 
         EventsServiceConfig events();
 
+        NotificationsServiceConfig notifications();
+
         NetworkingServiceConfig networking();
 
         ArtifactsServiceConfig artifacts();
@@ -225,6 +227,11 @@ public interface EmulatorConfig {
         }
 
         interface EventsServiceConfig {
+            @WithDefault("true")
+            boolean enabled();
+        }
+
+        interface NotificationsServiceConfig {
             @WithDefault("true")
             boolean enabled();
         }

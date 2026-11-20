@@ -160,6 +160,29 @@ output "rule_state" {
   value = oci_events_rule.tf_rule.state
 }
 
+# ── Notifications ───────────────────────────────────────────────────────────
+
+resource "oci_ons_notification_topic" "tf_topic" {
+  compartment_id = var.tenancy_ocid
+  name           = "tf-compat-topic"
+  description    = "terraform compat topic"
+}
+
+resource "oci_ons_subscription" "tf_subscription" {
+  compartment_id = var.tenancy_ocid
+  topic_id       = oci_ons_notification_topic.tf_topic.id
+  protocol       = "EMAIL"
+  endpoint       = "tf-compat@example.com"
+}
+
+output "topic_state" {
+  value = oci_ons_notification_topic.tf_topic.state
+}
+
+output "subscription_state" {
+  value = oci_ons_subscription.tf_subscription.state
+}
+
 # NOTE: oci_functions_application is deliberately NOT exercised here — the provider
 # hardcodes a 5-minute post-destroy sleep (ExtraWaitPostDelete) outside httpreplay
 # mode, which would dominate the suite's runtime. Functions coverage lives in the
