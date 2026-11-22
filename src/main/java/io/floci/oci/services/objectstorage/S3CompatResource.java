@@ -186,7 +186,12 @@ public class S3CompatResource {
                 return xmlResponse(200, xml.close("TagSet").end("Tagging"));
             }
             if (has(uri, "versioning")) {
-                return xmlResponse(200, S3Xml.document("VersioningConfiguration").end("VersioningConfiguration"));
+                // A bucket never versioned answers an empty configuration, as S3 does.
+                S3Xml versioning = S3Xml.document("VersioningConfiguration");
+                if ("Enabled".equals(b.getVersioning()) || "Suspended".equals(b.getVersioning())) {
+                    versioning.element("Status", b.getVersioning());
+                }
+                return xmlResponse(200, versioning.end("VersioningConfiguration"));
             }
             if (has(uri, "uploads")) {
                 return listMultipartUploads(namespace, bucket);
@@ -336,7 +341,7 @@ public class S3CompatResource {
             StoredOsObject o = service.putObject(namespace, bucket, key, data, headers.getHeaderString("Content-Type"),
                     headers.getHeaderString("Content-MD5"), userMetadata(headers), conditions.ifMatch(),
                     conditions.ifNoneMatch());
-            return Response.ok().header("ETag", quotedEtag(o)).build();
+            return withVersionId(Response.ok().header("ETag", quotedEtag(o)), o.getVersionId()).build();
         });
     }
 
@@ -354,7 +359,8 @@ public class S3CompatResource {
         }
         String sourceBucket = source.substring(0, slash);
         String sourceKey = source.substring(slash + 1);
-        StoredOsObject original = service.getObject(namespace, sourceBucket, sourceKey);
+        String sourceVersionId = query < 0 ? null : versionIdIn(copySource.substring(query + 1));
+        StoredOsObject original = service.getObject(namespace, sourceBucket, sourceKey, sourceVersionId);
         String sourceEtag = unquote(quotedEtag(original));
         String sourceIfMatch = blankToNull(headers.getHeaderString("x-amz-copy-source-if-match"));
         String sourceIfNoneMatch = blankToNull(headers.getHeaderString("x-amz-copy-source-if-none-match"));
@@ -371,14 +377,19 @@ public class S3CompatResource {
                     null, null);
         } else {
             // The native ETag of the object just checked, so a source replaced meanwhile fails the copy.
-            service.copyObject(namespace, sourceBucket, sourceKey, ociContext.region(), namespace, bucket, key,
-                    original.getEtag(), null);
-            copied = service.getObject(namespace, bucket, key);
+            // The object this copy wrote: re-reading the key could return a later write's version.
+            copied = service.copy(namespace, sourceBucket, sourceKey, ociContext.region(), namespace, bucket, key,
+                    original.getEtag(), original.getVersionId()).object();
         }
-        return xmlResponse(200, S3Xml.document("CopyObjectResult")
+        String result = S3Xml.document("CopyObjectResult")
                 .element("LastModified", iso(copied.getTimeModified()))
                 .element("ETag", quotedEtag(copied))
-                .end("CopyObjectResult"));
+                .end("CopyObjectResult");
+        Response.ResponseBuilder response = Response.ok(result).type(S3Xml.CONTENT_TYPE);
+        if (original.getVersionId() != null) {
+            response.header("x-amz-copy-source-version-id", original.getVersionId());
+        }
+        return withVersionId(response, copied.getVersionId()).build();
     }
 
     @GET
@@ -391,7 +402,8 @@ public class S3CompatResource {
             if (uri.getQueryParameters().containsKey("uploadId")) {
                 return listParts(bucket, key, uri.getQueryParameters().getFirst("uploadId"));
             }
-            StoredOsObject o = service.getObject(namespace, bucket, key);
+            StoredOsObject o = service.getObject(namespace, bucket, key,
+                    requestedVersion(uri.getQueryParameters().getFirst("versionId")));
             Response failed = readConditions(o, headers, resource);
             if (failed != null) {
                 return failed;
@@ -415,11 +427,12 @@ public class S3CompatResource {
     @HEAD
     @Path("/{bucket}/{key: .+}")
     public Response headObject(@PathParam("namespace") String namespace, @PathParam("bucket") String bucket,
-                               @PathParam("key") String key, @Context HttpHeaders headers) {
+                               @PathParam("key") String key, @Context UriInfo uri, @Context HttpHeaders headers) {
         String resource = "/" + bucket + "/" + key;
         return s3(resource, () -> {
             service.requireNamespace(namespace);
-            StoredOsObject o = service.getObject(namespace, bucket, key);
+            StoredOsObject o = service.getObject(namespace, bucket, key,
+                    requestedVersion(uri.getQueryParameters().getFirst("versionId")));
             Response failed = readConditions(o, headers, resource);
             if (failed != null) {
                 return failed;
@@ -441,15 +454,24 @@ public class S3CompatResource {
                 return Response.noContent().build();
             }
             service.getBucket(namespace, bucket);
+            String versionId = requestedVersion(uri.getQueryParameters().getFirst("versionId"));
+            Response.ResponseBuilder response = Response.noContent();
             try {
-                service.deleteObject(namespace, bucket, key, null, null);
+                ObjectStorageService.ObjectDeletion deletion =
+                        service.deleteObject(namespace, bucket, key, null, versionId);
+                if (deletion.markerVersionId() != null) {
+                    response.header("x-amz-delete-marker", "true");
+                    withVersionId(response, deletion.markerVersionId());
+                } else {
+                    withVersionId(response, versionId);
+                }
             } catch (OciException e) {
                 // S3 answers 204 for a key that is not there.
                 if (e.getHttpStatus() != 404) {
                     throw e;
                 }
             }
-            return Response.noContent().build();
+            return response.build();
         });
     }
 
@@ -497,10 +519,11 @@ public class S3CompatResource {
                 parts.add(ref);
             }
             StoredOsObject o = service.commitMultipartUpload(namespace, bucket, key, uploadId, parts);
-            return xmlResponse(200, S3Xml.document("CompleteMultipartUploadResult")
+            String result = S3Xml.document("CompleteMultipartUploadResult")
                     .element("Location", "/" + bucket + "/" + key)
                     .element("Bucket", bucket).element("Key", key).element("ETag", quotedEtag(o))
-                    .end("CompleteMultipartUploadResult"));
+                    .end("CompleteMultipartUploadResult");
+            return withVersionId(Response.ok(result).type(S3Xml.CONTENT_TYPE), o.getVersionId()).build();
         });
     }
 
@@ -618,10 +641,39 @@ public class S3CompatResource {
                 .header("Last-Modified", DateTimeFormatter.RFC_1123_DATE_TIME.format(
                         Instant.parse(o.getTimeModified()).atOffset(ZoneOffset.UTC)))
                 .header("Accept-Ranges", "bytes");
+        withVersionId(builder, o.getVersionId());
         if (o.getMetadata() != null) {
             o.getMetadata().forEach((k, v) -> builder.header(META_PREFIX + k, v));
         }
         return builder;
+    }
+
+    /** Adds {@code x-amz-version-id}, which S3 clients read as the version an operation read or wrote. */
+    private static Response.ResponseBuilder withVersionId(Response.ResponseBuilder builder, String versionId) {
+        if (versionId != null) {
+            builder.header("x-amz-version-id", versionId);
+        }
+        return builder;
+    }
+
+    /**
+     * The version a request names, or null for the current one. S3 clients send {@code null} for the
+     * version of an object written while versioning was off; in Object Storage that object is the
+     * current version, which has a real ID.
+     */
+    static String requestedVersion(String versionId) {
+        String value = blankToNull(versionId);
+        return "null".equals(value) ? null : value;
+    }
+
+    /** The {@code versionId} of an {@code x-amz-copy-source} query ({@code versionId=<id>}), if any. */
+    static String versionIdIn(String query) {
+        for (String pair : query.split("&")) {
+            if (pair.startsWith("versionId=")) {
+                return requestedVersion(URLDecoder.decode(pair.substring("versionId=".length()), StandardCharsets.UTF_8));
+            }
+        }
+        return null;
     }
 
     /** The S3 ETag: hex MD5 for a single-part object, hex MD5 of the part MD5s plus {@code -N} for a multipart one. */

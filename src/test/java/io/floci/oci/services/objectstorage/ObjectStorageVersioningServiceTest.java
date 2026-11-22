@@ -205,6 +205,19 @@ class ObjectStorageVersioningServiceTest {
     }
 
     @Test
+    void aCopyReportsTheVersionItWroteEvenAfterALaterWrite() {
+        bucket("b", "Enabled");
+        put("b", "o", "one");
+
+        StoredOsObject copied = service.copy(NS, "b", "o", "us-ashburn-1", NS, "b", "copy", null, null).object();
+        StoredOsObject later = put("b", "copy", "two");
+
+        assertNotNull(copied.getVersionId());
+        assertNotEquals(later.getVersionId(), copied.getVersionId());
+        assertEquals("one", content("b", "copy", copied.getVersionId()));
+    }
+
+    @Test
     void listingFiltersGroupsAndPagesWithoutSkippingAfterDeletes() {
         bucket("b", "Enabled");
         put("b", "a", "1");

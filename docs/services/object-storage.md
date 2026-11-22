@@ -132,8 +132,8 @@ reaches the native API as before.
 | Area | Operations |
 |---|---|
 | Service | ListBuckets (GetService) |
-| Buckets | PutBucket, HeadBucket, DeleteBucket, GetBucketLocation, GetBucketVersioning (always unversioned), Get/Put/DeleteBucketTagging (the bucket's freeform tags) |
-| Objects | PutObject, GetObject (Range), HeadObject, DeleteObject, DeleteObjects, CopyObject (`x-amz-copy-source`, `x-amz-metadata-directive`) |
+| Buckets | PutBucket, HeadBucket, DeleteBucket, GetBucketLocation, GetBucketVersioning (`Status` from the bucket's `versioning`), Get/Put/DeleteBucketTagging (the bucket's freeform tags) |
+| Objects | PutObject, GetObject (Range), HeadObject, DeleteObject, DeleteObjects, CopyObject (`x-amz-copy-source`, `x-amz-metadata-directive`); `versionId` on GetObject, HeadObject, DeleteObject and the copy source |
 | Listing | ListObjects (v1, `marker`) and ListObjectsV2 (`continuation-token`, `start-after`), with `prefix`, `delimiter`, `max-keys` |
 | Multipart | CreateMultipartUpload, UploadPart, CompleteMultipartUpload, AbortMultipartUpload, ListParts, ListMultipartUploads |
 
@@ -160,6 +160,13 @@ reaches the native API as before.
 - SigV4 credentials only count on the S3 host. Deleting an Identity user deletes its Customer
   Secret Keys, and turning Object Storage off turns this API off too: an S3 host then answers 503
   and never reaches a native route. Customer Secret Key writes are accepted only in the home region.
+- Version IDs are the native ones. PutObject, GetObject, HeadObject, CopyObject and
+  CompleteMultipartUpload return `x-amz-version-id`; CopyObject also returns
+  `x-amz-copy-source-version-id`. A DeleteObject that leaves a delete marker returns
+  `x-amz-delete-marker: true` and the marker's version ID. `versionId=null` names the current
+  version, since every Object Storage object has a real version ID. An unknown version ID answers
+  `404 NoSuchKey`. Versioning is turned on or suspended through the native API: Oracle's supported
+  list names neither PutBucketVersioning nor ListObjectVersions, so floci-oci does not serve them.
 - Oracle's supported list does not name CopyObject or ListObjectsV2; floci-oci serves them
   because boto3, the AWS CLI and rclone use them. SSE-C and KMS headers, ACLs, policies and
   the virtual-host `vhcompat` endpoint are not implemented.
