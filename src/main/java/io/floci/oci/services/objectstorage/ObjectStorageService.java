@@ -656,7 +656,18 @@ public class ObjectStorageService implements CompartmentUsage, Resettable {
      * another region": the destination bucket is looked up, and the copy written, in
      * {@code destRegion}. The work request stays in the source region, where clients poll it.
      */
+    /** A finished copy: its work request and the object it wrote, read while the copy held the write lock. */
+    public record CopiedObject(String workRequestId, StoredOsObject object) {
+    }
+
     public String copyObject(String namespaceName, String bucketName, String sourceObjectName,
+                             String destRegion, String destNamespace, String destBucket,
+                             String destObjectName, String sourceIfMatch, String sourceVersionId) {
+        return copy(namespaceName, bucketName, sourceObjectName, destRegion, destNamespace, destBucket,
+                destObjectName, sourceIfMatch, sourceVersionId).workRequestId();
+    }
+
+    public CopiedObject copy(String namespaceName, String bucketName, String sourceObjectName,
                              String destRegion, String destNamespace, String destBucket,
                              String destObjectName, String sourceIfMatch, String sourceVersionId) {
         return replication.writing(destRegion, destBucket, () -> {
@@ -681,10 +692,11 @@ public class ObjectStorageService implements CompartmentUsage, Resettable {
 
             StoredBucket bucket = getBucket(namespaceName, bucketName);
             // Object Storage work requests terminate in COMPLETED (Identity uses SUCCEEDED).
-            return workRequests.completed("objectstorage", "COPY_OBJECT", bucket.getCompartmentId(),
+            String workRequestId = workRequests.completed("objectstorage", "COPY_OBJECT", bucket.getCompartmentId(),
                     List.of(WorkRequestService.resource("object", "CREATED", destObjectName,
                             "/n/" + namespace() + "/b/" + destBucket + "/o/" + destObjectName)),
                     "COMPLETED");
+            return new CopiedObject(workRequestId, copy);
         });
     }
 

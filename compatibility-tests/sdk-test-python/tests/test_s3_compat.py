@@ -109,3 +109,27 @@ def test_missing_key_is_no_such_key(s3):
     with pytest.raises(s3.exceptions.NoSuchKey):
         s3.get_object(Bucket=bucket, Key="missing")
     s3.delete_bucket(Bucket=bucket)
+
+
+def test_version_ids_on_a_versioned_bucket(s3, object_storage):
+    bucket = unique("py-s3-ver")
+    s3.create_bucket(Bucket=bucket)
+    object_storage.update_bucket(
+        NAMESPACE, bucket, oci.object_storage.models.UpdateBucketDetails(versioning="Enabled")
+    )
+    assert s3.get_bucket_versioning(Bucket=bucket)["Status"] == "Enabled"
+
+    first = s3.put_object(Bucket=bucket, Key="k", Body=b"one")["VersionId"]
+    second = s3.put_object(Bucket=bucket, Key="k", Body=b"two")["VersionId"]
+    assert first != second
+    assert s3.get_object(Bucket=bucket, Key="k", VersionId=first)["Body"].read() == b"one"
+    assert s3.head_object(Bucket=bucket, Key="k")["VersionId"] == second
+
+    deleted = s3.delete_object(Bucket=bucket, Key="k")
+    assert deleted["DeleteMarker"] is True
+    with pytest.raises(s3.exceptions.ClientError):
+        s3.head_object(Bucket=bucket, Key="k")
+
+    for version in (deleted["VersionId"], second, first):
+        s3.delete_object(Bucket=bucket, Key="k", VersionId=version)
+    s3.delete_bucket(Bucket=bucket)

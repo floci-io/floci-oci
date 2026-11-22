@@ -26,6 +26,16 @@ class S3CompatParsingTest {
     }
 
     @Test
+    void copySourceQueriesNameAVersion() {
+        assertEquals("v1", S3CompatResource.versionIdIn("versionId=v1"));
+        assertEquals("a/b", S3CompatResource.versionIdIn("x=1&versionId=a%2Fb"));
+        assertNull(S3CompatResource.versionIdIn("versionId=null"));
+        assertNull(S3CompatResource.versionIdIn("versionId="));
+        assertNull(S3CompatResource.versionIdIn("other=1"));
+        assertNull(S3CompatResource.requestedVersion(null));
+    }
+
+    @Test
     void sigV4AccessKeyIsReadFromTheAuthorizationHeader() {
         assertEquals("AKIDEXAMPLE", AccessKeyResolver.sigV4AccessKey(
                 "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20261118/us-ashburn-1/s3/aws4_request, "

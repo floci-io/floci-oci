@@ -10,6 +10,7 @@ import java.util.HexFormat;
 import java.util.Map;
 
 import static io.restassured.RestAssured.given;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.hamcrest.Matchers.*;
 
 /**
@@ -290,6 +291,80 @@ class S3CompatRestIntegrationTest {
             .when().put("/" + bucket + "/copy2")
             .then().statusCode(200);
         s3().when().get("/" + bucket + "/copy2").then().statusCode(200).body(equalTo("plain"));
+    }
+
+    private static void setVersioning(String bucket, String versioning) {
+        given().contentType("application/json").body(Map.of("versioning", versioning))
+            .when().post("/n/" + NAMESPACE + "/b/" + bucket)
+            .then().statusCode(200).body("versioning", equalTo(versioning));
+    }
+
+    @Test
+    void versionIdsReachEveryObjectOperation() {
+        String bucket = bucket();
+        s3().when().put("/" + bucket).then().statusCode(200);
+        s3().when().get("/" + bucket + "?versioning")
+            .then().statusCode(200).body(not(containsString("<Status>")));
+        setVersioning(bucket, "Enabled");
+        s3().when().get("/" + bucket + "?versioning")
+            .then().statusCode(200).body("VersioningConfiguration.Status", equalTo("Enabled"));
+
+        String first = s3().body("one").when().put("/" + bucket + "/k")
+            .then().statusCode(200).header("x-amz-version-id", notNullValue()).extract().header("x-amz-version-id");
+        String second = s3().body("two").when().put("/" + bucket + "/k")
+            .then().statusCode(200).extract().header("x-amz-version-id");
+        assertNotEquals(first, second);
+
+        s3().when().get("/" + bucket + "/k")
+            .then().statusCode(200).header("x-amz-version-id", equalTo(second)).body(equalTo("two"));
+        s3().when().get("/" + bucket + "/k?versionId=" + first)
+            .then().statusCode(200).header("x-amz-version-id", equalTo(first)).body(equalTo("one"));
+        s3().when().head("/" + bucket + "/k?versionId=" + first)
+            .then().statusCode(200).header("x-amz-version-id", equalTo(first)).header("Content-Length", "3");
+        s3().when().get("/" + bucket + "/k?versionId=nosuchversion")
+            .then().statusCode(404).body("Error.Code", equalTo("NoSuchKey"));
+
+        s3().header("x-amz-copy-source", "/" + bucket + "/k?versionId=" + first)
+            .when().put("/" + bucket + "/copy")
+            .then().statusCode(200)
+                .header("x-amz-copy-source-version-id", equalTo(first))
+                .header("x-amz-version-id", notNullValue());
+        s3().when().get("/" + bucket + "/copy").then().statusCode(200).body(equalTo("one"));
+
+        String marker = s3().when().delete("/" + bucket + "/k")
+            .then().statusCode(204)
+                .header("x-amz-delete-marker", equalTo("true"))
+                .header("x-amz-version-id", notNullValue())
+                .extract().header("x-amz-version-id");
+        s3().when().get("/" + bucket + "/k").then().statusCode(404);
+        s3().when().get("/" + bucket + "/k?versionId=" + second).then().statusCode(200).body(equalTo("two"));
+
+        s3().when().delete("/" + bucket + "/k?versionId=" + marker)
+            .then().statusCode(204)
+                .header("x-amz-version-id", equalTo(marker))
+                .header("x-amz-delete-marker", nullValue());
+        s3().when().get("/" + bucket + "/k").then().statusCode(200).body(equalTo("two"));
+
+        setVersioning(bucket, "Suspended");
+        s3().when().get("/" + bucket + "?versioning")
+            .then().statusCode(200).body("VersioningConfiguration.Status", equalTo("Suspended"));
+    }
+
+    @Test
+    void completedMultipartUploadsReturnTheirVersionId() {
+        String bucket = bucket();
+        s3().when().put("/" + bucket).then().statusCode(200);
+        String uploadId = s3().when().post("/" + bucket + "/big?uploads")
+            .then().statusCode(200).extract().path("InitiateMultipartUploadResult.UploadId");
+        String etag = s3().body("part").when().put("/" + bucket + "/big?partNumber=1&uploadId=" + uploadId)
+            .then().statusCode(200).extract().header("ETag");
+        s3().contentType("application/xml")
+                .body("<CompleteMultipartUpload><Part><PartNumber>1</PartNumber><ETag>" + etag
+                        + "</ETag></Part></CompleteMultipartUpload>")
+            .when().post("/" + bucket + "/big?uploadId=" + uploadId)
+            .then().statusCode(200)
+                .header("x-amz-version-id", notNullValue())
+                .body("CompleteMultipartUploadResult.Key", equalTo("big"));
     }
 
     @Test
