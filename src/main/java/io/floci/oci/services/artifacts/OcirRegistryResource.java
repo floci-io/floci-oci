@@ -3,7 +3,6 @@ package io.floci.oci.services.artifacts;
 import io.floci.oci.core.auth.SignatureAuthFilter;
 import io.floci.oci.core.common.OciException;
 import io.floci.oci.core.common.RequestContext;
-import io.floci.oci.core.common.Regions;
 import io.floci.oci.services.artifacts.model.StoredContainerRepository;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -59,8 +58,6 @@ public class OcirRegistryResource {
     private static final Logger LOG = Logger.getLogger(OcirRegistryResource.class);
 
     /** {@code <key>.ocir.<domain>}, {@code <region>.ocir.<domain>} or {@code ocir.<region>.oci.<domain>}. */
-    private static final Pattern REGION_FIRST = Pattern.compile("^([a-z0-9-]+)\\.ocir\\.", Pattern.CASE_INSENSITIVE);
-    private static final Pattern OCIR_FIRST = Pattern.compile("^ocir\\.([a-z0-9-]+)\\.", Pattern.CASE_INSENSITIVE);
     /**
      * The repository operations of the Registry HTTP API V2, each anchored at the end of the path.
      * The name group is greedy, so a repository component spelled {@code blobs}, {@code tags} or
@@ -146,7 +143,7 @@ public class OcirRegistryResource {
 
     private Response handle(String method, String rawPath, HttpHeaders headers, UriInfo uri, InputStream body) {
         String host = Optional.ofNullable(headers.getHeaderString("Host")).orElse("");
-        Optional<String> region = regionOf(host);
+        Optional<String> region = OcirHosts.regionOf(host);
         if (region.isEmpty()) {
             throw OciException.notAuthorizedOrNotFound("No registry is served at " + host);
         }
@@ -326,28 +323,5 @@ public class OcirRegistryResource {
             }
             return Optional.empty();
         }
-    }
-
-    /** The region a registry host names: a region key ({@code iad}) or identifier ({@code us-ashburn-1}). */
-    static Optional<String> regionOf(String host) {
-        String bare = host.contains(":") ? host.substring(0, host.indexOf(':')) : host;
-        for (Pattern pattern : List.of(REGION_FIRST, OCIR_FIRST)) {
-            Matcher m = pattern.matcher(bare);
-            if (m.find()) {
-                String label = m.group(1).toLowerCase(Locale.ROOT);
-                Optional<String> byName = Regions.byName(label).map(Regions.Region::name);
-                if (byName.isPresent()) {
-                    return byName;
-                }
-                Optional<String> byCode = Regions.all().stream()
-                        .filter(r -> r.code().equalsIgnoreCase(label))
-                        .map(Regions.Region::name)
-                        .findFirst();
-                if (byCode.isPresent()) {
-                    return byCode;
-                }
-            }
-        }
-        return Optional.empty();
     }
 }

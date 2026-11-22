@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.floci.oci.config.EmulatorConfig;
 import io.floci.oci.core.common.CompartmentUsage;
+import io.floci.oci.core.common.ContainerImageResolver;
 import io.floci.oci.core.common.Etags;
 import io.floci.oci.core.common.OciContext;
 import io.floci.oci.core.common.OciException;
@@ -23,6 +24,7 @@ import io.quarkus.runtime.StartupEvent;
 import jakarta.annotation.PreDestroy;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.Observes;
+import jakarta.enterprise.inject.Instance;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
@@ -38,7 +40,11 @@ import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.function.UnaryOperator;
 import java.util.stream.Stream;
 
 /**
@@ -61,6 +67,14 @@ public class FunctionsService implements Resettable, CompartmentUsage {
     private final ServiceRegistry serviceRegistry;
     private final FnServerManager fnServer;
     private final WorkRequestService workRequests;
+    /** Turns a stored image into the reference fnserver pulls (an image in the local OCIR). */
+    private final UnaryOperator<String> pullableImage;
+    /**
+     * One lock per function, serialising its UpdateFunction with its mirroring into fnserver so a mirror
+     * records exactly the settings it sent, and one per application around creating its Fn app. Unrelated
+     * functions never wait on each other.
+     */
+    private final ConcurrentMap<String, Object> fnServerLocks = new ConcurrentHashMap<>();
 
     /** The work-request partition of Functions, served on {@code /20260325/workRequests}. */
     static final String WR_SERVICE = "functions";
@@ -69,8 +83,10 @@ public class FunctionsService implements Resettable, CompartmentUsage {
     @Inject
     public FunctionsService(StorageFactory storageFactory, EmulatorConfig config,
                             ServiceRegistry serviceRegistry, FnServerManager fnServer,
-                            OciContext ociContext, WorkRequestService workRequests) {
+                            OciContext ociContext, WorkRequestService workRequests,
+                            Instance<ContainerImageResolver> imageResolvers) {
         this.config = config;
+        this.pullableImage = image -> imageResolvers.isResolvable() ? imageResolvers.get().pullable(image) : image;
         this.workRequests = workRequests;
         this.ociContext = ociContext;
         this.serviceRegistry = serviceRegistry;
@@ -90,6 +106,14 @@ public class FunctionsService implements Resettable, CompartmentUsage {
     FunctionsService(StorageBackend<String, StoredApplication> applications,
                      StorageBackend<String, StoredFunction> functions,
                      EmulatorConfig config, FnServerManager fnServer, WorkRequestService workRequests) {
+        this(applications, functions, config, fnServer, workRequests, UnaryOperator.identity());
+    }
+
+    FunctionsService(StorageBackend<String, StoredApplication> applications,
+                     StorageBackend<String, StoredFunction> functions,
+                     EmulatorConfig config, FnServerManager fnServer, WorkRequestService workRequests,
+                     UnaryOperator<String> pullableImage) {
+        this.pullableImage = pullableImage;
         this.workRequests = workRequests;
         this.ociContext = OciContext.fromConfig(config);
         this.applications = applications;
@@ -242,6 +266,7 @@ public class FunctionsService implements Resettable, CompartmentUsage {
                     "Application " + applicationId + " still contains functions.");
         }
         applications.delete(applicationId);
+        fnServerLocks.remove(applicationId);
     }
 
     public void changeApplicationCompartment(String applicationId, String compartmentId,
@@ -351,44 +376,52 @@ public class FunctionsService implements Resettable, CompartmentUsage {
                                          Map<String, String> freeformTags,
                                          Map<String, Map<String, Object>> definedTags,
                                          Map<String, Object> settings, String ifMatch) {
-        StoredFunction fn = getFunction(functionId);
-        Etags.checkIfMatch(ifMatch, fn.getEtag());
-        boolean newImage = image != null && !image.equals(fn.getImage());
-        // A mutable tag (":latest") is redeployed by sending the same image with a new digest.
-        boolean newDigest = imageDigest != null && !imageDigest.equals(fn.getImageDigest());
-        if (newImage || newDigest) {
-            String target = image != null ? image : fn.getImage();
-            fn.setImage(target);
-            // Terraform's CustomizeDiff demands the digest change with the image.
-            fn.setImageDigest(imageDigest != null ? imageDigest : digestFor(target));
-            fn.setFnFnId(null); // re-mirror on next invoke
+        synchronized (lockFor(functionId)) {
+            StoredFunction fn = getFunction(functionId);
+            Etags.checkIfMatch(ifMatch, fn.getEtag());
+            boolean newImage = image != null && !image.equals(fn.getImage());
+            // A mutable tag (":latest") is redeployed by sending the same image with a new digest.
+            boolean newDigest = imageDigest != null && !imageDigest.equals(fn.getImageDigest());
+            if (newImage || newDigest) {
+                String target = image != null ? image : fn.getImage();
+                fn.setImage(target);
+                // Terraform's CustomizeDiff demands the digest change with the image.
+                fn.setImageDigest(imageDigest != null ? imageDigest : digestFor(target));
+            }
+            fn.setSettings(merged(fn.getSettings(), settings));
+            if (memoryInMBs != null) {
+                fn.setMemoryInMBs(memoryInMBs);
+            }
+            if (timeoutInSeconds != null) {
+                fn.setTimeoutInSeconds(timeoutInSeconds);
+            }
+            if (fnConfig != null) {
+                fn.setConfig(fnConfig);
+            }
+            if (freeformTags != null) {
+                fn.setFreeformTags(freeformTags);
+            }
+            if (definedTags != null) {
+                fn.setDefinedTags(definedTags);
+            }
+            fn.setTimeUpdated(Instant.now().toString());
+            fn.setEtag(Etags.newEtag());
+            functions.put(functionId, fn);
+            return fn;
         }
-        fn.setSettings(merged(fn.getSettings(), settings));
-        if (memoryInMBs != null) {
-            fn.setMemoryInMBs(memoryInMBs);
-        }
-        if (timeoutInSeconds != null) {
-            fn.setTimeoutInSeconds(timeoutInSeconds);
-        }
-        if (fnConfig != null) {
-            fn.setConfig(fnConfig);
-        }
-        if (freeformTags != null) {
-            fn.setFreeformTags(freeformTags);
-        }
-        if (definedTags != null) {
-            fn.setDefinedTags(definedTags);
-        }
-        fn.setTimeUpdated(Instant.now().toString());
-        fn.setEtag(Etags.newEtag());
-        functions.put(functionId, fn);
-        return fn;
     }
 
     public void deleteFunction(String functionId, String ifMatch) {
-        StoredFunction fn = getFunction(functionId);
-        Etags.checkIfMatch(ifMatch, fn.getEtag());
-        functions.delete(functionId);
+        synchronized (lockFor(functionId)) {
+            StoredFunction fn = getFunction(functionId);
+            Etags.checkIfMatch(ifMatch, fn.getEtag());
+            functions.delete(functionId);
+            fnServerLocks.remove(functionId);
+        }
+    }
+
+    private Object lockFor(String ocid) {
+        return fnServerLocks.computeIfAbsent(ocid, ignored -> new Object());
     }
 
     /**
@@ -430,9 +463,9 @@ public class FunctionsService implements Resettable, CompartmentUsage {
         fnServer.ensureStarted();
         waitForFnServerReady();
         try {
-            mirrorIntoFnServer(fn);
+            String fnId = mirrorIntoFnServer(functionId);
             HttpRequest request = HttpRequest.newBuilder(
-                            URI.create(fnServer.baseUrl() + "/invoke/" + fn.getFnFnId()))
+                            URI.create(fnServer.baseUrl() + "/invoke/" + fnId))
                     .timeout(Duration.ofSeconds(fn.getTimeoutInSeconds() + 60L))
                     .header("Content-Type", contentType != null ? contentType : "application/octet-stream")
                     .POST(HttpRequest.BodyPublishers.ofByteArray(payload != null ? payload : new byte[0]))
@@ -471,47 +504,141 @@ public class FunctionsService implements Resettable, CompartmentUsage {
         }
     }
 
-    /** Lazily creates the Fn app + fn mirroring this function's image/memory/timeout. */
-    private void mirrorIntoFnServer(StoredFunction fn) throws Exception {
-        StoredApplication app = getApplication(fn.getApplicationId());
-        if (app.getFnAppId() == null) {
+    /**
+     * Lazily creates the Fn app + fn mirroring this function's image, memory, timeout and config. The image
+     * is resolved on every invoke, and a mirrored fn whose image or settings changed is updated in place:
+     * fnserver rejects a second fn with the same name (409 ErrFnsExists), so an UpdateFunction, or a local
+     * OCIR registry that came back on another port, must not create the fn again. A fn that fnserver no
+     * longer has (404) is created afresh.
+     */
+    private String mirrorIntoFnServer(String functionId) throws Exception {
+        // Resolving can wait for the local registry to start, so it happens before taking the lock.
+        String reference = imageReference(getFunction(functionId));
+        String pullable = reference != null ? pullableImage.apply(reference) : null;
+        synchronized (lockFor(functionId)) {
+            StoredFunction fn = getFunction(functionId);
+            String current = imageReference(fn);
+            if (current != null && !current.equals(reference)) {
+                pullable = pullableImage.apply(current);
+            }
+            return mirrorLocked(fn, pullable);
+        }
+    }
+
+    /** The settings sent to fnserver, recorded on success so a later invoke can tell whether they moved. */
+    private record FnSettings(String image, long memory, int timeout, Map<String, String> config) {
+
+        static FnSettings of(StoredFunction fn, String image) {
+            return new FnSettings(image, fn.getMemoryInMBs(), fn.getTimeoutInSeconds(),
+                    new LinkedHashMap<>(fn.getConfig()));
+        }
+
+        boolean mirroredOn(StoredFunction fn) {
+            return image.equals(fn.getFnImage())
+                    && Objects.equals(fn.getFnMemory(), memory)
+                    && Objects.equals(fn.getFnTimeout(), timeout)
+                    && config.equals(fn.getFnConfig());
+        }
+
+        void recordOn(StoredFunction fn) {
+            fn.setFnImage(image);
+            fn.setFnMemory(memory);
+            fn.setFnTimeout(timeout);
+            fn.setFnConfig(config);
+        }
+    }
+
+    private String mirrorLocked(StoredFunction fn, String pullable) throws Exception {
+        String fnAppId = fnAppIdOf(fn.getApplicationId());
+        if (fn.getImage() == null || fn.getImage().isBlank()) {
+            throw OciException.invalidParameter("Function has no image to invoke.");
+        }
+        FnSettings wanted = FnSettings.of(fn, pullable);
+        if (fn.getFnFnId() != null && !wanted.mirroredOn(fn)) {
             ObjectNode body = MAPPER.createObjectNode();
-            body.put("name", sanitize(app.getDisplayName()) + "-" + shortId(app.getId()));
-            JsonNode created = fnPost("/v2/apps", body);
-            app.setFnAppId(created.get("id").asText());
-            applications.put(app.getId(), app);
+            body.put("image", wanted.image());
+            body.put("memory", wanted.memory());
+            body.put("timeout", wanted.timeout());
+            ObjectNode fnConfig = body.putObject("config");
+            // fnserver merges config on update and deletes a key sent empty (fn/api/models/fn.go, Fn.Update).
+            if (fn.getFnConfig() != null) {
+                fn.getFnConfig().keySet().forEach(key -> fnConfig.put(key, ""));
+            }
+            wanted.config().forEach(fnConfig::put);
+            if (fnUpdate("/v2/fns/" + fn.getFnFnId(), body)) {
+                wanted.recordOn(fn);
+            } else {
+                fn.setFnFnId(null);
+            }
+            functions.put(fn.getId(), fn);
         }
         if (fn.getFnFnId() == null) {
-            if (fn.getImage() == null || fn.getImage().isBlank()) {
-                throw OciException.invalidParameter("Function has no image to invoke.");
-            }
             ObjectNode body = MAPPER.createObjectNode();
             body.put("name", sanitize(fn.getDisplayName()) + "-" + shortId(fn.getId()));
-            body.put("app_id", app.getFnAppId());
-            body.put("image", imageReference(fn));
-            body.put("memory", fn.getMemoryInMBs());
-            body.put("timeout", fn.getTimeoutInSeconds());
+            body.put("app_id", fnAppId);
+            body.put("image", wanted.image());
+            body.put("memory", wanted.memory());
+            body.put("timeout", wanted.timeout());
             ObjectNode fnConfig = body.putObject("config");
-            fn.getConfig().forEach(fnConfig::put);
+            wanted.config().forEach(fnConfig::put);
             JsonNode created = fnPost("/v2/fns", body);
             fn.setFnFnId(created.get("id").asText());
+            wanted.recordOn(fn);
             functions.put(fn.getId(), fn);
+        }
+        return fn.getFnFnId();
+    }
+
+    /** The Fn app mirroring this application, created once even when its functions are invoked at once. */
+    private String fnAppIdOf(String applicationId) throws Exception {
+        synchronized (lockFor(applicationId)) {
+            StoredApplication app = getApplication(applicationId);
+            if (app.getFnAppId() == null) {
+                ObjectNode body = MAPPER.createObjectNode();
+                body.put("name", sanitize(app.getDisplayName()) + "-" + shortId(app.getId()));
+                JsonNode created = fnPost("/v2/apps", body);
+                app.setFnAppId(created.get("id").asText());
+                applications.put(app.getId(), app);
+            }
+            return app.getFnAppId();
         }
     }
 
     private JsonNode fnPost(String path, ObjectNode body) throws Exception {
+        return fnSend("POST", path, body);
+    }
+
+    /** {@code PUT}s a fn update; false when fnserver no longer has the fn. */
+    private boolean fnUpdate(String path, ObjectNode body) throws Exception {
+        HttpResponse<String> response = fnRequest("PUT", path, body);
+        if (response.statusCode() == 404) {
+            LOG.infov("fnserver no longer has {0}; creating the fn again", path);
+            return false;
+        }
+        checkFnResponse(path, response);
+        return true;
+    }
+
+    private JsonNode fnSend(String method, String path, ObjectNode body) throws Exception {
+        HttpResponse<String> response = fnRequest(method, path, body);
+        checkFnResponse(path, response);
+        return MAPPER.readTree(response.body());
+    }
+
+    private HttpResponse<String> fnRequest(String method, String path, ObjectNode body) throws Exception {
         HttpRequest request = HttpRequest.newBuilder(URI.create(fnServer.baseUrl() + path))
                 .timeout(Duration.ofSeconds(10))
                 .header("Content-Type", "application/json")
-                .POST(HttpRequest.BodyPublishers.ofString(MAPPER.writeValueAsString(body)))
+                .method(method, HttpRequest.BodyPublishers.ofString(MAPPER.writeValueAsString(body)))
                 .build();
-        HttpResponse<String> response = fnServer.httpClient()
-                .send(request, HttpResponse.BodyHandlers.ofString());
+        return fnServer.httpClient().send(request, HttpResponse.BodyHandlers.ofString());
+    }
+
+    private static void checkFnResponse(String path, HttpResponse<String> response) {
         if (response.statusCode() >= 400) {
             throw OciException.internalServerError(
                     "fnserver " + path + " failed (" + response.statusCode() + "): " + response.body());
         }
-        return MAPPER.readTree(response.body());
     }
 
     // ── Helpers ────────────────────────────────────────────────────────────────
