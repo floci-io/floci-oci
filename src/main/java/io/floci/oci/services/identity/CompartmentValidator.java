@@ -75,6 +75,11 @@ public class CompartmentValidator {
         }
     }
 
+    /** Whether the compartment exists and is ACTIVE, or Identity is disabled and nothing can be checked. */
+    public boolean isKnown(String compartmentId) {
+        return compartmentId != null && !isUnknown(compartmentId);
+    }
+
     private boolean isUnknown(String compartmentId) {
         if (compartmentId == null || !config.services().identity().enabled()) {
             return false;
