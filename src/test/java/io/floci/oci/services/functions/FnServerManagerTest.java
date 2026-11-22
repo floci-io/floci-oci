@@ -5,6 +5,7 @@ import io.floci.oci.core.common.docker.ContainerBuilder;
 import io.floci.oci.core.common.docker.ContainerDetector;
 import io.floci.oci.core.common.docker.ContainerLifecycleManager;
 import io.floci.oci.core.common.docker.ContainerSpec;
+import io.floci.oci.core.common.docker.CurrentContainerNetworkResolver;
 import io.floci.oci.core.common.docker.DockerHostResolver;
 import io.floci.oci.core.common.docker.PortAllocator;
 import org.junit.jupiter.api.BeforeEach;
@@ -41,6 +42,9 @@ class FnServerManagerTest {
     @Mock
     private PortAllocator portAllocator;
 
+    @Mock
+    private CurrentContainerNetworkResolver networkResolver;
+
     private EmulatorConfig config;
     private FnServerManager manager;
 
@@ -58,7 +62,8 @@ class FnServerManagerTest {
         lenient().when(config.defaultRegion()).thenReturn("us-ashburn-1");
 
         ContainerBuilder containerBuilder = new ContainerBuilder(config, mock(DockerHostResolver.class), null);
-        manager = new FnServerManager(containerBuilder, lifecycleManager, containerDetector, portAllocator, config);
+        manager = new FnServerManager(containerBuilder, lifecycleManager, containerDetector, portAllocator,
+                networkResolver, config);
     }
 
     @Test
@@ -74,6 +79,49 @@ class FnServerManagerTest {
         assertEquals(
                 Map.of("io.floci", "oci", "io.floci.service", "functions"),
                 spec.getValue().labels());
+    }
+
+    @Test
+    void onTheHostFnServerIsReachedOnTheDaemonHost() {
+        when(portAllocator.allocate(8080, 8099)).thenReturn(8081);
+        when(lifecycleManager.createAndStart(any()))
+                .thenReturn(new ContainerLifecycleManager.ContainerInfo("fn-1", Map.of()));
+        when(lifecycleManager.daemonHost()).thenReturn("docker.example");
+
+        manager.ensureStarted();
+
+        assertEquals("http://docker.example:8081", manager.baseUrl());
+    }
+
+    @Test
+    void inAContainerFnServerIsReachedByItsIpOnTheSharedNetwork() {
+        when(portAllocator.allocate(8080, 8099)).thenReturn(8081);
+        when(lifecycleManager.createAndStart(any()))
+                .thenReturn(new ContainerLifecycleManager.ContainerInfo("fn-1", Map.of()));
+        when(containerDetector.isRunningInContainer()).thenReturn(true);
+        when(networkResolver.resolveNetworkName()).thenReturn(Optional.of("bridge"));
+        when(lifecycleManager.resolveEndpoint("fn-1", 8080, "bridge"))
+                .thenReturn(new ContainerLifecycleManager.EndpointInfo("172.17.0.6", 8080));
+
+        manager.ensureStarted();
+
+        assertEquals("http://172.17.0.6:8080", manager.baseUrl());
+    }
+
+    @Test
+    void aConfiguredNetworkIsPreferredOverTheDetectedOne() {
+        when(config.services().dockerNetwork()).thenReturn(Optional.of("floci_oci_default"));
+        when(portAllocator.allocate(8080, 8099)).thenReturn(8081);
+        when(lifecycleManager.createAndStart(any()))
+                .thenReturn(new ContainerLifecycleManager.ContainerInfo("fn-1", Map.of()));
+        when(containerDetector.isRunningInContainer()).thenReturn(true);
+        when(lifecycleManager.resolveEndpoint("fn-1", 8080, "floci_oci_default"))
+                .thenReturn(new ContainerLifecycleManager.EndpointInfo("fd00::6", 8080));
+
+        manager.ensureStarted();
+
+        assertEquals("http://[fd00::6]:8080", manager.baseUrl());
+        verify(networkResolver, never()).resolveNetworkName();
     }
 
     @Test
@@ -99,5 +147,29 @@ class FnServerManagerTest {
         verify(portAllocator).release(8081);
         verify(lifecycleManager, never()).createAndStart(any());
         assertFalse(manager.isStarted());
+    }
+
+    @Test
+    void aFailedAddressLookupRemovesTheContainerSoTheNextCallStartsAgain() {
+        when(portAllocator.allocate(8080, 8099)).thenReturn(8081, 8082);
+        when(lifecycleManager.createAndStart(any()))
+                .thenReturn(new ContainerLifecycleManager.ContainerInfo("fn-1", Map.of()),
+                        new ContainerLifecycleManager.ContainerInfo("fn-2", Map.of()));
+        when(containerDetector.isRunningInContainer()).thenReturn(true);
+        when(networkResolver.resolveNetworkName()).thenReturn(Optional.of("bridge"));
+        when(lifecycleManager.resolveEndpoint("fn-1", 8080, "bridge"))
+                .thenThrow(new RuntimeException("docker inspect timed out"));
+        when(lifecycleManager.resolveEndpoint("fn-2", 8080, "bridge"))
+                .thenReturn(new ContainerLifecycleManager.EndpointInfo("172.17.0.7", 8080));
+
+        assertThrows(RuntimeException.class, () -> manager.ensureStarted());
+
+        verify(lifecycleManager).stopAndRemove("fn-1", null);
+        verify(portAllocator).release(8081);
+        assertFalse(manager.isStarted());
+
+        manager.ensureStarted();
+
+        assertEquals("http://172.17.0.7:8080", manager.baseUrl());
     }
 }

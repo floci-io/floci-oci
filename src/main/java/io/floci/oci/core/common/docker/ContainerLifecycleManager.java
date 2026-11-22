@@ -833,21 +833,31 @@ public class ContainerLifecycleManager {
             // Prefer the configured network so that when the container is on both
             // bridge (default) and the service network, we return the right IP.
             if (preferredNetwork != null && networks.containsKey(preferredNetwork)) {
-                String ip = networks.get(preferredNetwork).getIpAddress();
-                if (ip != null && !ip.isBlank()) {
+                String ip = addressOn(networks.get(preferredNetwork));
+                if (ip != null) {
                     return ip;
                 }
             }
             // Fall back to any network
             for (Map.Entry<String, ContainerNetwork> entry : networks.entrySet()) {
-                String ip = entry.getValue().getIpAddress();
-                if (ip != null && !ip.isBlank()) {
+                String ip = addressOn(entry.getValue());
+                if (ip != null) {
                     return ip;
                 }
             }
         }
         // Fallback to the global IP
         return inspect.getNetworkSettings().getIpAddress();
+    }
+
+    /** The container's IPv4 address on a network, or its global IPv6 one on an IPv6-only network. */
+    private static String addressOn(ContainerNetwork network) {
+        String ipv4 = network.getIpAddress();
+        if (ipv4 != null && !ipv4.isBlank()) {
+            return ipv4;
+        }
+        String ipv6 = network.getGlobalIPv6Address();
+        return ipv6 != null && !ipv6.isBlank() ? ipv6 : null;
     }
 
     /**
