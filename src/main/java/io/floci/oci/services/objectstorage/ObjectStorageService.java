@@ -19,6 +19,8 @@ import io.floci.oci.core.storage.TenancyAwareStorageBackend;
 import io.floci.oci.core.tenancy.TenancyNames;
 import io.floci.oci.core.workrequest.WorkRequestService;
 import io.floci.oci.services.objectstorage.model.StoredBucket;
+import io.floci.oci.services.objectstorage.model.StoredLifecyclePolicy;
+import io.floci.oci.services.objectstorage.model.StoredLifecycleRule;
 import io.floci.oci.services.objectstorage.model.StoredMultipartUpload;
 import io.floci.oci.services.objectstorage.model.StoredOsObject;
 import io.floci.oci.services.objectstorage.model.StoredPar;
@@ -48,6 +50,7 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BiConsumer;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 @ApplicationScoped
 public class ObjectStorageService implements CompartmentUsage, Resettable {
@@ -60,9 +63,15 @@ public class ObjectStorageService implements CompartmentUsage, Resettable {
     private final StorageBackend<String, StoredBucket> buckets;
     private final StorageBackend<String, StoredOsObject> objects;
     private final StorageBackend<String, StoredMultipartUpload> uploads;
+    /**
+     * One lock per multipart upload, so a part being saved cannot recreate an upload that a commit, an
+     * abort or a lifecycle rule has just removed.
+     */
+    private final Map<String, Object> uploadLocks = new ConcurrentHashMap<>();
     private final StorageBackend<String, StoredPar> pars;
     private final ObjectVersions versions;
     private final BucketReplication replication;
+    private final BucketLifecycle lifecycle;
     private final EmulatorConfig config;
     private final OciContext ociContext;
     private final ServiceRegistry serviceRegistry;
@@ -99,6 +108,8 @@ public class ObjectStorageService implements CompartmentUsage, Resettable {
                 storageFactory.create("objectstorage", "objectstorage-replication.json",
                         new TypeReference<Map<String, StoredReplicationPolicy>>() {}),
                 buckets, objects, ociContext);
+        this.lifecycle = new BucketLifecycle(storageFactory.create("objectstorage", "objectstorage-lifecycle.json",
+                new TypeReference<Map<String, StoredLifecyclePolicy>>() {}));
         storageFactory.afterLoad(this::migrateSavedNamespaces);
     }
 
@@ -127,6 +138,7 @@ public class ObjectStorageService implements CompartmentUsage, Resettable {
         this.pars = pars;
         this.versions = new ObjectVersions(objects, new InMemoryStorage<>());
         this.replication = new BucketReplication(policies, buckets, objects, ociContext);
+        this.lifecycle = new BucketLifecycle(new InMemoryStorage<>());
         this.config = config;
         this.serviceRegistry = null;
         this.workRequests = workRequests;
@@ -355,6 +367,7 @@ public class ObjectStorageService implements CompartmentUsage, Resettable {
                         pars.delete(p.getToken());
                         parOwners.remove(p.getToken());
                     });
+            lifecycle.forget(bucketName);
             buckets.delete(bucketName);
             emitBucketEvent("deletebucket", b);
         });
@@ -728,52 +741,87 @@ public class ObjectStorageService implements CompartmentUsage, Resettable {
 
     public UploadedPart uploadPart(String namespaceName, String bucketName, String objectName,
                                    String uploadId, int partNum, byte[] data) {
-        StoredMultipartUpload u = getUpload(bucketName, uploadId, objectName);
         if (partNum < 1 || partNum > 10000) {
+            getUpload(bucketName, uploadId, objectName);
             throw OciException.invalidParameter("uploadPartNum must be between 1 and 10000");
         }
-        String etag = Etags.newEtag();
-        u.getParts().put(partNum, new StoredMultipartUpload.Part(etag, data));
-        uploads.put(uploadKey(bucketName, uploadId), u);
-        return new UploadedPart(etag, md5Base64(data));
+        return underUploadLock(bucketName, uploadId, () -> {
+            StoredMultipartUpload u = getUpload(bucketName, uploadId, objectName);
+            String etag = Etags.newEtag();
+            u.getParts().put(partNum, new StoredMultipartUpload.Part(etag, data));
+            uploads.put(uploadKey(bucketName, uploadId), u);
+            return new UploadedPart(etag, md5Base64(data));
+        });
+    }
+
+    /**
+     * Runs {@code action} under the upload's lock, and drops the lock once the upload is gone, whether the
+     * action removed it or it never existed. Upload ids are random and never reused, so a caller still
+     * waiting on a dropped lock only finds the upload missing.
+     */
+    private <T> T underUploadLock(String bucketName, String uploadId, Supplier<T> action) {
+        String key = uploadKey(bucketName, uploadId);
+        Object lock = uploadLocks.computeIfAbsent(key, ignored -> new Object());
+        synchronized (lock) {
+            try {
+                return action.get();
+            } finally {
+                if (uploads.get(key).isEmpty()) {
+                    uploadLocks.remove(key, lock);
+                }
+            }
+        }
+    }
+
+    int uploadLockCount() {
+        return uploadLocks.size();
     }
 
     public StoredOsObject commitMultipartUpload(String namespaceName, String bucketName,
                                                 String objectName, String uploadId,
                                                 List<Map<String, Object>> partsToCommit) {
         return replication.writing(ociContext.region(), bucketName, () -> {
-            StoredMultipartUpload u = getUpload(bucketName, uploadId, objectName);
-            if (partsToCommit == null || partsToCommit.isEmpty()) {
-                throw OciException.invalidParameter("partsToCommit must contain at least one part");
-            }
-            ByteArrayOutputStream assembled = new ByteArrayOutputStream();
-            List<byte[]> committedParts = new ArrayList<>();
-            List<Map<String, Object>> ordered = partsToCommit.stream()
-                    .sorted(Comparator.comparingInt(p -> ((Number) p.get("partNum")).intValue()))
-                    .toList();
-            for (Map<String, Object> partRef : ordered) {
-                int partNum = ((Number) partRef.get("partNum")).intValue();
-                String etag = (String) partRef.get("etag");
-                StoredMultipartUpload.Part part = u.getParts().get(partNum);
-                if (part == null || !part.getEtag().equals(etag)) {
-                    throw OciException.invalidParameter(
-                            "Part " + partNum + " with etag " + etag + " was not uploaded.");
-                }
-                assembled.writeBytes(part.getData());
-                committedParts.add(part.getData());
-            }
-            byte[] data = assembled.toByteArray();
-            StoredOsObject o = putObject(namespaceName, bucketName, u.getObject(), data,
-                    u.getContentType(), null, u.getMetadata(), null, null, multipartMd5(committedParts));
-            uploads.delete(uploadKey(bucketName, uploadId));
-            return o;
+            return underUploadLock(bucketName, uploadId,
+                    () -> commitLocked(namespaceName, bucketName, objectName, uploadId, partsToCommit));
         });
+    }
+
+    private StoredOsObject commitLocked(String namespaceName, String bucketName, String objectName, String uploadId,
+                                        List<Map<String, Object>> partsToCommit) {
+        StoredMultipartUpload u = getUpload(bucketName, uploadId, objectName);
+        if (partsToCommit == null || partsToCommit.isEmpty()) {
+            throw OciException.invalidParameter("partsToCommit must contain at least one part");
+        }
+        ByteArrayOutputStream assembled = new ByteArrayOutputStream();
+        List<byte[]> committedParts = new ArrayList<>();
+        List<Map<String, Object>> ordered = partsToCommit.stream()
+                .sorted(Comparator.comparingInt(p -> ((Number) p.get("partNum")).intValue()))
+                .toList();
+        for (Map<String, Object> partRef : ordered) {
+            int partNum = ((Number) partRef.get("partNum")).intValue();
+            String etag = (String) partRef.get("etag");
+            StoredMultipartUpload.Part part = u.getParts().get(partNum);
+            if (part == null || !part.getEtag().equals(etag)) {
+                throw OciException.invalidParameter(
+                        "Part " + partNum + " with etag " + etag + " was not uploaded.");
+            }
+            assembled.writeBytes(part.getData());
+            committedParts.add(part.getData());
+        }
+        byte[] data = assembled.toByteArray();
+        StoredOsObject o = putObject(namespaceName, bucketName, u.getObject(), data,
+                u.getContentType(), null, u.getMetadata(), null, null, multipartMd5(committedParts));
+        uploads.delete(uploadKey(bucketName, uploadId));
+        return o;
     }
 
     public void abortMultipartUpload(String namespaceName, String bucketName,
                                      String objectName, String uploadId) {
-        getUpload(bucketName, uploadId, objectName);
-        uploads.delete(uploadKey(bucketName, uploadId));
+        underUploadLock(bucketName, uploadId, () -> {
+            getUpload(bucketName, uploadId, objectName);
+            uploads.delete(uploadKey(bucketName, uploadId));
+            return null;
+        });
     }
 
     public List<StoredMultipartUpload> listMultipartUploads(String namespaceName, String bucketName) {
@@ -791,6 +839,163 @@ public class ObjectStorageService implements CompartmentUsage, Resettable {
             throw OciException.notAuthorizedOrNotFound("No such upload for object: " + objectName);
         }
         return u;
+    }
+
+    // ── Object lifecycle policies ──────────────────────────────────────────────
+
+    public StoredLifecyclePolicy putLifecyclePolicy(String namespaceName, String bucketName, Object items,
+                                                    String ifMatch, String ifNoneMatch) {
+        // Under the lock deleteBucket holds, so a policy is never stored for a bucket deleted meanwhile, where a
+        // new bucket of the same name would inherit it.
+        return replication.writing(ociContext.region(), bucketName, () -> {
+            getBucket(namespaceName, bucketName);
+            return lifecycle.put(bucketName, items, ifMatch, ifNoneMatch);
+        });
+    }
+
+    public StoredLifecyclePolicy getLifecyclePolicy(String namespaceName, String bucketName) {
+        getBucket(namespaceName, bucketName);
+        return lifecycle.get(bucketName);
+    }
+
+    public void deleteLifecyclePolicy(String namespaceName, String bucketName, String ifMatch) {
+        getBucket(namespaceName, bucketName);
+        lifecycle.delete(bucketName, ifMatch);
+    }
+
+    /** The lifecycle policy store, whose partitions are the tenancies and regions the sweeper visits. */
+    StorageBackend<String, StoredLifecyclePolicy> lifecyclePolicyStore() {
+        return lifecycle.store();
+    }
+
+    /**
+     * Applies every enabled lifecycle rule of the current partition's buckets as of {@code now}. DELETE on
+     * objects deletes the latest version as DeleteObject does, so a bucket with versioning Enabled keeps it as
+     * a previous version under a delete marker ("When Lifecycle policies delete the latest version of an
+     * object, that object becomes a previous version and a delete marker is created", usingversioning.htm).
+     * DELETE on previous versions deletes them for good, ABORT drops uncommitted multipart uploads. ARCHIVE
+     * and INFREQUENT_ACCESS are accepted but change nothing: storage tiers and archival are not emulated.
+     *
+     * @return how many objects, versions and uploads were removed
+     */
+    public int applyLifecycle(Instant now) {
+        int removed = 0;
+        for (StoredLifecyclePolicy policy : lifecycle.store().scan(k -> true)) {
+            Optional<StoredBucket> bucket = buckets.get(policy.getBucketName());
+            if (bucket.isEmpty() || bucket.get().getIsReadOnly()) {
+                continue;
+            }
+            for (StoredLifecycleRule rule : policy.getItems()) {
+                if (!rule.isEnabled()) {
+                    continue;
+                }
+                try {
+                    removed += applyRule(bucket.get(), rule, now);
+                } catch (RuntimeException e) {
+                    LOG.warnv("Lifecycle rule {0} on bucket {1} failed: {2}", rule.getName(),
+                            policy.getBucketName(), e.getMessage());
+                }
+            }
+        }
+        return removed;
+    }
+
+    private int applyRule(StoredBucket bucket, StoredLifecycleRule rule, Instant now) {
+        String bucketName = bucket.getName();
+        String target = BucketLifecycle.targetOf(rule);
+        if (BucketLifecycle.MULTIPART_UPLOADS.equals(target)) {
+            int aborted = 0;
+            for (StoredMultipartUpload upload : uploads.scan(k -> k.startsWith(bucketName + "/"))) {
+                if (BucketLifecycle.matches(rule, upload.getObject())
+                        && BucketLifecycle.isDue(rule, Instant.parse(upload.getTimeCreated()), now)) {
+                    // A commit or abort may have removed it since the scan.
+                    boolean removed = underUploadLock(bucketName, upload.getUploadId(), () -> {
+                        String key = uploadKey(bucketName, upload.getUploadId());
+                        if (uploads.get(key).isEmpty()) {
+                            return false;
+                        }
+                        uploads.delete(key);
+                        return true;
+                    });
+                    if (removed) {
+                        aborted++;
+                    }
+                }
+            }
+            return aborted;
+        }
+        if (!BucketLifecycle.DELETE.equals(rule.getAction())) {
+            return 0;
+        }
+        return BucketLifecycle.PREVIOUS_VERSIONS.equals(target)
+                ? deletePreviousVersions(bucketName, rule, now)
+                : deleteLatestObjects(bucketName, rule, now);
+    }
+
+    private int deleteLatestObjects(String bucketName, StoredLifecycleRule rule, Instant now) {
+        int deleted = 0;
+        for (StoredOsObject o : objects.scan(k -> k.startsWith(bucketName + "/"))) {
+            if (!BucketLifecycle.matches(rule, o.getName())
+                    || !BucketLifecycle.isDue(rule, Instant.parse(o.getTimeModified()), now)) {
+                continue;
+            }
+            try {
+                // The ETag read here, so an object rewritten since the scan is left alone.
+                deleteObject(namespace(), bucketName, o.getName(), o.getEtag(), null);
+                deleted++;
+            } catch (OciException e) {
+                LOG.debugv("Lifecycle left {0}/{1} alone: {2}", bucketName, o.getName(), e.getMessage());
+            }
+        }
+        return deleted;
+    }
+
+    /**
+     * A previous version's age counts from when it stopped being the latest ("Delete any previous object
+     * versions 120 days after the object version transitions from the latest version to a previous version",
+     * usinglifecyclepolicies.htm). A version stored before that time was recorded falls back to the next
+     * newer version of its name, which is when it was replaced. Delete markers are left alone (inferred:
+     * Oracle describes the action on object versions only).
+     */
+    private int deletePreviousVersions(String bucketName, StoredLifecycleRule rule, Instant now) {
+        int deleted = 0;
+        List<StoredOsObject> all = versions.all(partition(), bucketName);
+        for (int i = 1; i < all.size(); i++) {
+            StoredOsObject version = all.get(i);
+            StoredOsObject newer = all.get(i - 1);
+            if (!newer.getName().equals(version.getName()) || version.isDeleteMarker()
+                    || !BucketLifecycle.matches(rule, version.getName())) {
+                continue;
+            }
+            String since = version.getTimePrevious() != null ? version.getTimePrevious() : newer.getTimeModified();
+            if (BucketLifecycle.isDue(rule, Instant.parse(since), now)
+                    && deletePreviousVersion(bucketName, version)) {
+                deleted++;
+            }
+        }
+        return deleted;
+    }
+
+    /**
+     * Deletes {@code version} for good if it is still a previous version. The check and the delete share the
+     * bucket's write lock, so a version promoted to the latest since the sweep listed it is kept.
+     */
+    boolean deletePreviousVersion(String bucketName, StoredOsObject version) {
+        return replication.writing(ociContext.region(), bucketName, () -> {
+            if (!versions.isPrevious(partition(), bucketName, version.getName(), version.getVersionId())) {
+                LOG.debugv("Lifecycle left version {0} of {1}/{2} alone: it is the latest version now",
+                        version.getVersionId(), bucketName, version.getName());
+                return false;
+            }
+            try {
+                deleteObject(namespace(), bucketName, version.getName(), null, version.getVersionId());
+                return true;
+            } catch (OciException e) {
+                LOG.debugv("Lifecycle left version {0} of {1}/{2} alone: {3}", version.getVersionId(), bucketName,
+                        version.getName(), e.getMessage());
+                return false;
+            }
+        });
     }
 
     // ── Replication ────────────────────────────────────────────────────────────

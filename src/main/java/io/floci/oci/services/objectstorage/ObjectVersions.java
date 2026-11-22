@@ -197,6 +197,7 @@ final class ObjectVersions {
                     .ifPresent(replaced -> keepAsPrevious(partition, bucket.getName(), replaced));
         }
         written.setVersionId(newVersionId());
+        written.setTimePrevious(null);
         TenancyAwareStorageBackend.putIn(objects, partition, key, written);
     }
 
@@ -285,6 +286,7 @@ final class ObjectVersions {
                 .min(NEWEST_FIRST)
                 .filter(o -> !o.isDeleteMarker());
         newest.ifPresent(o -> {
+            o.setTimePrevious(null);
             // Written live before the previous copy goes, so a stop in between loses nothing.
             TenancyAwareStorageBackend.putIn(objects, partition, key, o);
             TenancyAwareStorageBackend.deleteAllIn(versions, partition,
@@ -293,12 +295,24 @@ final class ObjectVersions {
         return newest;
     }
 
+    /** Whether {@code versionId} of {@code name} is a previous version now, not the latest one. */
+    boolean isPrevious(String partition, String bucketName, String name, String versionId) {
+        boolean latest = latest(partition, bucketName, name)
+                .filter(o -> versionId.equals(o.getVersionId()))
+                .isPresent();
+        return !latest && previous(partition, bucketName, name, versionId).isPresent();
+    }
+
     private Optional<StoredOsObject> previous(String partition, String bucketName, String name, String versionId) {
         return TenancyAwareStorageBackend.getIn(versions, partition, versionKey(bucketName, versionId))
                 .filter(o -> name.equals(o.getName()));
     }
 
     private void keepAsPrevious(String partition, String bucketName, StoredOsObject version) {
+        // Kept when already set: a version saved again after a stop mid-move did not become previous twice.
+        if (version.getTimePrevious() == null) {
+            version.setTimePrevious(now());
+        }
         TenancyAwareStorageBackend.putIn(versions, partition, versionKey(bucketName, version.getVersionId()), version);
     }
 

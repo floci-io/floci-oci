@@ -20,6 +20,8 @@ public class StoredOsObject {
     private Map<String, String> metadata;
     private String versionId;
     private boolean deleteMarker;
+    /** When this version stopped being the latest one; null while it is the latest. */
+    private String timePrevious;
 
     public StoredOsObject() {
     }
@@ -110,6 +112,14 @@ public class StoredOsObject {
 
     public void setVersionId(String versionId) {
         this.versionId = versionId;
+    }
+
+    public String getTimePrevious() {
+        return timePrevious;
+    }
+
+    public void setTimePrevious(String timePrevious) {
+        this.timePrevious = timePrevious;
     }
 
     public boolean isDeleteMarker() {

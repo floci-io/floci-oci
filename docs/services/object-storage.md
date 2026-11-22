@@ -13,6 +13,7 @@ OCI Object Storage — unversioned paths under `/n/{namespace}/b/{bucket}/o/{obj
 | Actions | RenameObject; CopyObject (`sourceVersionId`, async, work request, terminal status `COMPLETED`); BatchDeleteObjects (per-object success/failure results, optional per-entry `ifMatch`, `isSkipDeletedResult`) |
 | Multipart | CreateMultipartUpload, UploadPart, Commit, Abort, List |
 | Pre-authenticated requests | Create, Get, List, Delete; anonymous data path via `/p/{token}/…` |
+| Lifecycle policies | PutObjectLifecyclePolicy, GetObjectLifecyclePolicy, DeleteObjectLifecyclePolicy (`/l`); see [below](#lifecycle-policies) |
 | Replication | CreateReplicationPolicy, GetReplicationPolicy, ListReplicationPolicies, DeleteReplicationPolicy, ListReplicationSources, MakeBucketWritable |
 | Work requests | Get, List, errors, logs (unversioned at `/workRequests`) |
 | Amazon S3 Compatibility API | See [below](#amazon-s3-compatibility-api) |
@@ -56,7 +57,7 @@ oci os object get $E --namespace floci-local --bucket-name demo \
   return the same value for multipart objects, in place of `content-md5`.
 - Deleting a bucket that still holds objects, previous versions or delete markers answers
   `409 BucketNotEmpty`.
-- Retention rules and lifecycle policies are not implemented yet.
+- Retention rules are not implemented yet.
 
 ## Versioning
 
@@ -92,6 +93,40 @@ floci-oci's own choices, where no OCI source states the behaviour:
   towards a versioned bucket answers `409 ReplicationPolicyConflict`.
 - `opc-next-page` names the last entry of the page, not an offset, so deleting a page of versions
   before asking for the next one skips nothing.
+
+## Lifecycle policies
+
+A bucket has at most one object lifecycle policy, replaced as a whole by every
+`PUT /n/{namespace}/b/{bucket}/l`, as on real OCI.
+
+- Put and Get answer `{timeCreated, items}` with an `etag`. Put honours `if-match` and
+  `if-none-match: *`; Delete honours `if-match` and answers 204. A policy with no rules (`items: []`
+  or no `items`) is accepted, which is what the Terraform provider sends first.
+- A bucket with no policy answers `404 LifecyclePolicyNotFound` on Get and Delete.
+- Rules need `name`, `action` (`ARCHIVE`, `INFREQUENT_ACCESS`, `DELETE`, `ABORT`), `timeAmount`,
+  `timeUnit` (`DAYS` or `YEARS`) and `isEnabled`. `target` is `objects`, `previous-object-versions`
+  or `multipart-uploads`; `ABORT` goes with `multipart-uploads` and only there. Every field reads back
+  as it was sent, and a missing `target` stays missing.
+- Limits from Oracle's lifecycle page: 1,000 rules a policy, 20 patterns a name filter, patterns of
+  1 to 1,024 characters. Patterns use `*`, `?`, `\` and `[...]` (a set, or one `a-z` range); a group
+  cannot start with `^` or `:`. Exclusions win over inclusions, and a name matching either an
+  inclusion pattern or an inclusion prefix is included.
+- `timeAmount` cannot be negative. Oracle documents no minimum, so `0` is accepted and means "at the
+  next midnight UTC".
+- An object's age counts from its last modification, rounded up to midnight UTC; a year is 365.2425
+  days. A previous version's age counts from when it stopped being the latest version, even if the
+  version that replaced it is deleted later, and an upload's from when it was created.
+- What a rule does when it is due:
+  - `DELETE` on `objects` deletes the latest version as DeleteObject does, so a bucket with versioning
+    `Enabled` keeps it as a previous version under a delete marker. A rule with no `target` acts on
+    objects.
+  - `DELETE` on `previous-object-versions` deletes those versions for good. Delete markers are left.
+  - `ABORT` drops uncommitted multipart uploads and their parts.
+  - `ARCHIVE` and `INFREQUENT_ACCESS` are stored and validated but change nothing: storage tiers and
+    archival are not emulated.
+- Rules run every `FLOCI_OCI_SERVICES_OBJECTSTORAGE_LIFECYCLE_SWEEP_INTERVAL_SECONDS` (60 by
+  default), not once a day as on real OCI, so a due object goes soon after it becomes due.
+  Destinations of a replication policy are read-only and are skipped.
 
 ## Replication
 

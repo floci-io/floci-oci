@@ -113,6 +113,15 @@ public class OciException extends RuntimeException {
         return new OciException("BucketNotEmpty", message, 409);
     }
 
+    /**
+     * A bucket with no object lifecycle policy. Not in Oracle's global error catalog: the code is the one
+     * Oracle's showoci example tolerates on GetObjectLifecyclePolicy (oci-python-sdk showoci_service.py), and
+     * the Terraform provider's destroy check expects a 404 (objectstorage_object_lifecycle_policy_test.go).
+     */
+    public static OciException lifecyclePolicyNotFound(String message) {
+        return new OciException("LifecyclePolicyNotFound", message, 404);
+    }
+
     /** A replication policy conflicts with another: the real code for a second policy on one source bucket. */
     public static OciException replicationPolicyConflict(String message) {
         return new OciException("ReplicationPolicyConflict", message, 409);
