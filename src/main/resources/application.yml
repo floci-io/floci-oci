@@ -95,6 +95,7 @@ floci-oci:
       enabled: true
     objectstorage:
       enabled: true
+      lifecycle-sweep-interval-seconds: 60
     queue:
       enabled: true
     events:

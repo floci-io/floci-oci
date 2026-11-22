@@ -9,7 +9,10 @@ import io.floci.oci.core.workrequest.WorkRequestService;
 import io.floci.oci.services.identity.CompartmentValidator;
 import io.floci.oci.services.objectstorage.ObjectStorageService.BatchDeleteResult;
 import io.floci.oci.services.objectstorage.model.StoredBucket;
+import io.floci.oci.services.objectstorage.model.StoredLifecyclePolicy;
+import io.floci.oci.services.objectstorage.model.StoredLifecycleRule;
 import io.floci.oci.services.objectstorage.model.StoredMultipartUpload;
+import io.floci.oci.services.objectstorage.model.StoredObjectNameFilter;
 import io.floci.oci.services.objectstorage.model.StoredOsObject;
 import io.floci.oci.services.objectstorage.model.StoredPar;
 import io.floci.oci.services.objectstorage.model.StoredReplicationPolicy;
@@ -504,6 +507,37 @@ public class ObjectStorageController {
         return Response.ok(Map.of("items", List.of())).build();
     }
 
+    // ── Object lifecycle policies ──────────────────────────────────────────────
+
+    @PUT
+    @Path("/n/{namespaceName}/b/{bucketName}/l")
+    public Response putObjectLifecyclePolicy(@PathParam("namespaceName") String namespaceName,
+                                             @PathParam("bucketName") String bucketName,
+                                             @HeaderParam("if-match") String ifMatch,
+                                             @HeaderParam("if-none-match") String ifNoneMatch,
+                                             Map<String, Object> body) {
+        StoredLifecyclePolicy policy = service.putLifecyclePolicy(namespaceName, bucketName,
+                body == null ? null : body.get("items"), ifMatch, ifNoneMatch);
+        return Response.ok(lifecyclePolicyJson(policy)).header("etag", policy.getEtag()).build();
+    }
+
+    @GET
+    @Path("/n/{namespaceName}/b/{bucketName}/l")
+    public Response getObjectLifecyclePolicy(@PathParam("namespaceName") String namespaceName,
+                                             @PathParam("bucketName") String bucketName) {
+        StoredLifecyclePolicy policy = service.getLifecyclePolicy(namespaceName, bucketName);
+        return Response.ok(lifecyclePolicyJson(policy)).header("etag", policy.getEtag()).build();
+    }
+
+    @DELETE
+    @Path("/n/{namespaceName}/b/{bucketName}/l")
+    public Response deleteObjectLifecyclePolicy(@PathParam("namespaceName") String namespaceName,
+                                                @PathParam("bucketName") String bucketName,
+                                                @HeaderParam("if-match") String ifMatch) {
+        service.deleteLifecyclePolicy(namespaceName, bucketName, ifMatch);
+        return Response.noContent().build();
+    }
+
     // ── Replication ────────────────────────────────────────────────────────────
 
     @POST
@@ -822,6 +856,41 @@ public class ObjectStorageController {
             }
         });
         return meta;
+    }
+
+    /** ObjectLifecyclePolicy: {@code timeCreated} and the rules, each field as the client sent it. */
+    private static Map<String, Object> lifecyclePolicyJson(StoredLifecyclePolicy policy) {
+        Map<String, Object> json = new LinkedHashMap<>();
+        json.put("timeCreated", policy.getTimeCreated());
+        json.put("items", policy.getItems().stream().map(ObjectStorageController::lifecycleRuleJson).toList());
+        return json;
+    }
+
+    private static Map<String, Object> lifecycleRuleJson(StoredLifecycleRule rule) {
+        Map<String, Object> json = new LinkedHashMap<>();
+        json.put("name", rule.getName());
+        json.put("action", rule.getAction());
+        json.put("timeAmount", rule.getTimeAmount());
+        json.put("timeUnit", rule.getTimeUnit());
+        json.put("isEnabled", rule.isEnabled());
+        if (rule.getTarget() != null) {
+            json.put("target", rule.getTarget());
+        }
+        StoredObjectNameFilter filter = rule.getObjectNameFilter();
+        if (filter != null) {
+            Map<String, Object> filterJson = new LinkedHashMap<>();
+            if (filter.getInclusionPrefixes() != null) {
+                filterJson.put("inclusionPrefixes", filter.getInclusionPrefixes());
+            }
+            if (filter.getInclusionPatterns() != null) {
+                filterJson.put("inclusionPatterns", filter.getInclusionPatterns());
+            }
+            if (filter.getExclusionPatterns() != null) {
+                filterJson.put("exclusionPatterns", filter.getExclusionPatterns());
+            }
+            json.put("objectNameFilter", filterJson);
+        }
+        return json;
     }
 
     private static String str(Map<String, Object> body, String key) {

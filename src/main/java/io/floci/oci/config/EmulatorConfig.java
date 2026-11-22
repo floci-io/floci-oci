@@ -219,6 +219,10 @@ public interface EmulatorConfig {
         interface ObjectStorageServiceConfig {
             @WithDefault("true")
             boolean enabled();
+
+            /** How often object lifecycle policies run. */
+            @WithDefault("60")
+            long lifecycleSweepIntervalSeconds();
         }
 
         interface QueueServiceConfig {

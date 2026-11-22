@@ -80,6 +80,35 @@ resource "oci_objectstorage_object" "tf_object" {
   delete_all_object_versions = true
 }
 
+resource "oci_objectstorage_object_lifecycle_policy" "tf_lifecycle" {
+  namespace = data.oci_objectstorage_namespace.ns.namespace
+  bucket    = oci_objectstorage_bucket.tf_bucket.name
+
+  # Long ages and a prefix no other resource writes under, so the policy never removes tf_object.
+  rules {
+    name        = "tf-compat-delete-tmp"
+    action      = "DELETE"
+    is_enabled  = true
+    time_amount = 30
+    time_unit   = "DAYS"
+    target      = "objects"
+
+    object_name_filter {
+      inclusion_prefixes = ["tf-compat-tmp/"]
+      exclusion_patterns = ["*.keep"]
+    }
+  }
+
+  rules {
+    name        = "tf-compat-abort-uploads"
+    action      = "ABORT"
+    is_enabled  = false
+    time_amount = 7
+    time_unit   = "DAYS"
+    target      = "multipart-uploads"
+  }
+}
+
 output "namespace" {
   value = data.oci_objectstorage_namespace.ns.namespace
 }

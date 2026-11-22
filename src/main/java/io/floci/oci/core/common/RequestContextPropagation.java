@@ -45,4 +45,22 @@ public class RequestContextPropagation {
             }
         };
     }
+
+    /**
+     * Runs {@code task} in a fresh request context for {@code tenancyId} and {@code region}, for
+     * background work that belongs to a stored resource rather than to a request (an alarm
+     * evaluation), so partitioned reads and writes land in that resource's partition.
+     */
+    public void runAs(String tenancyId, String region, Runnable task) {
+        ManagedContext context = Arc.container().requestContext();
+        context.activate();
+        try {
+            RequestContext scoped = Arc.container().instance(RequestContext.class).get();
+            scoped.setTenancyId(tenancyId);
+            scoped.setRegion(region);
+            task.run();
+        } finally {
+            context.terminate();
+        }
+    }
 }
