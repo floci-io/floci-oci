@@ -395,11 +395,18 @@ public class NotificationsService implements CompartmentUsage {
 
     /** Publishes an Events envelope (an ONS rule action) to a topic; the JSON is delivered as is. */
     public synchronized void publishEvent(String topicId, byte[] envelope) {
+        publishInternal(topicId, null, new String(envelope, StandardCharsets.UTF_8), "application/json");
+    }
+
+    /**
+     * Publishes a message another floci-oci service produced (an alarm notification) to every
+     * active subscription of the topic, unchanged.
+     */
+    public synchronized void publishInternal(String topicId, String title, String body, String contentType) {
         StoredTopic topic = getTopic(topicId);
         String messageId = UUID.randomUUID().toString();
-        String text = new String(envelope, StandardCharsets.UTF_8);
         for (StoredSubscription subscription : activeSubscriptionsOf(topicId)) {
-            dispatch(topic, subscription, messageId, null, text, "application/json");
+            dispatch(topic, subscription, messageId, title, body, contentType);
         }
     }
 
