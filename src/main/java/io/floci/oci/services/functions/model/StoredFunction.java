@@ -26,6 +26,12 @@ public class StoredFunction {
     private String etag;
     /** Mirrored Fn-server fn id, when the sidecar has been provisioned. */
     private String fnFnId;
+    /** The image reference the mirrored fn runs, as fnserver pulls it; null until mirrored. */
+    private String fnImage;
+    /** The memory, timeout and config last sent to fnserver; null until mirrored. */
+    private Long fnMemory;
+    private Integer fnTimeout;
+    private Map<String, String> fnConfig;
     /** The optional settings the API returns as they were sent (traceConfig, logging, ...). */
     private Map<String, Object> settings;
 
@@ -166,6 +172,38 @@ public class StoredFunction {
 
     public void setFnFnId(String fnFnId) {
         this.fnFnId = fnFnId;
+    }
+
+    public String getFnImage() {
+        return fnImage;
+    }
+
+    public void setFnImage(String fnImage) {
+        this.fnImage = fnImage;
+    }
+
+    public Long getFnMemory() {
+        return fnMemory;
+    }
+
+    public void setFnMemory(Long fnMemory) {
+        this.fnMemory = fnMemory;
+    }
+
+    public Integer getFnTimeout() {
+        return fnTimeout;
+    }
+
+    public void setFnTimeout(Integer fnTimeout) {
+        this.fnTimeout = fnTimeout;
+    }
+
+    public Map<String, String> getFnConfig() {
+        return fnConfig;
+    }
+
+    public void setFnConfig(Map<String, String> fnConfig) {
+        this.fnConfig = fnConfig;
     }
 
     public Map<String, Object> getSettings() {

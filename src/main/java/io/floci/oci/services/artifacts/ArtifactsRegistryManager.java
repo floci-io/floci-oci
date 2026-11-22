@@ -165,6 +165,14 @@ public class ArtifactsRegistryManager {
         return containerId != null;
     }
 
+    /**
+     * The registry's published port on the Docker daemon's host, -1 until it has started. The daemon
+     * pulls from {@code localhost:<port>}: its own host, where the port is bound.
+     */
+    public int hostPort() {
+        return hostPort;
+    }
+
     /** {@code host:port} of the registry as floci-oci reaches it. */
     public String endpoint() {
         return endpoint;

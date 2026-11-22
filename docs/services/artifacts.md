@@ -42,7 +42,9 @@ stored in one shared `registry:2` sidecar container.
 
 The registry host is `<region-key>.ocir.localhost.floci.io:4599`, for example
 `iad.ocir.localhost.floci.io:4599` for `us-ashburn-1`. `localhost.floci.io` resolves to
-127.0.0.1, which Docker treats as an insecure registry, so no TLS setup is needed. Image
+127.0.0.1 and the registry speaks plain HTTP. Docker Engine 29 with the containerd image store
+uses plain HTTP only for `localhost` and `127.0.0.1` names, so if a push fails with an HTTPS
+error, add `iad.ocir.localhost.floci.io:4599` to the daemon's `insecure-registries`. Image
 references follow OCIR's shape, `<host>/<namespace>/<repository>:<tag>`, where the
 namespace is the tenancy's Object Storage namespace (`floci-local` for the default
 tenancy).
@@ -80,9 +82,19 @@ repository that has had a push. Its images live in a Docker volume that outlives
 so they survive a restart of the sidecar or of floci-oci. `POST /_floci-oci/state/reset`
 removes the sidecar with its volume.
 
+## Running pushed images
+
+A function whose image is in this registry runs as it is: create it with the OCIR reference,
+for example `iad.ocir.localhost.floci.io/floci-local/project/app:v1`, and floci-oci hands
+fnserver `localhost:<registry port>/iad/floci-local/project/app:v1` instead. The registry
+publishes its port on the Docker daemon's host, so the daemon pulls from its own `localhost`,
+which works for a remote daemon too. The function's `image` keeps the OCIR reference.
+
+An image is rewritten only when its namespace belongs to a tenancy this emulator knows, so a
+reference to real OCIR (`iad.ocir.io/<real namespace>/...`) is passed through unchanged. With
+`FLOCI_OCI_SERVICES_ARTIFACTS_MOCK=true` nothing is rewritten.
+
 ## Notes and limitations
 
-Functions and OKE do not yet pull from the local registry: Functions pulls through the
-Docker daemon, which reaches `*.ocir.localhost.floci.io:4599` only when floci-oci's port is
-published on the daemon's host. Pull-through cache and multi-region repositories, image
-signatures, and `_catalog` are not implemented.
+OKE does not yet pull from the local registry. Pull-through cache and multi-region
+repositories, image signatures, and `_catalog` are not implemented.

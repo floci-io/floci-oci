@@ -63,6 +63,10 @@ visible through the other. They differ where the SDKs differ:
 | `false` (default) | Starts a shared `fnproject/fnserver` container on first invoke, mirrors the app/function into it, and proxies the call to the real image |
 | `true` | No Docker at all; the management plane works fully and invocations return a synthetic body |
 
+A new `image`, `imageDigest`, `memoryInMBs`, `timeoutInSeconds` or `config` on UpdateFunction reaches
+fnserver on the next invoke, which updates the mirrored fn in place; a config key removed from the
+function is removed there too. A new digest for the same tag runs the image pinned to that digest.
+
 The test suite sets `mock: true` so it never needs Docker.
 
 ```bash
@@ -84,6 +88,18 @@ oci fn application create $E --compartment-id "$TENANCY" \
 oci fn function create $E --application-id <appId> --display-name hello \
   --image <your-fdk-image>:latest --memory-in-mbs 128
 oci fn function invoke $E --function-id <fnId> --body '{"name":"floci"}' --file -
+```
+
+To run an image from the local Container Registry, push it there and use its OCIR reference
+(see [Container Registry](artifacts.md#running-pushed-images)). The repository must exist
+first, unless the container configuration creates repositories on first push:
+
+```bash
+oci artifacts container repository create $E --compartment-id "$TENANCY" --display-name fn/hello
+docker tag my-fdk-fn:latest iad.ocir.localhost.floci.io:4599/floci-local/fn/hello:1
+docker push iad.ocir.localhost.floci.io:4599/floci-local/fn/hello:1
+oci fn function create $E --application-id <appId> --display-name hello \
+  --image iad.ocir.localhost.floci.io/floci-local/fn/hello:1 --memory-in-mbs 128
 ```
 
 ## Notes & limitations

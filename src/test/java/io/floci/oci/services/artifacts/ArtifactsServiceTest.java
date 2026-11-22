@@ -16,6 +16,10 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 class ArtifactsServiceTest {
 
@@ -23,15 +27,18 @@ class ArtifactsServiceTest {
     private static final String COMPARTMENT = "ocid1.compartment.oc1..artifactstest";
 
     private ArtifactsService service;
+    private EmulatorConfig config;
+    private ObjectStorageService objectStorage;
 
     @BeforeEach
     void setUp() {
-        EmulatorConfig config = mock(EmulatorConfig.class, RETURNS_DEEP_STUBS);
+        config = mock(EmulatorConfig.class, RETURNS_DEEP_STUBS);
         lenient().when(config.defaultRealm()).thenReturn("oc1");
         lenient().when(config.defaultRegion()).thenReturn("us-ashburn-1");
         lenient().when(config.defaultTenancyId()).thenReturn(TENANCY);
         lenient().when(config.services().artifacts().mock()).thenReturn(true);
-        ObjectStorageService objectStorage = mock(ObjectStorageService.class);
+        lenient().when(config.services().artifacts().enabled()).thenReturn(true);
+        objectStorage = mock(ObjectStorageService.class);
         lenient().when(objectStorage.namespaceOf(anyString())).thenReturn("testns");
         service = new ArtifactsService(new InMemoryStorage<>(), new InMemoryStorage<>(), config, objectStorage);
     }
@@ -139,13 +146,52 @@ class ArtifactsServiceTest {
         assertEquals("iad/testns/project/app", service.backendRepository(create("project/app")));
     }
 
+    private ArtifactsService withRegistry(ArtifactsRegistryManager registry) {
+        when(config.services().artifacts().mock()).thenReturn(false);
+        return new ArtifactsService(new InMemoryStorage<>(), new InMemoryStorage<>(), config, objectStorage, registry);
+    }
+
+    @Test
+    void localOcirImagesArePulledFromThePublishedPort() {
+        ArtifactsRegistryManager registry = mock(ArtifactsRegistryManager.class);
+        when(registry.hostPort()).thenReturn(5201);
+        ArtifactsService real = withRegistry(registry);
+
+        assertEquals("localhost:5201/iad/testns/project/app:1.0",
+                real.pullable("iad.ocir.localhost.floci.io:4599/testns/project/app:1.0"));
+        assertEquals("localhost:5201/phx/testns/app@sha256:abc",
+                real.pullable("us-phoenix-1.ocir.io/testns/app@sha256:abc"));
+        verify(registry, times(2)).ensureReady();
+    }
+
+    @Test
+    void imagesThisRegistryDoesNotOwnAreUnchanged() {
+        ArtifactsRegistryManager registry = mock(ArtifactsRegistryManager.class);
+        ArtifactsService real = withRegistry(registry);
+
+        assertEquals("iad.ocir.io/otherns/app:1", real.pullable("iad.ocir.io/otherns/app:1"));
+        assertEquals("docker.io/library/alpine:3", real.pullable("docker.io/library/alpine:3"));
+        assertEquals("alpine", real.pullable("alpine"));
+        assertEquals("iad.ocir.io/testns", real.pullable("iad.ocir.io/testns"));
+        assertNull(real.pullable(null));
+        verify(registry, never()).ensureReady();
+    }
+
+    @Test
+    void mockOrDisabledArtifactsLeaveImagesUnchanged() {
+        assertEquals("iad.ocir.io/testns/app:1", service.pullable("iad.ocir.io/testns/app:1"));
+        ArtifactsService real = withRegistry(mock(ArtifactsRegistryManager.class));
+        when(config.services().artifacts().enabled()).thenReturn(false);
+        assertEquals("iad.ocir.io/testns/app:1", real.pullable("iad.ocir.io/testns/app:1"));
+    }
+
     @Test
     void registryHostNamesTheRegion() {
-        assertEquals("us-ashburn-1", OcirRegistryResource.regionOf("iad.ocir.localhost.floci.io:4599").orElseThrow());
-        assertEquals("us-phoenix-1", OcirRegistryResource.regionOf("us-phoenix-1.ocir.io").orElseThrow());
-        assertEquals("us-ashburn-1", OcirRegistryResource.regionOf("ocir.us-ashburn-1.oci.oraclecloud.com")
+        assertEquals("us-ashburn-1", OcirHosts.regionOf("iad.ocir.localhost.floci.io:4599").orElseThrow());
+        assertEquals("us-phoenix-1", OcirHosts.regionOf("us-phoenix-1.ocir.io").orElseThrow());
+        assertEquals("us-ashburn-1", OcirHosts.regionOf("ocir.us-ashburn-1.oci.oraclecloud.com")
                 .orElseThrow());
-        assertTrue(OcirRegistryResource.regionOf("localhost:4599").isEmpty());
+        assertTrue(OcirHosts.regionOf("localhost:4599").isEmpty());
     }
 
     @Test

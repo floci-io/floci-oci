@@ -122,6 +122,11 @@ public final class Regions {
         return Optional.ofNullable(BY_NAME.get(name));
     }
 
+    /** The region whose 3-letter code is {@code code} ({@code iad}), ignoring case. */
+    public static Optional<Region> byCode(String code) {
+        return ALL.stream().filter(r -> r.code().equalsIgnoreCase(code)).findFirst();
+    }
+
     public static List<Region> all() {
         return ALL;
     }

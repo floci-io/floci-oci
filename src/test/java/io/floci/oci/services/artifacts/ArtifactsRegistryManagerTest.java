@@ -56,8 +56,10 @@ class ArtifactsRegistryManagerTest {
 
     @Test
     void onTheHostTheRegistryIsReachedOnTheDaemonHost() {
+        assertEquals(-1, manager.hostPort());
         manager.ensureStarted();
         assertEquals("docker.example:5201", manager.endpoint());
+        assertEquals(5201, manager.hostPort());
     }
 
     @Test

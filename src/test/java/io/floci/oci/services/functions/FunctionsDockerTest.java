@@ -63,6 +63,11 @@ class FunctionsDockerTest {
                 .redirectErrorStream(true).start();
         String output = new String(build.getInputStream().readAllBytes());
         assumeTrue(build.waitFor() == 0, "fixture image build failed: " + output);
+        // A second tag of the same image, for the image update case.
+        Process tag = new ProcessBuilder("docker", "tag", "floci-oci-fn-hello:latest", "floci-oci-fn-hello:v2")
+                .redirectErrorStream(true).start();
+        String tagOutput = new String(tag.getInputStream().readAllBytes());
+        assumeTrue(tag.waitFor() == 0, "fixture image tag failed: " + tagOutput);
 
         io.restassured.RestAssured.config = io.restassured.RestAssured.config()
                 .httpClient(io.restassured.config.HttpClientConfig.httpClientConfig()
@@ -71,7 +76,7 @@ class FunctionsDockerTest {
     }
 
     @Test
-    @Order(5)
+    @Order(6)
     void cleanUpStateAndSidecar() {
         given().delete("/20181201/functions/" + fnId).then().statusCode(204);
         given().delete("/20181201/applications/" + appId).then().statusCode(204);
@@ -134,6 +139,24 @@ class FunctionsDockerTest {
             .header("is-dry-run", "true")
             .when().post("/20181201/functions/" + fnId + "/actions/invoke")
             .then().statusCode(200);
+    }
+
+    @Test
+    @Order(5)
+    void invokeRunsTheUpdatedImage() {
+        given()
+                .contentType("application/json")
+                .body(Map.of("image", "floci-oci-fn-hello:v2"))
+            .when().put("/20181201/functions/" + fnId)
+            .then().statusCode(200);
+
+        String body = given()
+                .contentType("application/json")
+                .body("{\"name\":\"updated\"}".getBytes())
+            .when().post("/20181201/functions/" + fnId + "/actions/invoke")
+            .then().statusCode(200)
+                .extract().asString();
+        assertTrue(body.contains("Hello updated"), "the updated function should still run, got: " + body);
     }
 
     public static class RealFunctionsProfile implements QuarkusTestProfile {

@@ -89,7 +89,8 @@ class FunctionsServiceTest {
 
         StoredFunction updated = service.getFunction(fn.getId());
         assertEquals("sha256:two", updated.getImageDigest());
-        assertNull(updated.getFnFnId(), "the next invoke mirrors the new image");
+        assertEquals("fn-mirror", updated.getFnFnId(), "the next invoke updates the mirrored fn in place");
+        assertEquals("iad.ocir.io/t/fn:latest@sha256:two", FunctionsService.imageReference(updated));
 
         service.updateFunction(fn.getId(), null, "sha256:three", null, null, null, null, null, null, null);
         assertEquals("iad.ocir.io/t/fn:latest", service.getFunction(fn.getId()).getImage());

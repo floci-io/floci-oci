@@ -5,10 +5,12 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.floci.oci.config.EmulatorConfig;
 import io.floci.oci.core.common.CompartmentUsage;
+import io.floci.oci.core.common.ContainerImageResolver;
 import io.floci.oci.core.common.Etags;
 import io.floci.oci.core.common.OciContext;
 import io.floci.oci.core.common.OciException;
 import io.floci.oci.core.common.Ocids;
+import io.floci.oci.core.common.Regions;
 import io.floci.oci.core.common.Resettable;
 import io.floci.oci.core.common.ServiceDescriptor;
 import io.floci.oci.core.common.ServiceRegistry;
@@ -57,7 +59,7 @@ import java.util.regex.Pattern;
  * container configuration still work and image lists are empty.
  */
 @ApplicationScoped
-public class ArtifactsService implements Resettable, CompartmentUsage {
+public class ArtifactsService implements Resettable, CompartmentUsage, ContainerImageResolver {
 
     private static final Logger LOG = Logger.getLogger(ArtifactsService.class);
 
@@ -662,6 +664,37 @@ public class ArtifactsService implements Resettable, CompartmentUsage {
             }
         }
         return Optional.empty();
+    }
+
+    /**
+     * An image in this emulator's OCIR ({@code iad.ocir.localhost.floci.io/<namespace>/<repo>:<tag>}) as
+     * the Docker daemon can pull it: {@code localhost:<published port>/<region code>/<namespace>/<repo>},
+     * the path the data plane stores it under. The registry's port is published on the daemon's own host,
+     * so {@code localhost} works for a remote daemon too, and it is the one name Docker reaches over plain
+     * HTTP. Anything else comes back unchanged: an image outside OCIR, a namespace no tenancy here owns
+     * (an image cached from real OCIR), or Artifacts disabled or in mock mode.
+     */
+    @Override
+    public String pullable(String image) {
+        if (image == null || !config.services().artifacts().enabled() || mock()) {
+            return image;
+        }
+        int slash = image.indexOf('/');
+        if (slash <= 0) {
+            return image;
+        }
+        Optional<String> region = OcirHosts.regionOf(image.substring(0, slash));
+        String path = image.substring(slash + 1);
+        int namespaceEnd = path.indexOf('/');
+        if (region.isEmpty() || namespaceEnd <= 0
+                || tenancyOfNamespace(path.substring(0, namespaceEnd)).isEmpty()) {
+            return image;
+        }
+        registry.ensureReady();
+        String pullable = "localhost:" + registry.hostPort() + "/"
+                + Regions.code(region.get()).toLowerCase(Locale.ROOT) + "/" + path;
+        LOG.debugv("OCIR image {0} is pulled as {1}", image, pullable);
+        return pullable;
     }
 
     ArtifactsRegistryManager registry() {
