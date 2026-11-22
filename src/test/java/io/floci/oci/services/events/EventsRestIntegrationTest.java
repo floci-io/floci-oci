@@ -21,18 +21,23 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 class EventsRestIntegrationTest {
 
     private static String compartment;
+    private static String topicId;
 
     @BeforeEach
     void createTestCompartment() {
         if (compartment == null) {
             compartment = TestCompartments.create("itevents");
+            topicId = given().contentType("application/json")
+                    .body(Map.of("name", "it-events-" + System.nanoTime(), "compartmentId", compartment))
+                .when().post("/20181201/topics")
+                .then().statusCode(200).extract().path("topicId");
         }
     }
 
     private static Map<String, Object> onsRule(String compartmentId, String condition) {
         return Map.of("compartmentId", compartmentId, "displayName", "it-rule", "condition", condition,
                 "isEnabled", true, "actions", Map.of("actions", List.of(Map.of(
-                        "actionType", "ONS", "isEnabled", true, "topicId", "ocid1.onstopic.oc1.iad.ittopic"))));
+                        "actionType", "ONS", "isEnabled", true, "topicId", topicId))));
     }
 
     @Test
@@ -49,7 +54,7 @@ class EventsRestIntegrationTest {
                 .body("condition", equalTo(condition))
                 .body("actions.actions[0].actionType", equalTo("ONS"))
                 .body("actions.actions[0].lifecycleState", equalTo("ACTIVE"))
-                .body("actions.actions[0].topicId", equalTo("ocid1.onstopic.oc1.iad.ittopic"))
+                .body("actions.actions[0].topicId", equalTo(topicId))
                 .extract().path("id");
 
         // ListRules is a bare array of RuleSummary, which has no actions.
@@ -133,6 +138,16 @@ class EventsRestIntegrationTest {
         @SuppressWarnings("unchecked")
         Map<String, Object> details = (Map<String, Object>) data.get("additionalDetails");
         assertEquals(bucket, details.get("bucketName"));
+    }
+
+    @Test
+    void unknownTopicIsARelatedResourceError() {
+        given().contentType("application/json")
+                .body(Map.of("compartmentId", compartment, "displayName", "r", "condition", "{}", "isEnabled", true,
+                        "actions", Map.of("actions", List.of(Map.of("actionType", "ONS", "isEnabled", true,
+                                "topicId", "ocid1.onstopic.oc1.iad.missing")))))
+            .when().post("/20181201/rules")
+            .then().statusCode(400).body("code", equalTo("RelatedResourceNotAuthorizedOrNotFound"));
     }
 
     @Test

@@ -234,15 +234,19 @@ public class RetryTokenFilter implements ContainerRequestFilter, ContainerRespon
     }
 
     /**
-     * The OCID a response created: the body's top-level {@code id}, or, for an async create without a
-     * body, the CREATED resource of the work request in its {@code opc-work-request-id} header.
+     * The OCID a response created: the body's top-level {@code id} (or {@code topicId}, the name
+     * Notifications topics use), or, for an async create without a body, the CREATED resource of the
+     * work request in its {@code opc-work-request-id} header.
      */
     private Optional<String> createdId(byte[] body, ContainerResponseContext response) {
         if (body.length > 0) {
             try {
-                JsonNode id = objectMapper.get().readTree(body).path("id");
-                if (id.isTextual() && id.asText().startsWith(OCID_PREFIX)) {
-                    return Optional.of(id.asText());
+                JsonNode tree = objectMapper.get().readTree(body);
+                for (String field : List.of("id", "topicId")) {
+                    JsonNode id = tree.path(field);
+                    if (id.isTextual() && id.asText().startsWith(OCID_PREFIX)) {
+                        return Optional.of(id.asText());
+                    }
                 }
             } catch (IOException notJson) {
                 LOG.debugv("Retry-token response body is not JSON: {0}", notJson.getMessage());

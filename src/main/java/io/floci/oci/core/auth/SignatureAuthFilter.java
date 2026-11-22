@@ -18,6 +18,7 @@ import jakarta.ws.rs.core.Response;
 import jakarta.ws.rs.ext.Provider;
 
 import java.util.Optional;
+import java.util.regex.Pattern;
 
 /**
  * Populates {@link RequestContext} with the tenancy/user parsed from the OCI Signature
@@ -38,6 +39,13 @@ public class SignatureAuthFilter implements ContainerRequestFilter {
 
     /** The token endpoint the OCIR data plane advertises in its Bearer challenge. */
     public static final String OCIR_TOKEN_PATH = "20180419/docker/token";
+
+    /**
+     * Notifications confirmation and unsubscribe links are opened unsigned, from an email client, a
+     * browser or the subscribed endpoint; the handler checks the link's own token instead.
+     */
+    private static final Pattern ONS_SUBSCRIPTION_LINK =
+            Pattern.compile("20181201/subscriptions/[^/]+/(confirmation|unsubscription)");
 
     /**
      * Injected lazily: this filter is instantiated during Quarkus static init,
@@ -118,6 +126,7 @@ public class SignatureAuthFilter implements ContainerRequestFilter {
                 || relative.startsWith("p/")
                 // Docker clients speak the registry protocol and never sign OCI requests.
                 || relative.equals("v2") || relative.startsWith("v2/")
-                || relative.equals(OCIR_TOKEN_PATH);
+                || relative.equals(OCIR_TOKEN_PATH)
+                || ONS_SUBSCRIPTION_LINK.matcher(relative).matches();
     }
 }
