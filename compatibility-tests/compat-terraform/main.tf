@@ -259,6 +259,25 @@ output "alarm_state" {
   value = oci_monitoring_alarm.tf_alarm.state
 }
 
+# ── Logging ─────────────────────────────────────────────────────────────────
+
+resource "oci_logging_log_group" "tf_log_group" {
+  compartment_id = var.tenancy_ocid
+  display_name   = "tf-compat-log-group"
+  description    = "terraform compat log group"
+}
+
+resource "oci_logging_log" "tf_log" {
+  log_group_id       = oci_logging_log_group.tf_log_group.id
+  display_name       = "tf-compat-log"
+  log_type           = "CUSTOM"
+  retention_duration = 60
+}
+
+output "log_state" {
+  value = oci_logging_log.tf_log.state
+}
+
 # NOTE: oci_functions_application is deliberately NOT exercised here — the provider
 # hardcodes a 5-minute post-destroy sleep (ExtraWaitPostDelete) outside httpreplay
 # mode, which would dominate the suite's runtime. Functions coverage lives in the
