@@ -117,6 +117,7 @@ class IdentityHomeRegionRestIntegrationTest {
         List<Method> writes = new ArrayList<>();
         List<Method> methods = new ArrayList<>(List.of(IdentityController.class.getDeclaredMethods()));
         methods.addAll(List.of(CustomerSecretKeyController.class.getDeclaredMethods()));
+        methods.addAll(List.of(ApiKeyController.class.getDeclaredMethods()));
         for (Method method : methods) {
             boolean write = method.isAnnotationPresent(POST.class) || method.isAnnotationPresent(PUT.class)
                     || method.isAnnotationPresent(DELETE.class);

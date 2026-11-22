@@ -30,6 +30,32 @@ setup() {
     [ "$(json_get '.data."lifecycle-state"')" = "ACTIVE" ]
 }
 
+@test "iam: user api-key upload/list/delete" {
+    local user_id key fingerprint
+    user_id="$(cat "$BATS_FILE_TMPDIR/user_id")"
+    key="$BATS_TEST_TMPDIR/api_key.pem"
+    openssl genrsa -out "$BATS_TEST_TMPDIR/api_private.pem" 2048 2>/dev/null
+    openssl rsa -in "$BATS_TEST_TMPDIR/api_private.pem" -pubout -out "$key" 2>/dev/null
+    fingerprint=$(openssl rsa -in "$BATS_TEST_TMPDIR/api_private.pem" -pubout -outform DER 2>/dev/null \
+        | openssl md5 -c | awk '{print $NF}')
+
+    run oci_cmd iam user api-key upload --user-id "$user_id" --key-file "$key"
+    [ "$status" -eq 0 ]
+    [ "$(json_get '.data.fingerprint')" = "$fingerprint" ]
+    [ "$(json_get '.data."lifecycle-state"')" = "ACTIVE" ]
+
+    run oci_cmd iam user api-key list --user-id "$user_id"
+    [ "$status" -eq 0 ]
+    [ "$(json_get '.data[0].fingerprint')" = "$fingerprint" ]
+
+    run oci_cmd iam user api-key delete --user-id "$user_id" --fingerprint "$fingerprint" --force
+    [ "$status" -eq 0 ]
+    run oci_cmd iam user api-key list --user-id "$user_id"
+    [ "$status" -eq 0 ]
+    # The CLI prints nothing at all for an empty list.
+    [ -z "$output" ] || [ "$(json_get '.data | length')" -eq 0 ]
+}
+
 @test "iam: group create and add-user membership" {
     run oci_cmd iam group create --name "$(unique_name cli-grp)" --description "cli compat"
     [ "$status" -eq 0 ]

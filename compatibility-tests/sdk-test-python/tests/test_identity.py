@@ -1,9 +1,12 @@
 """Identity API validated through the real oci Python SDK."""
 
+import hashlib
 import time
 
 import oci
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 
 from conftest import TENANCY
 
@@ -137,3 +140,33 @@ def test_pagination_uses_opc_next_page(identity):
     finally:
         for group_id in ids:
             identity.delete_group(group_id)
+
+
+def test_api_key_upload_list_and_delete(identity):
+    user = identity.create_user(
+        oci.identity.models.CreateUserDetails(
+            compartment_id=TENANCY, name=f"py-apikey-{time.time_ns()}", description="api keys"
+        )
+    ).data
+    public_key = rsa.generate_private_key(public_exponent=65537, key_size=2048).public_key()
+    pem = public_key.public_bytes(
+        serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo
+    ).decode()
+    der = public_key.public_bytes(
+        serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo
+    )
+    digest = hashlib.md5(der).hexdigest()
+    fingerprint = ":".join(digest[i:i + 2] for i in range(0, len(digest), 2))
+
+    uploaded = identity.upload_api_key(user.id, oci.identity.models.CreateApiKeyDetails(key=pem))
+    assert uploaded.headers["etag"]
+    key = uploaded.data
+    assert key.fingerprint == fingerprint
+    assert key.key_id == f"{TENANCY}/{user.id}/{fingerprint}"
+    assert key.lifecycle_state == "ACTIVE"
+
+    assert [k.fingerprint for k in identity.list_api_keys(user.id).data] == [fingerprint]
+
+    identity.delete_api_key(user.id, fingerprint)
+    assert identity.list_api_keys(user.id).data == []
+    identity.delete_user(user.id)
