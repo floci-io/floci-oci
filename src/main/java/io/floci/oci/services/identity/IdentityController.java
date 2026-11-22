@@ -40,13 +40,15 @@ public class IdentityController {
     private final IdentityService service;
     private final WorkRequestService workRequests;
     private final CustomerSecretKeyService customerSecretKeys;
+    private final ApiKeyService apiKeys;
 
     @Inject
     public IdentityController(IdentityService service, WorkRequestService workRequests,
-                              CustomerSecretKeyService customerSecretKeys) {
+                              CustomerSecretKeyService customerSecretKeys, ApiKeyService apiKeys) {
         this.service = service;
         this.workRequests = workRequests;
         this.customerSecretKeys = customerSecretKeys;
+        this.apiKeys = apiKeys;
     }
 
     // ── Compartments ───────────────────────────────────────────────────────────
@@ -161,6 +163,7 @@ public class IdentityController {
                                @HeaderParam("if-match") String ifMatch) {
         service.deleteUser(userId, ifMatch);
         customerSecretKeys.deleteAllOf(userId);
+        apiKeys.deleteAllOf(userId);
         return Response.noContent().build();
     }
 

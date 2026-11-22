@@ -83,13 +83,20 @@ oci iam compartment list --endpoint http://localhost:4599 --compartment-id "$TEN
 - Customer Secret Keys (`/20160918/users/{userId}/customerSecretKeys`) are served for the
   [Amazon S3 Compatibility API](object-storage.md#amazon-s3-compatibility-api): create returns the
   secret once, list returns summaries without it.
-- Identity domains, API keys, auth tokens, dynamic groups and tag namespaces are not
-  implemented yet.
+- API signing keys (`/20160918/users/{userId}/apiKeys`): upload takes an RSA public key in PEM
+  format and returns it ACTIVE, with `keyId` `<tenancy OCID>/<user OCID>/<fingerprint>`. The
+  fingerprint is the MD5 of the DER public key, as `oci setup` computes it. A user holds at most
+  three keys (`400 LimitExceeded`), list returns a bare array, and delete takes the fingerprint.
+  Deleting a user deletes its keys. Request signatures are still never verified, so an uploaded
+  key does not change how requests are authenticated.
+- Identity domains, auth tokens, dynamic groups and tag namespaces are not implemented yet.
 
 ## Emulator choices
 
 Behaviour that OCI's SDKs and documentation do not settle, and what floci-oci does:
 
+- **Uploading a key the user already has is `409 Conflict`.** No Oracle source names the error,
+  so floci-oci uses the catalog's code for a request that conflicts with existing state.
 - **Compartment names are unique per parent.** The SDK's `CreateCompartment` comment says a
   name must be unique across the tenancy, while the compartments documentation says two
   compartments within the same parent can't share a name. floci-oci follows the documentation.

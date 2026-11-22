@@ -32,7 +32,7 @@ import java.util.Set;
 public class HomeRegionWriteFilter implements ContainerRequestFilter {
 
     private static final Set<Class<?>> HOME_REGION_CLASSES =
-            Set.of(IdentityController.class, CustomerSecretKeyController.class);
+            Set.of(IdentityController.class, CustomerSecretKeyController.class, ApiKeyController.class);
     private static final Set<String> READ_METHODS = Set.of(HttpMethod.GET, HttpMethod.HEAD, HttpMethod.OPTIONS);
 
     @Context

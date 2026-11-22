@@ -24,6 +24,34 @@ resource "oci_identity_user_group_membership" "tf_membership" {
   group_id = oci_identity_group.tf_group.id
 }
 
+resource "oci_identity_api_key" "tf_api_key" {
+  user_id   = oci_identity_user.tf_user.id
+  key_value = <<-EOT
+    -----BEGIN PUBLIC KEY-----
+    MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAqmswy49RvVuMjNRWJxcS
+    MTq64YSbd053nhblbqk27iG3wq4f2JiqnjdBChJoksFkei7kX/nMC7Efw2O6iIZC
+    OgLDYYGgmGQ7A08mPSYdgBd98iX+P3clyg9Ytf6QUDQf5wC4Zhco6jSFmLiBm128
+    R1BrYDCoQj99aBY1M6/zkymfwpF0YmdurFM51mj40IE27vpVfD+WnKUr6pwb7fWZ
+    Inj9EOkDSytO+gA6btaxkvJraRV4QffR8T02GCKZDKaw2Bkltou3Mxj9gZN6+C9p
+    sZfOpm70g1ZHH/tfXLGGmVecNGLegBvxieuR/7Vujdml5sPgHmvW6tJHrxd0Zi7w
+    rQIDAQAB
+    -----END PUBLIC KEY-----
+  EOT
+}
+
+data "oci_identity_api_keys" "tf_api_keys" {
+  user_id    = oci_identity_user.tf_user.id
+  depends_on = [oci_identity_api_key.tf_api_key]
+}
+
+output "api_key_fingerprint" {
+  value = oci_identity_api_key.tf_api_key.fingerprint
+}
+
+output "api_keys_listed" {
+  value = length(data.oci_identity_api_keys.tf_api_keys.api_keys)
+}
+
 resource "oci_identity_policy" "tf_policy" {
   compartment_id = var.tenancy_ocid
   name           = "tf-compat-policy"
