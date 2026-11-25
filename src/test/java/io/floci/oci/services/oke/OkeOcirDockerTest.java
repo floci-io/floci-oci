@@ -26,6 +26,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
 import static io.restassured.RestAssured.given;
@@ -49,6 +50,7 @@ class OkeOcirDockerTest {
     private static final String REPOSITORY = "oke-ocir/busybox";
     private static final String POD = "ocir-pod";
     private static final Duration TIMEOUT = Duration.ofSeconds(180);
+    private static final Duration COMMAND_TIMEOUT = Duration.ofMinutes(10);
 
     @Inject
     ArtifactsRegistryManager registry;
@@ -163,12 +165,28 @@ class OkeOcirDockerTest {
         return docker(command.toArray(String[]::new));
     }
 
+    /**
+     * Runs one docker command with a deadline: the output is drained on another thread so a
+     * blocked pull, push or exec cannot hang the test, and the process is killed when it expires.
+     */
     private static Result docker(String... args) throws Exception {
         List<String> command = new ArrayList<>(List.of("docker"));
         command.addAll(List.of(args));
         Process process = new ProcessBuilder(command).redirectErrorStream(true).start();
-        String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-        return new Result(process.waitFor(), output);
+        CompletableFuture<String> output = CompletableFuture.supplyAsync(() -> readAll(process));
+        if (!process.waitFor(COMMAND_TIMEOUT.toSeconds(), TimeUnit.SECONDS)) {
+            process.destroyForcibly().waitFor(10, TimeUnit.SECONDS);
+            return new Result(-1, "timed out after " + COMMAND_TIMEOUT + ": " + String.join(" ", command));
+        }
+        return new Result(process.exitValue(), output.get(10, TimeUnit.SECONDS));
+    }
+
+    private static String readAll(Process process) {
+        try {
+            return new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
     }
 
     private record Result(int exitCode, String output) {
