@@ -114,7 +114,8 @@ floci-oci starts resolve the records managed through the API.
   - A CNAME is followed through the zones floci-oci holds, up to 8 links, and each link is
     answered under its own name. A chain that leaves those zones ends at the last CNAME.
   - A name with no records of the asked type is NODATA, and a name the zone does not hold is
-    NXDOMAIN, both with the zone's SOA in the authority section.
+    NXDOMAIN, both with the zone's SOA in the authority section. A CNAME chain that ends at such a
+    name answers the CNAMEs and adds the SOA of the zone it ends in, so the negative-cache TTL holds.
   - Other types (MX, SRV, CAA and the rest) answer NODATA.
 - **Names outside every zone** are forwarded upstream as before.
 - **Changes apply at once:** the server reads the zones on every query.

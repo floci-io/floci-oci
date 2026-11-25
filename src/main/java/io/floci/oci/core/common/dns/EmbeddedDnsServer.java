@@ -294,8 +294,11 @@ public class EmbeddedDnsServer {
 
     /**
      * An authoritative answer from a record source: each answer record under its own owner name (a
-     * pointer to the question when it is the query name), and for an empty answer the zone's SOA in the
-     * authority section. Records that would push the datagram past 512 bytes are left out and TC is set.
+     * pointer to the question when it is the query name), and the zone's SOA in the authority section
+     * whenever the source supplies one. A source supplies it only for a negative answer, which includes a
+     * CNAME chain ending at a missing name or one without the asked type: the answer then holds the
+     * CNAMEs, and the SOA still gives the negative-cache TTL (RFC 2308 section 2.1). Records that would
+     * push the datagram past 512 bytes are left out and TC is set.
      */
     byte[] buildResponse(byte[] query, short txId, int questionOffset, int questionEnd, DnsAnswer answer) {
         ByteBuffer question = ByteBuffer.wrap(query);
@@ -322,7 +325,7 @@ public class EmbeddedDnsServer {
             length += entry.length;
         }
         byte[] authority = null;
-        if (encoded.isEmpty() && !truncated && answer.authority() != null) {
+        if (!truncated && answer.authority() != null) {
             DnsAnswer.Authority soa = answer.authority();
             try {
                 byte[] entry = resourceRecord(soa.zone(), qname, soa.soa().type(), soa.ttlSeconds(), soa.soa().data());

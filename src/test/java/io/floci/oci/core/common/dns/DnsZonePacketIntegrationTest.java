@@ -114,7 +114,35 @@ class DnsZonePacketIntegrationTest {
         add(zone, "alias." + zone, "CNAME", "missing." + zone, 30);
 
         byte[] response = query(DnsTestQuery.query("alias." + zone, 1, 0x2222));
-        assertHeader(response, 0x2222, 3, 1, 0);
+        assertHeader(response, 0x2222, 3, 1, 1);
+    }
+
+    @Test
+    void cnameNegativeAnswersCarryTheTargetZoneSoa() throws Exception {
+        String zone = createZone(uniqueName());
+        String target = createZone(uniqueName());
+        add(zone, "alias." + zone, "CNAME", "www." + target, 30);
+        add(target, "www." + target, "TXT", "no address here", 60);
+
+        byte[] request = DnsTestQuery.query("alias." + zone, 1, 0x2323);
+        byte[] response = query(request);
+        assertHeader(response, 0x2323, 0, 1, 1);
+        ByteBuffer packet = ByteBuffer.wrap(response);
+        packet.position(request.length);
+        assertEquals("alias." + zone, EmbeddedDnsServer.readName(packet, response));
+        assertEquals(5, packet.getShort());
+        packet.getShort();
+        packet.getInt();
+        int length = Short.toUnsignedInt(packet.getShort());
+        packet.position(packet.position() + length);
+        assertEquals(target, EmbeddedDnsServer.readName(packet, response), "the SOA of the zone the chain ends in");
+        assertEquals(6, packet.getShort());
+        packet.getShort();
+        assertEquals(300, packet.getInt());
+        assertEquals(response.length, packet.position() + 2 + Short.toUnsignedInt(packet.getShort(packet.position())));
+
+        add(target, "www." + target, "A", "192.0.2.33", 60);
+        assertHeader(query(DnsTestQuery.query("alias." + zone, 1, 0x2324)), 0x2324, 0, 2, 0);
     }
 
     @Test
