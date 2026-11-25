@@ -5,6 +5,7 @@ import io.floci.oci.core.common.OciException;
 import io.floci.oci.core.common.OciPage;
 import io.floci.oci.services.dns.DnsService.RecordFilter;
 import io.floci.oci.services.dns.DnsService.RecordScope;
+import io.floci.oci.services.dns.DnsService.RecordSnapshot;
 import io.floci.oci.services.dns.DnsService.ZoneQuery;
 import io.floci.oci.services.dns.model.StoredRecord;
 import io.floci.oci.services.dns.model.StoredResolver;
@@ -417,16 +418,17 @@ public class DnsController {
 
     private Response readRecords(StoredZone zone, RecordScope scope, RecordFilter filter, String ifNoneMatch,
                                  Integer limit, String page) {
-        if (notModified(ifNoneMatch, zone.getEtag())) {
-            return Response.notModified().header("etag", zone.getEtag()).build();
+        RecordSnapshot snapshot = service.snapshot(zone);
+        if (notModified(ifNoneMatch, snapshot.etag())) {
+            return Response.notModified().header("etag", snapshot.etag()).build();
         }
         List<Map<String, Object>> items = new ArrayList<>();
-        for (StoredRecord record : service.records(zone, scope, filter)) {
+        for (StoredRecord record : service.records(snapshot.records(), scope, filter)) {
             items.add(recordJson(record));
         }
         OciPage.Page<Map<String, Object>> result = OciPage.paginate(items, limit, page);
         return paged(Response.ok(Map.of("items", result.items())), result, items.size())
-                .header("etag", zone.getEtag()).build();
+                .header("etag", snapshot.etag()).build();
     }
 
     private static Response.ResponseBuilder paged(Response.ResponseBuilder builder, OciPage.Page<?> result, int total) {

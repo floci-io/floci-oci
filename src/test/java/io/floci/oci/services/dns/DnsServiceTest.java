@@ -282,6 +282,26 @@ class DnsServiceTest {
     }
 
     @Test
+    void snapshot_pairsRecordsWithTheirEtagAcrossLaterWrites() {
+        StoredZone zone = globalZone("snap.example");
+        DnsService.RecordSnapshot before = service.snapshot(service.getZone(zone.getId(), null));
+
+        service.patchRecords(zone.getId(), null, RecordScope.ZONE,
+                List.of(op("ADD", "a.snap.example", "A", "192.0.2.1", 30)), before.etag());
+        DnsService.RecordSnapshot after = service.snapshot(service.getZone(zone.getId(), null));
+
+        assertNotEquals(before.etag(), after.etag());
+        assertEquals(5, before.records().size(), "the earlier snapshot keeps the records of its etag");
+        assertEquals(6, after.records().size());
+        assertTrue(before.records().stream().noneMatch(r -> "A".equals(r.getRtype())));
+        assertEquals("1", service.records(before.records(), new RecordScope("snap.example", "SOA"), RecordFilter.NONE)
+                .getFirst().getRrsetVersion());
+        assertThrows(UnsupportedOperationException.class, () -> after.records().clear());
+        assertError(412, "NoEtagMatch", () -> service.patchRecords(zone.getId(), null, RecordScope.ZONE,
+                List.of(op("ADD", "b.snap.example", "A", "192.0.2.2", 30)), before.etag()));
+    }
+
+    @Test
     void vcnResolver_isCreatedOnceWithAProtectedDefaultView() {
         StoredResolver resolver = service.ensureVcnResolver("ocid1.vcn.oc1.iad.a", COMPARTMENT, "vcn-a");
 

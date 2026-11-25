@@ -301,7 +301,23 @@ public class DnsService implements CompartmentUsage {
 
     // ── Records ────────────────────────────────────────────────────────────────
 
+    /** A zone's records and the etag they carry, read together so a concurrent write cannot pair them up wrongly. */
+    public record RecordSnapshot(List<StoredRecord> records, String etag) {
+    }
+
+    /**
+     * The zone's current records and etag under the lock {@link #commit} holds. A commit publishes a new
+     * unmodifiable list of fresh records and never changes a published one, so the snapshot stays valid.
+     */
+    public synchronized RecordSnapshot snapshot(StoredZone zone) {
+        return new RecordSnapshot(zone.getRecords(), zone.getEtag());
+    }
+
     public List<StoredRecord> records(StoredZone zone, RecordScope scope, RecordFilter filter) {
+        return records(zone.getRecords(), scope, filter);
+    }
+
+    public List<StoredRecord> records(List<StoredRecord> records, RecordScope scope, RecordFilter filter) {
         RecordFilter f = filter == null ? RecordFilter.NONE : filter;
         Comparator<StoredRecord> order = switch (f.sortBy() == null ? "domain" : f.sortBy()) {
             case "domain" -> Comparator.comparing((StoredRecord r) -> r.getDomain().toLowerCase(Locale.ROOT))
@@ -315,7 +331,7 @@ public class DnsService implements CompartmentUsage {
         order = order.thenComparing(StoredRecord::getRdata);
         String domain = f.domain() == null ? null : trimDot(f.domain());
         String rtype = f.rtype() == null ? null : f.rtype().toUpperCase(Locale.ROOT);
-        return zone.getRecords().stream()
+        return records.stream()
                 .filter(scope::covers)
                 .filter(r -> domain == null || r.getDomain().equalsIgnoreCase(domain))
                 .filter(r -> f.domainContains() == null || r.getDomain().toLowerCase(Locale.ROOT)
@@ -492,7 +508,7 @@ public class DnsService implements CompartmentUsage {
             }
             rehash(record);
         }
-        zone.setRecords(working);
+        zone.setRecords(List.copyOf(working));
         zone.setSerial(serial);
         zone.setEtag(Etags.newEtag());
         zones.put(zone.getId(), zone);
