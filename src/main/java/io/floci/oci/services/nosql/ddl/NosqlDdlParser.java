@@ -10,6 +10,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 /**
  * Parses the NoSQL table DDL subset: CREATE TABLE, ALTER TABLE, CREATE INDEX, DROP TABLE and
@@ -21,6 +22,7 @@ public final class NosqlDdlParser {
     /** Types a primary key column may not have. */
     private static final Set<String> NON_KEY_TYPES = Set.of("JSON", "ARRAY", "MAP", "RECORD", "BINARY");
     private static final Set<String> IDENTITY_TYPES = Set.of("INTEGER", "LONG", "NUMBER");
+    private static final Pattern PLAIN_IDENTIFIER = Pattern.compile("[A-Za-z_][A-Za-z0-9_]*");
     private static final Set<String> SCALAR_TYPES = Set.of("INTEGER", "LONG", "FLOAT", "DOUBLE", "NUMBER",
             "BOOLEAN", "JSON", "STRING", "BINARY", "TIMESTAMP");
 
@@ -149,6 +151,14 @@ public final class NosqlDdlParser {
             return true;
         }
         return false;
+    }
+
+    /**
+     * {@code name} as it must appear in a type's text for {@link #parseType} to read it back: a
+     * name that is not a plain identifier, such as {@code first-name}, keeps its backticks.
+     */
+    private static String quoted(String name) {
+        return PLAIN_IDENTIFIER.matcher(name).matches() ? name : "`" + name + "`";
     }
 
     private String tableName() {
@@ -415,7 +425,8 @@ public final class NosqlDdlParser {
                     values.add(tokens.identifier("an ENUM value"));
                 } while (tokens.acceptSymbol(","));
                 tokens.expectSymbol(")");
-                yield new ColumnType("ENUM(" + String.join(", ", values) + ")", base, null, List.of(),
+                yield new ColumnType("ENUM(" + String.join(", ", values.stream().map(NosqlDdlParser::quoted).toList())
+                        + ")", base, null, List.of(),
                         List.copyOf(values));
             }
             case "ARRAY", "MAP" -> {
@@ -432,7 +443,8 @@ public final class NosqlDdlParser {
                     fields.add(new RecordField(field, type()));
                 } while (tokens.acceptSymbol(","));
                 tokens.expectSymbol(")");
-                String text = String.join(", ", fields.stream().map(f -> f.name() + " " + f.type().text()).toList());
+                String text = String.join(", ",
+                        fields.stream().map(f -> quoted(f.name()) + " " + f.type().text()).toList());
                 yield new ColumnType("RECORD(" + text + ")", base, null, List.copyOf(fields), List.of());
             }
             default -> throw new NosqlSyntaxException("Unknown column type " + token.text()

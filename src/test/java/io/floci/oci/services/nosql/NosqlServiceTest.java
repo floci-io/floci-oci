@@ -257,6 +257,22 @@ class NosqlServiceTest {
         assertEquals("green", stored.get("color"));
     }
 
+    @Test
+    void recordFieldsWithQuotedNamesCanBeWritten() {
+        String table = service.createTable("quoted", COMPARTMENT, "CREATE TABLE quoted (id INTEGER,"
+                + " person RECORD(`first-name` STRING, age INTEGER), PRIMARY KEY (id))", null, null, null, null)
+                .tableId();
+        assertEquals("RECORD(`first-name` STRING, age INTEGER)",
+                service.getTable(table, null).getColumns().get(1).getType());
+
+        Map<String, Object> value = new LinkedHashMap<>();
+        value.put("id", 1);
+        value.put("person", Map.of("first-name", "Ana", "age", 30));
+        assertNotNull(put(table, value, null, null).version());
+        assertTypeRejected(table, "person", Map.of("first-name", 7),
+                "Column person.first-name is STRING and cannot hold 7");
+    }
+
     private void assertTypeRejected(String table, String column, Object columnValue, String message) {
         Map<String, Object> value = new LinkedHashMap<>();
         value.put("id", 1);
