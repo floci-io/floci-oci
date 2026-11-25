@@ -278,6 +278,76 @@ output "log_state" {
   value = oci_logging_log.tf_log.state
 }
 
+# ── DNS ─────────────────────────────────────────────────────────────────────
+
+resource "oci_dns_zone" "tf_global_zone" {
+  compartment_id = var.tenancy_ocid
+  name           = "tf-compat-global.example"
+  zone_type      = "PRIMARY"
+}
+
+resource "oci_dns_view" "tf_view" {
+  compartment_id = var.tenancy_ocid
+  display_name   = "tf-compat-view"
+  scope          = "PRIVATE"
+}
+
+resource "oci_dns_zone" "tf_private_zone" {
+  compartment_id = var.tenancy_ocid
+  name           = "tf-compat-private.example"
+  zone_type      = "PRIMARY"
+  scope          = "PRIVATE"
+  view_id        = oci_dns_view.tf_view.id
+}
+
+resource "oci_dns_rrset" "tf_a" {
+  zone_name_or_id = oci_dns_zone.tf_global_zone.id
+  domain          = "www.tf-compat-global.example"
+  rtype           = "A"
+
+  items {
+    domain = "www.tf-compat-global.example"
+    rtype  = "A"
+    rdata  = "192.0.2.10"
+    ttl    = 300
+  }
+}
+
+resource "oci_dns_rrset" "tf_cname" {
+  zone_name_or_id = oci_dns_zone.tf_global_zone.id
+  domain          = "alias.tf-compat-global.example"
+  rtype           = "CNAME"
+
+  items {
+    domain = "alias.tf-compat-global.example"
+    rtype  = "CNAME"
+    rdata  = "www.tf-compat-global.example"
+    ttl    = 300
+  }
+}
+
+resource "oci_dns_rrset" "tf_txt" {
+  zone_name_or_id = oci_dns_zone.tf_private_zone.id
+  view_id         = oci_dns_view.tf_view.id
+  domain          = "app.tf-compat-private.example"
+  rtype           = "TXT"
+
+  items {
+    domain = "app.tf-compat-private.example"
+    rtype  = "TXT"
+    rdata  = "hello from terraform"
+    ttl    = 60
+  }
+}
+
+output "dns_zone_state" {
+  value = oci_dns_zone.tf_private_zone.state
+}
+
+output "dns_cname_rdata" {
+  value = one(oci_dns_rrset.tf_cname.items).rdata
+}
+
 # NOTE: oci_functions_application is deliberately NOT exercised here — the provider
 # hardcodes a 5-minute post-destroy sleep (ExtraWaitPostDelete) outside httpreplay
 # mode, which would dominate the suite's runtime. Functions coverage lives in the

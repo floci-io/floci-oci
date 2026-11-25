@@ -212,6 +212,7 @@ public interface EmulatorConfig {
         LoggingServiceConfig logging();
 
         NosqlServiceConfig nosql();
+        DnsServiceConfig dns();
 
         NetworkingServiceConfig networking();
 
@@ -258,6 +259,11 @@ public interface EmulatorConfig {
             /** Seconds between sweeps that delete rows whose time to live has passed. */
             @WithDefault("60")
             int ttlSweepIntervalSeconds();
+        }
+
+        interface DnsServiceConfig {
+            @WithDefault("true")
+            boolean enabled();
         }
 
         interface MonitoringServiceConfig {

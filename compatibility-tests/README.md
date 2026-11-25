@@ -6,11 +6,11 @@ protocol adherence.
 | Suite | Tooling | Coverage |
 |---|---|---|
 | `sdk-test-java` | oci-java-sdk (default suite) | Identity, Object Storage (incl. multipart and work requests), Queue, Streaming, KMS and Vault, OKE, PostgreSQL, Organizations, Governance Rules, NoSQL |
-| `sdk-test-python` | oci (Python SDK) | Identity, Object Storage (incl. `UploadManager` streaming), Queue, Streaming, KMS, Vault and Secrets, the Functions management plane, PostgreSQL, Organizations, Governance Rules, NoSQL |
-| `sdk-test-cli` | oci-cli (official CLI) + bats | Smoke CRUD across Identity, Object Storage, Queue, Streaming, KMS, Vault and Secrets, Functions, OKE, PostgreSQL, Organizations and NoSQL, incl. error codes and PAR access |
-| `compat-terraform` | Terraform + oracle/oci provider + bats | Full apply → no-drift plan → destroy cycle over Identity, Object Storage, Queue, Streaming, KMS, Vault, OKE, PostgreSQL and NoSQL resources, plus Organizations and NoSQL data sources. No Functions: see the note in `main.tf` |
+| `sdk-test-python` | oci (Python SDK) | Identity, Object Storage (incl. `UploadManager` streaming), Queue, Streaming, KMS, Vault and Secrets, the Functions management plane, PostgreSQL, Organizations, Governance Rules, NoSQL, DNS |
+| `sdk-test-cli` | oci-cli (official CLI) + bats | Smoke CRUD across Identity, Object Storage, Queue, Streaming, KMS, Vault and Secrets, Functions, OKE, PostgreSQL, Organizations, NoSQL and DNS, incl. error codes and PAR access |
+| `compat-terraform` | Terraform + oracle/oci provider + bats | Full apply → no-drift plan → destroy cycle over Identity, Object Storage, Queue, Streaming, KMS, Vault, OKE, PostgreSQL, NoSQL and DNS resources, plus Organizations and NoSQL data sources. No Functions: see the note in `main.tf` |
 | `compat-opentofu` | OpenTofu + oracle/oci provider + bats | Same cycle as Terraform |
-| `sdk-test-go` | oci-go-sdk + gotestsum | Identity, Object Storage (incl. multipart and work requests), Queue, Streaming, KMS, Vault and Secrets, the Functions management plane, OKE |
+| `sdk-test-go` | oci-go-sdk + gotestsum | Identity, Object Storage (incl. multipart and work requests), Queue, Streaming, KMS, Vault and Secrets, the Functions management plane, OKE, DNS |
 
 The Java, Python, CLI and Go suites pin their client versions in `sdk-test-java/pom.xml`,
 `sdk-test-python/requirements.txt`, `sdk-test-cli/Dockerfile` and `sdk-test-go/go.mod`.
