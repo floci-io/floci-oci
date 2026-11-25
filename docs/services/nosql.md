@@ -143,6 +143,9 @@ and may differ from the real service:
   or, with `IF NOT EXISTS`, a succeeded work request naming the existing table. A duplicate
   index name is the same `409`.
 - `ddlStatement` after an ALTER TABLE is the ALTER statement, not a regenerated CREATE.
+- An ALTER TABLE that drops a column removes that column's values from every row, without
+  changing the row versions. A column added later under the same name reads as its DEFAULT
+  (or null) in the existing rows.
 - Column `type` is the upper-case DDL spelling (`INTEGER`, `TIMESTAMP(3)`, `ARRAY(STRING)`);
   a UUID column is `STRING` with `isAsUuid`. Oracle's reference writes type names in upper
   case, but no source shows the REST field.

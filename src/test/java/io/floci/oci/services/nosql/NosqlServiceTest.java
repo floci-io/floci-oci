@@ -259,6 +259,23 @@ class NosqlServiceTest {
     }
 
     @Test
+    void droppedColumnValuesDoNotReturnWhenTheColumnIsAddedAgain() {
+        String table = createUsers();
+        String version = put(table, user(1, "ana"), null, null).version();
+
+        service.updateTable(table, null, "ALTER TABLE users (DROP name)", null, null, null, null);
+        assertFalse(rows.scan(k -> true).getFirst().getValue().containsKey("name"));
+        service.updateTable(table, null, "ALTER TABLE users (ADD name INTEGER DEFAULT 0)", null, null, null,
+                null);
+
+        NosqlService.RowRead row = service.getRow(table, null, List.of("id:1")).orElseThrow();
+        assertEquals(0, row.value().get("name"));
+        assertEquals(version, row.version());
+        assertEquals(0, service.query(COMPARTMENT, "SELECT name FROM users", false, null).items().getFirst()
+                .get("name"));
+    }
+
+    @Test
     void indexesReportUpdateTable() {
         String table = createUsers();
         NosqlService.WorkRequestOutcome created = service.createIndex(table, null, "cityIdx",

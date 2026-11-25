@@ -267,6 +267,7 @@ public class NosqlService implements CompartmentUsage, Resettable {
                                                        String ifMatch) {
         StoredNosqlTable table = copyOf(liveTable(tableNameOrId, compartmentId));
         Etags.checkIfMatch(ifMatch, table.getEtag());
+        List<String> droppedColumns = List.of();
         if (ddlStatement != null && !ddlStatement.isBlank()) {
             if (!(parseDdl(ddlStatement) instanceof AlterTable alter)) {
                 throw OciException.invalidParameter("UpdateTable takes an ALTER TABLE statement");
@@ -275,7 +276,7 @@ public class NosqlService implements CompartmentUsage, Resettable {
                 throw OciException.invalidParameter("The table name " + alter.tableName()
                         + " in ddlStatement does not match table " + table.getName());
             }
-            alter(table, alter);
+            droppedColumns = alter(table, alter);
             table.setDdlStatement(ddlStatement);
         }
         if (limits != null) {
@@ -288,10 +289,13 @@ public class NosqlService implements CompartmentUsage, Resettable {
             table.setDefinedTags(definedTags);
         }
         touch(table);
+        removeColumnValues(table.getId(), droppedColumns);
         return outcome("UPDATE_TABLE", table, "UPDATED");
     }
 
-    private static void alter(StoredNosqlTable table, AlterTable alter) {
+    /** Applies {@code alter} to {@code table} and returns the names of the columns it dropped. */
+    private static List<String> alter(StoredNosqlTable table, AlterTable alter) {
+        List<String> droppedColumns = new ArrayList<>();
         for (String dropped : alter.dropped()) {
             Column column = table.column(dropped);
             if (column == null) {
@@ -309,6 +313,7 @@ public class NosqlService implements CompartmentUsage, Resettable {
                 throw OciException.invalidParameter("Cannot drop column " + dropped + ": an index uses it");
             }
             table.getColumns().remove(column);
+            droppedColumns.add(column.getName());
         }
         for (ColumnDef added : alter.added()) {
             if (table.column(added.name()) != null) {
@@ -320,6 +325,34 @@ public class NosqlService implements CompartmentUsage, Resettable {
         if (alter.ttl() != null) {
             table.setTtlValue(alter.ttl().value());
             table.setTtlUnit(alter.ttl().unit());
+        }
+        return droppedColumns;
+    }
+
+    /**
+     * Removes the values of dropped columns from the table's rows, so a column added later
+     * under the same name starts from its default. Each changed row is stored as a new object:
+     * a query reading the old one is not disturbed.
+     */
+    private void removeColumnValues(String tableId, List<String> droppedColumns) {
+        if (droppedColumns.isEmpty()) {
+            return;
+        }
+        String prefix = tableId + "|";
+        for (StoredNosqlRow row : rows.scan(k -> k.startsWith(prefix))) {
+            if (droppedColumns.stream().noneMatch(row.getValue()::containsKey)) {
+                continue;
+            }
+            Map<String, Object> value = new LinkedHashMap<>(row.getValue());
+            droppedColumns.forEach(value::remove);
+            StoredNosqlRow updated = new StoredNosqlRow();
+            updated.setTableId(row.getTableId());
+            updated.setPrimaryKey(row.getPrimaryKey());
+            updated.setValue(value);
+            updated.setVersion(row.getVersion());
+            updated.setExpiresAt(row.getExpiresAt());
+            updated.setTimeModified(row.getTimeModified());
+            rows.put(rowKey(row.getTableId(), row.getPrimaryKey()), updated);
         }
     }
 
