@@ -179,8 +179,8 @@ class DnsZonePacketIntegrationTest {
         add(zone, "mapped." + zone, "AAAA", "::FFFF:c000:0201", 45);
         add(zone, "compat." + zone, "AAAA", "::192.0.2.1", 45);
 
-        List<String> echoed = dns.records(dns.getZone(zone, null), DnsService.RecordScope.ZONE,
-                DnsService.RecordFilter.NONE).stream()
+        List<String> echoed = dns.records(dns.getZone(zone, null), new DnsService.RecordScope(null, null),
+                new DnsService.RecordFilter(null, null, null, null, null)).stream()
                 .filter(r -> "AAAA".equals(r.getRtype())).map(r -> r.getDomain() + " " + r.getRdata()).toList();
         assertEquals(List.of("compat." + zone + " ::c000:201", "mapped." + zone + " ::ffff:192.0.2.1"), echoed);
 
