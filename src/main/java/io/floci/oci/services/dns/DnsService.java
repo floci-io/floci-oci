@@ -349,6 +349,7 @@ public class DnsService implements CompartmentUsage {
         for (Map<String, Object> op : maps(items)) {
             applyOperation(zone, scope, working, op);
         }
+        requireConsistentRrsets(working);
         commit(zone, working);
         return zone;
     }
@@ -465,6 +466,7 @@ public class DnsService implements CompartmentUsage {
             }
         }
         working.addAll(replacements.values());
+        requireConsistentRrsets(working);
         commit(zone, working);
         return zone;
     }
@@ -512,6 +514,37 @@ public class DnsService implements CompartmentUsage {
         zone.setSerial(serial);
         zone.setEtag(Etags.newEtag());
         zones.put(zone.getId(), zone);
+    }
+
+    /**
+     * The record set a write would store, checked as a whole: a CNAME is the only record at its domain
+     * (RFC 1034 section 3.6.2), so there is also exactly one, and every record of an RRSet has the same
+     * TTL (RFC 2181 section 5.2). OCI documents neither check; {@code InvalidParameter} is inferred.
+     */
+    private static void requireConsistentRrsets(List<StoredRecord> records) {
+        Map<String, List<StoredRecord>> byDomain = new LinkedHashMap<>();
+        for (StoredRecord record : records) {
+            byDomain.computeIfAbsent(record.getDomain().toLowerCase(Locale.ROOT), k -> new ArrayList<>()).add(record);
+        }
+        for (List<StoredRecord> atDomain : byDomain.values()) {
+            String domain = atDomain.getFirst().getDomain();
+            long cnames = atDomain.stream().filter(r -> "CNAME".equals(r.getRtype())).count();
+            if (cnames > 1) {
+                throw OciException.invalidParameter("Only one CNAME record may exist at " + domain);
+            }
+            if (cnames == 1 && atDomain.size() > 1) {
+                throw OciException.invalidParameter("A CNAME record at " + domain
+                        + " cannot coexist with other records at that domain");
+            }
+            Map<String, Integer> ttls = new HashMap<>();
+            for (StoredRecord record : atDomain) {
+                Integer ttl = ttls.putIfAbsent(record.getRtype(), record.getTtl());
+                if (ttl != null && ttl != record.getTtl()) {
+                    throw OciException.invalidParameter("All " + record.getRtype() + " records at " + domain
+                            + " must have the same ttl, got " + ttl + " and " + record.getTtl());
+                }
+            }
+        }
     }
 
     private static Map<String, List<String>> rrsets(List<StoredRecord> records) {

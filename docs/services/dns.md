@@ -55,11 +55,18 @@ Those that have a route answer `501 MethodNotImplemented`; the others have no ro
   - `REQUIRE` with no match, or `PROHIBIT` with a match, fails the whole request with
     `412 NoEtagMatch`.
   - `ADD` adds a record, or sets the TTL of one that is already there. `ADD` with a `ttl` and no
-    `rdata` sets the TTL of the whole RRSet, as the SDK documents.
+    `rdata` sets the TTL of the whole RRSet, as the SDK documents. The result must still pass the
+    record set rules below.
   - `REMOVE` removes every match; removing nothing succeeds.
   - On a domain or RRSet path, `domain` and `rtype` default to the path's, and a different value
     is `400 InvalidParameter`.
 - **PUT** replaces every unprotected record in its scope (zone, domain, or RRSet).
+- **Record set rules:** the records a PUT or PATCH would store are checked as a whole before anything
+  is stored, and a violation is `400 InvalidParameter`:
+  - a CNAME is the only record at its domain, so there is at most one, with nothing beside it
+    (RFC 1034 section 3.6.2). The apex holds SOA and NS, so it can never hold a CNAME;
+  - all records of one RRSet (domain and rtype) share one `ttl` (RFC 2181 section 5.2). To change
+    the TTL of an RRSet, PUT it whole or `ADD` a `ttl` with no `rdata`.
 - **Domains** must lie within the zone (`400 InvalidParameter`).
 - **Conditional requests:** `If-Match` on every write is checked against the zone or view `etag`
   (`412 NoEtagMatch`). `If-None-Match` on GetZone, GetView and the record reads answers `304` when
@@ -155,6 +162,11 @@ closest evidence:
   `opc-work-request-id` is sent.
 - **412 code:** Oracle's error catalog has one `412` code, `NoEtagMatch`, which is what a failed
   `REQUIRE` or `PROHIBIT` sends. Terraform only checks the `412` status.
+- **Record set rule errors:** the SDKs, CLI and Terraform provider state no OCI check or error for
+  a CNAME beside other records, several CNAMEs at one name, or mixed TTLs in one RRSet. floci-oci
+  applies the RFC rules (RFC 1034 section 3.6.2, RFC 2181 section 5.2) and answers
+  `400 InvalidParameter`, the catalog's code for an invalid parameter; both the check and the code
+  are inferred.
 - **Protected-record errors** are `400 InvalidParameter`. DeleteDomainRecords at the apex removes
   only the unprotected records.
 - **`recordHash`** is an MD5 of the domain, type, rdata and TTL. **`zoneVersion`** is accepted and

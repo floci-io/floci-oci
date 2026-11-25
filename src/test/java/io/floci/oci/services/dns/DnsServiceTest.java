@@ -244,6 +244,64 @@ class DnsServiceTest {
     }
 
     @Test
+    void cname_mustBeTheOnlyRecordAtItsDomain() {
+        StoredZone zone = globalZone("cname.example");
+        service.patchRecords(zone.getId(), null, RecordScope.ZONE, List.of(
+                op("ADD", "www.cname.example", "A", "192.0.2.1", 30),
+                op("ADD", "alias.cname.example", "CNAME", "www.cname.example", 30)), null);
+        long serial = service.getZone(zone.getId(), null).getSerial();
+
+        assertError(400, "InvalidParameter", () -> service.patchRecords(zone.getId(), null, RecordScope.ZONE,
+                List.of(op("ADD", "alias.cname.example", "CNAME", "other.cname.example", 30)), null));
+        assertError(400, "InvalidParameter", () -> service.patchRecords(zone.getId(), null, RecordScope.ZONE,
+                List.of(op("ADD", "alias.cname.example", "TXT", "beside", 30)), null));
+        assertError(400, "InvalidParameter", () -> service.patchRecords(zone.getId(), null, RecordScope.ZONE,
+                List.of(op("ADD", "www.cname.example", "CNAME", "alias.cname.example", 30)), null));
+        assertError(400, "InvalidParameter", () -> service.patchRecords(zone.getId(), null, RecordScope.ZONE,
+                List.of(op("ADD", "cname.example", "CNAME", "www.cname.example", 30)), null));
+        assertError(400, "InvalidParameter", () -> service.updateRecords(zone.getId(), null,
+                new RecordScope("alias.cname.example", "CNAME"), List.of(
+                        Map.of("rdata", "a.cname.example", "ttl", 30),
+                        Map.of("rdata", "b.cname.example", "ttl", 30)), null));
+        assertError(400, "InvalidParameter", () -> service.updateRecords(zone.getId(), null,
+                new RecordScope("alias.cname.example", null), List.of(
+                        Map.of("rtype", "CNAME", "rdata", "www.cname.example", "ttl", 30),
+                        Map.of("rtype", "TXT", "rdata", "beside", "ttl", 30)), null));
+        assertEquals(serial, service.getZone(zone.getId(), null).getSerial());
+
+        service.patchRecords(zone.getId(), null, RecordScope.ZONE, List.of(
+                op("REMOVE", "alias.cname.example", "CNAME", null, null),
+                op("ADD", "alias.cname.example", "CNAME", "other.cname.example", 30)), null);
+        assertEquals(List.of("other.cname.example."), rrset(zone, "alias.cname.example", "CNAME").stream()
+                .map(StoredRecord::getRdata).toList());
+    }
+
+    @Test
+    void rrset_recordsMustShareOneTtl() {
+        StoredZone zone = globalZone("ttl.example");
+        service.patchRecords(zone.getId(), null, RecordScope.ZONE, List.of(
+                op("ADD", "www.ttl.example", "A", "192.0.2.1", 30),
+                op("ADD", "www.ttl.example", "TXT", "other rrset", 600)), null);
+        long serial = service.getZone(zone.getId(), null).getSerial();
+
+        assertError(400, "InvalidParameter", () -> service.patchRecords(zone.getId(), null, RecordScope.ZONE,
+                List.of(op("ADD", "www.ttl.example", "A", "192.0.2.2", 60)), null));
+        assertError(400, "InvalidParameter", () -> service.updateRecords(zone.getId(), null,
+                new RecordScope("www.ttl.example", "A"), List.of(
+                        Map.of("rdata", "192.0.2.1", "ttl", 30),
+                        Map.of("rdata", "192.0.2.2", "ttl", 60)), null));
+        assertError(400, "InvalidParameter", () -> service.patchRecords(zone.getId(), null, RecordScope.ZONE,
+                List.of(op("ADD", "WWW.ttl.example", "A", "192.0.2.2", 60)), null));
+        assertEquals(serial, service.getZone(zone.getId(), null).getSerial());
+
+        service.patchRecords(zone.getId(), null, RecordScope.ZONE, List.of(
+                op("ADD", "www.ttl.example", "A", "192.0.2.2", 30),
+                op("ADD", "www.ttl.example", "A", null, 120)), null);
+        assertTrue(rrset(zone, "www.ttl.example", "A").stream().allMatch(r -> r.getTtl() == 120));
+        assertEquals(600, rrset(zone, "www.ttl.example", "TXT").getFirst().getTtl());
+    }
+
+    @Test
     void deleteRrset_andDomain() {
         StoredZone zone = globalZone("del.example");
         service.patchRecords(zone.getId(), null, RecordScope.ZONE, List.of(
