@@ -99,13 +99,13 @@ public sealed interface DnsRecord {
                             throw new IllegalArgumentException("Incomplete TXT escape");
                         }
                         character = value.charAt(index++);
-                        if (character >= '0' && character <= '9') {
-                            if (character > '7' || index + 1 >= value.length()
-                                    || value.charAt(index) < '0' || value.charAt(index) > '7'
-                                    || value.charAt(index + 1) < '0' || value.charAt(index + 1) > '7') {
-                                throw new IllegalArgumentException("TXT octal escapes require three octal digits");
+                        if (isDigit(character)) {
+                            // RFC 1035 section 5.1: \DDD is a three-digit decimal octet.
+                            if (index + 1 >= value.length() || !isDigit(value.charAt(index))
+                                    || !isDigit(value.charAt(index + 1))) {
+                                throw new IllegalArgumentException("TXT escapes require three decimal digits");
                             }
-                            int octet = (character - '0') * 64 + (value.charAt(index) - '0') * 8
+                            int octet = (character - '0') * 100 + (value.charAt(index) - '0') * 10
                                     + value.charAt(index + 1) - '0';
                             if (octet > 255) {
                                 throw new IllegalArgumentException("TXT escape exceeds one byte");
@@ -132,6 +132,10 @@ public sealed interface DnsRecord {
                 throw new IllegalArgumentException("TXT requires at least one character string");
             }
             return result.toByteArray();
+        }
+
+        private static boolean isDigit(char character) {
+            return character >= '0' && character <= '9';
         }
     }
 

@@ -44,12 +44,22 @@ class DnsRecordTest {
     @Test
     void txtPreservesQuotedSegmentsEscapesAndEmptyStrings() {
         assertArrayEquals(new byte[]{3, 'a', ' ', 'b', 2, '"', '\\', 1, (byte) 255, 0},
-                new DnsRecord.Txt("\"a b\" \"\\\"\\\\\" \"\\377\" \"\"").data());
+                new DnsRecord.Txt("\"a b\" \"\\\"\\\\\" \"\\255\" \"\"").data());
         assertEquals(256, new DnsRecord.Txt("\"" + "x".repeat(255) + "\"").data().length);
         assertThrows(IllegalArgumentException.class,
                 () -> new DnsRecord.Txt("\"" + "x".repeat(256) + "\"").data());
-        assertThrows(IllegalArgumentException.class, () -> new DnsRecord.Txt("\"\\400\"").data());
+        assertThrows(IllegalArgumentException.class, () -> new DnsRecord.Txt("\"\\256\"").data());
         assertThrows(IllegalArgumentException.class, () -> new DnsRecord.Txt("\"unclosed").data());
+    }
+
+    @Test
+    void txtEscapesAreThreeDecimalDigits() {
+        assertArrayEquals(new byte[]{3, 9, (byte) 200, 'A'}, new DnsRecord.Txt("\"\\009\\200\\065\"").data());
+        assertArrayEquals(new byte[]{4, 0, '1', '2', '3'}, new DnsRecord.Txt("\"\\000123\"").data());
+        assertArrayEquals(new byte[]{1, 'x'}, new DnsRecord.Txt("\"\\x\"").data());
+        assertThrows(IllegalArgumentException.class, () -> new DnsRecord.Txt("\"\\99\"").data());
+        assertThrows(IllegalArgumentException.class, () -> new DnsRecord.Txt("\"\\9x9\"").data());
+        assertThrows(IllegalArgumentException.class, () -> new DnsRecord.Txt("\"\\999\"").data());
     }
 
     @Test
