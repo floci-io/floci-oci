@@ -243,6 +243,22 @@ class NosqlServiceTest {
     }
 
     @Test
+    void rejectedAlterTableLeavesTheSchemaUnchanged() {
+        String table = createUsers();
+        String etag = service.getTable(table, null).getEtag();
+
+        OciException error = assertThrows(OciException.class, () -> service.updateTable(table, null,
+                "ALTER TABLE users (DROP info, ADD name STRING)", null, null, null, null));
+        assertEquals(400, error.getHttpStatus());
+        assertEquals("InvalidParameter", error.getCode());
+
+        StoredNosqlTable after = service.getTable(table, null);
+        assertEquals(List.of("id", "name", "info"), after.getColumns().stream().map(c -> c.getName()).toList());
+        assertEquals(etag, after.getEtag());
+        assertEquals(USERS_DDL, after.getDdlStatement());
+    }
+
+    @Test
     void indexesReportUpdateTable() {
         String table = createUsers();
         NosqlService.WorkRequestOutcome created = service.createIndex(table, null, "cityIdx",

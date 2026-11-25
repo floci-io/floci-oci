@@ -81,7 +81,7 @@ public class NosqlService implements CompartmentUsage, Resettable {
     private static final int ON_DEMAND_STORAGE_GB = 25;
     private static final long DAY_MILLIS = 86_400_000L;
     private static final Pattern TABLE_NAME = Pattern.compile("[A-Za-z][A-Za-z0-9_]{0,255}");
-    private static final ObjectMapper KEY_MAPPER = new ObjectMapper();
+    private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private final StorageBackend<String, StoredNosqlTable> tables;
     private final StorageBackend<String, StoredNosqlRow> rows;
@@ -265,7 +265,7 @@ public class NosqlService implements CompartmentUsage, Resettable {
                                                        Map<String, String> freeformTags,
                                                        Map<String, Map<String, Object>> definedTags,
                                                        String ifMatch) {
-        StoredNosqlTable table = liveTable(tableNameOrId, compartmentId);
+        StoredNosqlTable table = copyOf(liveTable(tableNameOrId, compartmentId));
         Etags.checkIfMatch(ifMatch, table.getEtag());
         if (ddlStatement != null && !ddlStatement.isBlank()) {
             if (!(parseDdl(ddlStatement) instanceof AlterTable alter)) {
@@ -730,6 +730,14 @@ public class NosqlService implements CompartmentUsage, Resettable {
         return new WorkRequestOutcome(wr, table.getId());
     }
 
+    /**
+     * A deep copy of a stored table. A mutation works on the copy and stores it only once every
+     * check has passed, so a rejected request leaves the stored table as it was.
+     */
+    private static StoredNosqlTable copyOf(StoredNosqlTable table) {
+        return MAPPER.convertValue(table, StoredNosqlTable.class);
+    }
+
     private void touch(StoredNosqlTable table) {
         table.setTimeUpdated(clock.instant().toString());
         table.setEtag(Etags.newEtag());
@@ -984,7 +992,7 @@ public class NosqlService implements CompartmentUsage, Resettable {
             });
         }
         try {
-            return KEY_MAPPER.writeValueAsString(parts);
+            return MAPPER.writeValueAsString(parts);
         } catch (JsonProcessingException e) {
             throw new IllegalStateException("Cannot encode a primary key of table " + table.getName(), e);
         }
