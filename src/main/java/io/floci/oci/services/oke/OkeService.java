@@ -5,6 +5,7 @@ import io.floci.oci.config.EmulatorConfig;
 import io.floci.oci.core.common.CompartmentUsage;
 import io.floci.oci.core.common.OciContext;
 import io.floci.oci.core.common.Etags;
+import io.floci.oci.core.common.NetworkReferences;
 import io.floci.oci.core.common.OciException;
 import io.floci.oci.core.common.Ocids;
 import io.floci.oci.core.common.Resettable;
@@ -21,6 +22,7 @@ import io.quarkus.runtime.StartupEvent;
 import jakarta.annotation.PreDestroy;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.Observes;
+import jakarta.enterprise.inject.Instance;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
@@ -68,11 +70,13 @@ public class OkeService implements Resettable, CompartmentUsage {
     private final Clock clock;
     private final Map<String, PendingCluster> pendingClusters = new ConcurrentHashMap<>();
     private final ScheduledExecutorService readinessPoller;
+    private final NetworkReferences networkReferences;
 
     @Inject
     public OkeService(StorageFactory storageFactory, EmulatorConfig config,
                       ServiceRegistry serviceRegistry, WorkRequestService workRequests,
-                      OkeClusterManager clusterManager, OciContext ociContext) {
+                      OkeClusterManager clusterManager, OciContext ociContext,
+                      Instance<NetworkReferences> networkReferences) {
         this(
             storageFactory.create("oke", "oke-clusters.json",
                 new TypeReference<Map<String, StoredOkeCluster>>() {}),
@@ -84,7 +88,8 @@ public class OkeService implements Resettable, CompartmentUsage {
             clusterManager,
             ociContext::tenancyId,
             Clock.systemUTC(),
-            ociContext
+            ociContext,
+            NetworkReferences.of(networkReferences)
         );
     }
 
@@ -108,6 +113,21 @@ public class OkeService implements Resettable, CompartmentUsage {
                Supplier<String> tenancyId,
                Clock clock,
                OciContext ociContext) {
+        this(clusters, nodePools, config, serviceRegistry, workRequests, clusterManager, tenancyId, clock,
+                ociContext, NetworkReferences.NONE);
+    }
+
+    OkeService(StorageBackend<String, StoredOkeCluster> clusters,
+               StorageBackend<String, StoredNodePool> nodePools,
+               EmulatorConfig config,
+               ServiceRegistry serviceRegistry,
+               WorkRequestService workRequests,
+               OkeClusterManager clusterManager,
+               Supplier<String> tenancyId,
+               Clock clock,
+               OciContext ociContext,
+               NetworkReferences networkReferences) {
+        this.networkReferences = networkReferences;
         this.ociContext = ociContext;
         this.clusters = clusters;
         this.nodePools = nodePools;
@@ -380,6 +400,12 @@ public class OkeService implements Resettable, CompartmentUsage {
         String type = OkeClusterSettings.type(settings.type());
         Map<String, Object> endpointConfig = OkeClusterSettings.endpointConfig(settings.endpointConfig());
         Map<String, Object> options = OkeClusterSettings.createOptions(settings.options());
+        networkReferences.requireVcn(vcnId);
+        requireEndpointNetwork(endpointConfig, vcnId);
+        if (options != null) {
+            networkReferences.requireSubnetsInVcn(NetworkReferences.ids(options.get("serviceLbSubnetIds")), vcnId,
+                    "options.serviceLbSubnetIds");
+        }
         Map<String, Object> imagePolicyConfig = OkeClusterSettings.imagePolicyConfig(settings.imagePolicyConfig());
         List<Map<String, Object>> podNetworkOptions =
                 OkeClusterSettings.podNetworkOptions(settings.clusterPodNetworkOptions());
@@ -508,8 +534,9 @@ public class OkeService implements Resettable, CompartmentUsage {
                                                            String ifMatch) {
         StoredOkeCluster cluster = getCluster(clusterId);
         Etags.checkIfMatch(ifMatch, cluster.getEtag());
-        cluster.setEndpointConfig(OkeClusterSettings.updatedEndpointConfig(cluster.getEndpointConfig(),
-                details != null ? details : Map.of()));
+        Map<String, Object> update = details != null ? details : Map.of();
+        networkReferences.requireNsgs(NetworkReferences.ids(update.get("nsgIds")));
+        cluster.setEndpointConfig(OkeClusterSettings.updatedEndpointConfig(cluster.getEndpointConfig(), update));
         return clusterUpdated(cluster);
     }
 
@@ -528,8 +555,21 @@ public class OkeService implements Resettable, CompartmentUsage {
         }
         @SuppressWarnings("unchecked")
         Map<String, Object> requested = (Map<String, Object>) config;
-        cluster.setEndpointConfig(OkeClusterSettings.endpointConfig(requested));
+        Map<String, Object> endpoint = OkeClusterSettings.endpointConfig(requested);
+        requireEndpointNetwork(endpoint, cluster.getVcnId());
+        cluster.setEndpointConfig(endpoint);
         return clusterUpdated(cluster);
+    }
+
+    private void requireEndpointNetwork(Map<String, Object> endpointConfig, String vcnId) {
+        if (endpointConfig == null) {
+            return;
+        }
+        if (endpointConfig.get("subnetId") != null) {
+            networkReferences.requireSubnetsInVcn(List.of(String.valueOf(endpointConfig.get("subnetId"))), vcnId,
+                    "endpointConfig.subnetId");
+        }
+        networkReferences.requireNsgs(NetworkReferences.ids(endpointConfig.get("nsgIds")));
     }
 
     private String clusterUpdated(StoredOkeCluster cluster) {

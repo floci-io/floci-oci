@@ -2,6 +2,7 @@ package io.floci.oci.services.functions;
 
 import io.floci.oci.services.artifacts.ArtifactsRegistryManager;
 import io.floci.oci.testing.TestCompartments;
+import io.floci.oci.testing.TestNetworks;
 import io.quarkus.test.junit.QuarkusTest;
 import io.quarkus.test.junit.QuarkusTestProfile;
 import io.quarkus.test.junit.TestProfile;
@@ -46,6 +47,7 @@ class FunctionsOcirDockerTest {
     ArtifactsRegistryManager registry;
 
     private String compartment;
+    private TestNetworks.Network network;
     private String appId;
     private String fnId;
     private String pushed;
@@ -71,6 +73,7 @@ class FunctionsOcirDockerTest {
     void createTestCompartment() {
         if (compartment == null) {
             compartment = TestCompartments.create("dockerfnocir");
+            network = TestNetworks.create(compartment);
         }
     }
 
@@ -100,7 +103,7 @@ class FunctionsOcirDockerTest {
 
         appId = given().contentType("application/json")
                 .body(Map.of("compartmentId", compartment, "displayName", "ocir-app-" + System.nanoTime(),
-                        "subnetIds", List.of("ocid1.subnet.oc1.iad.dockersubnet")))
+                        "subnetIds", List.of(network.subnetId())))
             .when().post("/20181201/applications")
             .then().statusCode(200).extract().path("id");
         fnId = given().contentType("application/json")

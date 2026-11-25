@@ -3,6 +3,7 @@
 setup_file() {
     load 'test_helper/common-setup'
     _common_setup
+    create_test_network "$BATS_FILE_TMPDIR"
     unique_name cli-cluster > "$BATS_FILE_TMPDIR/cluster_name"
 }
 
@@ -23,7 +24,7 @@ teardown_file() {
 
 @test "ce: cluster create is accepted" {
     run oci_cmd ce cluster create --compartment-id "$TENANCY" --name "$CLUSTER_NAME" \
-        --vcn-id "ocid1.vcn.oc1.iad.clivcn" --kubernetes-version "v1.30.1"
+        --vcn-id "$(cat "$BATS_FILE_TMPDIR/vcn_id")" --kubernetes-version "v1.30.1"
     [ "$status" -eq 0 ]
 }
 

@@ -52,7 +52,7 @@ class OkeCompatibilityTest {
                 .createClusterDetails(CreateClusterDetails.builder()
                     .compartmentId(TENANCY)
                     .name("java-sdk-cluster")
-                    .vcnId("ocid1.vcn.oc1.iad.javavcn")
+                    .vcnId(CompatNetworks.create(TENANCY, "java-oke").vcnId())
                     .kubernetesVersion("v1.30.1")
                     .build())
                 .build()

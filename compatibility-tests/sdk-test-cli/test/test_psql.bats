@@ -3,6 +3,7 @@
 setup_file() {
     load 'test_helper/common-setup'
     _common_setup
+    create_test_network "$BATS_FILE_TMPDIR"
     unique_name cli-psql > "$BATS_FILE_TMPDIR/db_name"
 }
 
@@ -34,7 +35,7 @@ teardown_file() {
 @test "psql: create returns the db system" {
     run oci_cmd psql db-system create --compartment-id "$TENANCY" --display-name "$DB_NAME" \
         --db-version 15 --shape PostgreSQL.VM.Standard.E4.Flex.2.32GB \
-        --network-details '{"subnetId":"ocid1.subnet.oc1.iad.clipsql"}' \
+        --network-details "{\"subnetId\":\"$(cat "$BATS_FILE_TMPDIR/subnet_id")\"}" \
         --storage-details '{"systemType":"OCI_OPTIMIZED_STORAGE","isRegionallyDurable":true}' \
         --credentials '{"username":"admin_user","passwordDetails":{"passwordType":"PLAIN_TEXT","password":"BEstrO0ng_#11"}}'
     [ "$status" -eq 0 ]

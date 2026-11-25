@@ -24,13 +24,13 @@ def created_id(container_engine, response):
     return work_request.resources[0].identifier
 
 
-def test_cluster_and_node_pool_lifecycle(container_engine):
+def test_cluster_and_node_pool_lifecycle(container_engine, network):
     name = unique("py-cluster")
     created = container_engine.create_cluster(
         oci.container_engine.models.CreateClusterDetails(
             compartment_id=TENANCY,
             name=name,
-            vcn_id="ocid1.vcn.oc1.iad.pyvcn",
+            vcn_id=network["vcn_id"],
             kubernetes_version="v1.30.1",
         )
     )

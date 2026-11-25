@@ -6,6 +6,7 @@ import com.github.dockerjava.api.exception.NotFoundException;
 import io.floci.oci.config.EmulatorConfig;
 import io.floci.oci.core.common.docker.ContainerStorageHelper;
 import io.floci.oci.testing.TestCompartments;
+import io.floci.oci.testing.TestNetworks;
 import io.quarkus.test.junit.QuarkusTest;
 import io.quarkus.test.junit.QuarkusTestProfile;
 import io.quarkus.test.junit.TestProfile;
@@ -68,7 +69,7 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 class OkeDockerTest {
 
     private static String compartment;
-    private static final String VCN = "ocid1.vcn.oc1.iad.dockervcn";
+    private static TestNetworks.Network network;
     private static final String USER = "ocid1.user.oc1..okedockeruser";
     private static final Duration ACTIVE_TIMEOUT = Duration.ofSeconds(120);
 
@@ -90,6 +91,7 @@ class OkeDockerTest {
     void createTestCompartment() {
         if (compartment == null) {
             compartment = TestCompartments.create("okedockercompartment");
+            network = TestNetworks.create(compartment);
         }
     }
 
@@ -113,7 +115,7 @@ class OkeDockerTest {
             .body(Map.of(
                 "compartmentId", compartment,
                 "name", "docker-oke-cluster",
-                "vcnId", VCN,
+                "vcnId", network.vcnId(),
                 "kubernetesVersion", "v1.30.1"
             ))
             .when().post("/20180222/clusters")

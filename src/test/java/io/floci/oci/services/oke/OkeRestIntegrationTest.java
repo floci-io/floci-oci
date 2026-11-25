@@ -2,6 +2,7 @@ package io.floci.oci.services.oke;
 
 import io.floci.oci.config.EmulatorConfig;
 import io.floci.oci.testing.TestCompartments;
+import io.floci.oci.testing.TestNetworks;
 import io.floci.oci.testing.TestRegions;
 import io.floci.oci.core.workrequest.StoredWorkRequest;
 import io.floci.oci.core.workrequest.WorkRequestService;
@@ -33,7 +34,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class OkeRestIntegrationTest {
 
     private static String compartment;
-    private static final String VCN = "ocid1.vcn.oc1.iad.restvcn";
+    private static TestNetworks.Network network;
     private static final String USER = "ocid1.user.oc1..restwebhookuser";
 
     @Inject
@@ -46,6 +47,7 @@ class OkeRestIntegrationTest {
     void createTestCompartment() {
         if (compartment == null) {
             compartment = TestCompartments.create("oketestrest");
+            network = TestNetworks.create(compartment);
         }
     }
 
@@ -57,7 +59,7 @@ class OkeRestIntegrationTest {
             .body(Map.of(
                 "compartmentId", compartment,
                 "name", "rest-cluster",
-                "vcnId", VCN,
+                "vcnId", network.vcnId(),
                 "kubernetesVersion", "v1.30.1"
             ))
             .when().post("/20180222/clusters")
@@ -260,10 +262,11 @@ class OkeRestIntegrationTest {
     void tokenWebhookAuthenticatesATokenForAClusterInAnotherRegion() {
         TestRegions.subscribe(config.defaultTenancyId(), "PHX");
         String phoenix = "containerengine.us-phoenix-1.oci.oraclecloud.com";
+        String phoenixVcn = TestNetworks.createIn("iaas.us-phoenix-1.oraclecloud.com", compartment).vcnId();
         String createWorkRequest = given()
             .header("Host", phoenix)
             .contentType(ContentType.JSON)
-            .body(Map.of("compartmentId", compartment, "name", "phoenix-cluster", "vcnId", VCN))
+            .body(Map.of("compartmentId", compartment, "name", "phoenix-cluster", "vcnId", phoenixVcn))
             .when().post("/20180222/clusters")
             .then().statusCode(202)
             .extract().header("opc-work-request-id");
@@ -312,7 +315,7 @@ class OkeRestIntegrationTest {
     private static String createCluster(String name) {
         return OkeWorkRequests.createdId(given()
             .contentType(ContentType.JSON)
-            .body(Map.of("compartmentId", compartment, "name", name, "vcnId", VCN))
+            .body(Map.of("compartmentId", compartment, "name", name, "vcnId", network.vcnId()))
             .when().post("/20180222/clusters")
             .then().statusCode(202)
             .extract().header("opc-work-request-id"));
@@ -323,14 +326,15 @@ class OkeRestIntegrationTest {
         Map<String, Object> details = new HashMap<>();
         details.put("compartmentId", compartment);
         details.put("name", "rest-settings-cluster");
-        details.put("vcnId", VCN);
+        details.put("vcnId", network.vcnId());
+        String lbSubnet = TestNetworks.subnet(compartment, network.vcnId(), "10.0.1.0/24");
         details.put("kubernetesVersion", "v1.30.1");
         details.put("type", "ENHANCED_CLUSTER");
-        details.put("endpointConfig", Map.of("subnetId", "ocid1.subnet.oc1.iad.restapi", "isPublicIpEnabled", false));
+        details.put("endpointConfig", Map.of("subnetId", network.subnetId(), "isPublicIpEnabled", false));
         details.put("clusterPodNetworkOptions", List.of(Map.of("cniType", "FLANNEL_OVERLAY")));
         details.put("options", Map.of("kubernetesNetworkConfig",
                 Map.of("podsCidr", "10.244.0.0/16", "servicesCidr", "10.96.0.0/16"),
-                "serviceLbSubnetIds", List.of("ocid1.subnet.oc1.iad.restlb")));
+                "serviceLbSubnetIds", List.of(lbSubnet)));
         details.put("imagePolicyConfig", Map.of("isPolicyEnabled", false));
         String clusterId = OkeWorkRequests.createdId(given().contentType(ContentType.JSON).body(details)
             .when().post("/20180222/clusters")
@@ -341,11 +345,11 @@ class OkeRestIntegrationTest {
                 .statusCode(200)
                 .header("etag", notNullValue())
                 .body("type", equalTo("ENHANCED_CLUSTER"))
-                .body("endpointConfig.subnetId", equalTo("ocid1.subnet.oc1.iad.restapi"))
+                .body("endpointConfig.subnetId", equalTo(network.subnetId()))
                 .body("endpointConfig.isPublicIpEnabled", equalTo(false))
                 .body("clusterPodNetworkOptions[0].cniType", equalTo("FLANNEL_OVERLAY"))
                 .body("options.kubernetesNetworkConfig.podsCidr", equalTo("10.244.0.0/16"))
-                .body("options.serviceLbSubnetIds[0]", equalTo("ocid1.subnet.oc1.iad.restlb"))
+                .body("options.serviceLbSubnetIds[0]", equalTo(lbSubnet))
                 .body("imagePolicyConfig.isPolicyEnabled", equalTo(false))
                 .body("availableKubernetesUpgrades.size()", equalTo(0))
                 .extract().header("etag");
@@ -368,7 +372,7 @@ class OkeRestIntegrationTest {
                 .statusCode(200)
                 .body("freeformTags.team", equalTo("rest"))
                 .body("endpointConfig.isPublicIpEnabled", equalTo(true))
-                .body("endpointConfig.subnetId", equalTo("ocid1.subnet.oc1.iad.restapi"));
+                .body("endpointConfig.subnetId", equalTo(network.subnetId()));
         given().contentType(ContentType.JSON).body(Map.of("type", "HUGE_CLUSTER"))
             .when().put("/20180222/clusters/{id}", clusterId)
             .then()

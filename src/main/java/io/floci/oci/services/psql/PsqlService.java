@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import io.floci.oci.config.EmulatorConfig;
 import io.floci.oci.core.common.CompartmentUsage;
 import io.floci.oci.core.common.Etags;
+import io.floci.oci.core.common.NetworkReferences;
 import io.floci.oci.core.common.OciContext;
 import io.floci.oci.core.common.OciException;
 import io.floci.oci.core.common.Ocids;
@@ -28,6 +29,7 @@ import io.quarkus.runtime.StartupEvent;
 import jakarta.annotation.PreDestroy;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.Observes;
+import jakarta.enterprise.inject.Instance;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
@@ -119,17 +121,20 @@ public class PsqlService implements Resettable, CompartmentUsage {
     private final ExecutorService ownedLifecycle;
     private final ScheduledExecutorService readinessPoller;
     private final Map<String, Pending> pending = new ConcurrentHashMap<>();
+    private final NetworkReferences networkReferences;
 
     @Inject
     public PsqlService(StorageFactory storageFactory, EmulatorConfig config,
                        ServiceRegistry serviceRegistry, WorkRequestService workRequests,
                        PsqlContainerManager containers, OciContext ociContext,
                        CertificateGenerator certificates, VaultSecretsService vaultSecrets,
-                       PsqlConfigurationsService configurations, PsqlBackupsService backups) {
+                       PsqlConfigurationsService configurations, PsqlBackupsService backups,
+                       Instance<NetworkReferences> networkReferences) {
         this(storageFactory.create("psql", "psql-dbsystems.json",
                         new TypeReference<Map<String, StoredDbSystem>>() {}),
                 config, serviceRegistry, workRequests, containers, ociContext, certificates,
-                vaultSecrets, configurations, backups, Clock.systemUTC(), null);
+                vaultSecrets, configurations, backups, Clock.systemUTC(), null,
+                NetworkReferences.of(networkReferences));
     }
 
     /**
@@ -143,6 +148,17 @@ public class PsqlService implements Resettable, CompartmentUsage {
                 CertificateGenerator certificates, VaultSecretsService vaultSecrets,
                 PsqlConfigurationsService configurations, PsqlBackupsService backups, Clock clock,
                 Executor lifecycle) {
+        this(systems, config, serviceRegistry, workRequests, containers, ociContext, certificates, vaultSecrets,
+                configurations, backups, clock, lifecycle, NetworkReferences.NONE);
+    }
+
+    PsqlService(StorageBackend<String, StoredDbSystem> systems, EmulatorConfig config,
+                ServiceRegistry serviceRegistry, WorkRequestService workRequests,
+                PsqlContainerManager containers, OciContext ociContext,
+                CertificateGenerator certificates, VaultSecretsService vaultSecrets,
+                PsqlConfigurationsService configurations, PsqlBackupsService backups, Clock clock,
+                Executor lifecycle, NetworkReferences networkReferences) {
+        this.networkReferences = networkReferences;
         this.systems = systems;
         this.config = config;
         this.serviceRegistry = serviceRegistry;
@@ -247,6 +263,8 @@ public class PsqlService implements Resettable, CompartmentUsage {
         PsqlCatalog.Shape shape = PsqlCatalog.parseShape(PsqlRequests.requireString(details, "shape"));
         Map<String, Object> storage = storageDetails(PsqlRequests.requireMap(details, "storageDetails"));
         Map<String, Object> network = networkDetails(PsqlRequests.requireMap(details, "networkDetails"));
+        networkReferences.requireSubnet((String) network.get("subnetId"));
+        networkReferences.requireNsgs(NetworkReferences.ids(network.get("nsgIds")));
         RestoreSource source = sourceDetails(PsqlRequests.map(details, "source"), major);
         // A replica may leave out credentials: it takes the primary's admin username, and a
         // password nobody knows until ResetMasterUserPassword sets one, since none is stored.
@@ -408,6 +426,10 @@ public class PsqlService implements Resettable, CompartmentUsage {
                 ? replicationConfig(PsqlRequests.map(details, "replicationConfig"), system.getReplicationConfig()) : null;
         Map<String, Object> kerberos = kerberosAuthDetails(PsqlRequests.map(details, "kerberosAuthDetails"));
         Map<String, Object> insights = odspInsightDetails(PsqlRequests.map(details, "odspInsightDetails"));
+        Map<String, Object> requestedNetwork = PsqlRequests.map(details, "networkDetails");
+        if (requestedNetwork != null) {
+            networkReferences.requireNsgs(NetworkReferences.ids(requestedNetwork.get("nsgIds")));
+        }
 
         if (PsqlRequests.string(details, "displayName") != null) {
             system.setDisplayName(PsqlRequests.string(details, "displayName"));

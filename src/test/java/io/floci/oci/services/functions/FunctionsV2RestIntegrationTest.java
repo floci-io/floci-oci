@@ -1,6 +1,7 @@
 package io.floci.oci.services.functions;
 
 import io.floci.oci.testing.TestCompartments;
+import io.floci.oci.testing.TestNetworks;
 import io.quarkus.test.junit.QuarkusTest;
 import io.restassured.response.Response;
 import org.junit.jupiter.api.BeforeEach;
@@ -17,12 +18,13 @@ import static org.hamcrest.Matchers.*;
 class FunctionsV2RestIntegrationTest {
 
     private static String compartment;
-    private static final String SUBNET = "ocid1.subnet.oc1.iad.itv2subnet";
+    private static TestNetworks.Network network;
 
     @BeforeEach
     void createTestCompartment() {
         if (compartment == null) {
             compartment = TestCompartments.create("itfnv2compartment");
+            network = TestNetworks.create(compartment);
         }
     }
 
@@ -33,7 +35,7 @@ class FunctionsV2RestIntegrationTest {
     private String createApplication(String name) {
         Response created = given()
                 .contentType("application/json")
-                .body(Map.of("compartmentId", compartment, "displayName", name, "subnetIds", List.of(SUBNET),
+                .body(Map.of("compartmentId", compartment, "displayName", name, "subnetIds", List.of(network.subnetId()),
                         "traceConfig", Map.of("isEnabled", false), "logging", Map.of("lineFormat", "JSON")))
             .when().post("/20260325/applications")
             .then().statusCode(200)

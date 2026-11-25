@@ -20,12 +20,13 @@ func TestFunctionsManagementPlane(t *testing.T) {
 	require.NoError(t, err)
 	workRequests.Host = getEndpoint()
 	ctx := context.Background()
+	_, subnetId := testNetwork(t, "go-fn")
 
 	app, err := client.CreateApplication(ctx, functions.CreateApplicationRequest{
 		CreateApplicationDetails: functions.CreateApplicationDetails{
 			CompartmentId: common.String(tenancy()),
 			DisplayName:   common.String(unique("go-app")),
-			SubnetIds:     []string{"ocid1.subnet.oc1.iad.gosubnet"},
+			SubnetIds:     []string{subnetId},
 		},
 	})
 	require.NoError(t, err)

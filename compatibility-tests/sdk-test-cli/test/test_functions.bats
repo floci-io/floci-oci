@@ -3,6 +3,7 @@
 setup_file() {
     load 'test_helper/common-setup'
     _common_setup
+    create_test_network "$BATS_FILE_TMPDIR"
     unique_name cli-app > "$BATS_FILE_TMPDIR/app_name"
 }
 
@@ -27,7 +28,7 @@ teardown_file() {
 
 @test "fn: application create" {
     run oci_cmd fn application create --compartment-id "$TENANCY" \
-        --display-name "$APP_NAME" --subnet-ids '["ocid1.subnet.oc1.iad.clisubnet"]'
+        --display-name "$APP_NAME" --subnet-ids "[\"$(cat "$BATS_FILE_TMPDIR/subnet_id")\"]"
     [ "$status" -eq 0 ]
     json_get '.data.id' > "$BATS_FILE_TMPDIR/app_id"
     [ -s "$BATS_FILE_TMPDIR/app_id" ]

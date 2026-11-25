@@ -8,6 +8,7 @@ import io.floci.oci.config.EmulatorConfig;
 import io.floci.oci.core.common.CompartmentUsage;
 import io.floci.oci.core.common.ContainerImageResolver;
 import io.floci.oci.core.common.Etags;
+import io.floci.oci.core.common.NetworkReferences;
 import io.floci.oci.core.common.OciContext;
 import io.floci.oci.core.common.OciException;
 import io.floci.oci.core.common.Ocids;
@@ -69,6 +70,7 @@ public class FunctionsService implements Resettable, CompartmentUsage {
     private final WorkRequestService workRequests;
     /** Turns a stored image into the reference fnserver pulls (an image in the local OCIR). */
     private final UnaryOperator<String> pullableImage;
+    private final NetworkReferences networkReferences;
     /**
      * One lock per function, serialising its UpdateFunction with its mirroring into fnserver so a mirror
      * records exactly the settings it sent, and one per application around creating its Fn app. Unrelated
@@ -84,8 +86,10 @@ public class FunctionsService implements Resettable, CompartmentUsage {
     public FunctionsService(StorageFactory storageFactory, EmulatorConfig config,
                             ServiceRegistry serviceRegistry, FnServerManager fnServer,
                             OciContext ociContext, WorkRequestService workRequests,
-                            Instance<ContainerImageResolver> imageResolvers) {
+                            Instance<ContainerImageResolver> imageResolvers,
+                            Instance<NetworkReferences> networkReferences) {
         this.config = config;
+        this.networkReferences = NetworkReferences.of(networkReferences);
         this.pullableImage = image -> imageResolvers.isResolvable() ? imageResolvers.get().pullable(image) : image;
         this.workRequests = workRequests;
         this.ociContext = ociContext;
@@ -113,6 +117,14 @@ public class FunctionsService implements Resettable, CompartmentUsage {
                      StorageBackend<String, StoredFunction> functions,
                      EmulatorConfig config, FnServerManager fnServer, WorkRequestService workRequests,
                      UnaryOperator<String> pullableImage) {
+        this(applications, functions, config, fnServer, workRequests, pullableImage, NetworkReferences.NONE);
+    }
+
+    FunctionsService(StorageBackend<String, StoredApplication> applications,
+                     StorageBackend<String, StoredFunction> functions,
+                     EmulatorConfig config, FnServerManager fnServer, WorkRequestService workRequests,
+                     UnaryOperator<String> pullableImage, NetworkReferences networkReferences) {
+        this.networkReferences = networkReferences;
         this.pullableImage = pullableImage;
         this.workRequests = workRequests;
         this.ociContext = OciContext.fromConfig(config);
@@ -182,6 +194,8 @@ public class FunctionsService implements Resettable, CompartmentUsage {
         if (shape != null && !SHAPES.contains(shape)) {
             throw OciException.invalidParameter("Invalid shape: " + shape);
         }
+        networkReferences.requireSubnets(subnetIds);
+        requireNsgs(settings);
         boolean duplicate = applications.scan(k -> true).stream()
                 .anyMatch(a -> displayName.equals(a.getDisplayName())
                         && compartmentId.equals(a.getCompartmentId())
@@ -208,6 +222,12 @@ public class FunctionsService implements Resettable, CompartmentUsage {
         applications.put(app.getId(), app);
         LOG.infof("createApplication %s (%s)", displayName, app.getId());
         return app;
+    }
+
+    private void requireNsgs(Map<String, Object> settings) {
+        if (settings != null) {
+            networkReferences.requireNsgs(NetworkReferences.ids(settings.get("networkSecurityGroupIds")));
+        }
     }
 
     public StoredApplication getApplication(String applicationId) {
@@ -240,6 +260,7 @@ public class FunctionsService implements Resettable, CompartmentUsage {
                                                Map<String, Object> settings, String ifMatch) {
         StoredApplication app = getApplication(applicationId);
         Etags.checkIfMatch(ifMatch, app.getEtag());
+        requireNsgs(settings);
         if (appConfig != null) {
             app.setConfig(appConfig);
         }

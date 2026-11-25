@@ -79,12 +79,14 @@ fnserver spawns your function containers as siblings.
 
 ## Quickstart
 
+The subnet has to exist first: create one as in the [Networking quickstart](networking.md#quickstart).
+
 ```bash
 E="--endpoint http://localhost:4599"
 TENANCY=ocid1.tenancy.oc1..flocilocaltenancy0000000000000000000000000000000000000000
 
 oci fn application create $E --compartment-id "$TENANCY" \
-  --display-name demo-app --subnet-ids '["ocid1.subnet.oc1.iad.demo"]'
+  --display-name demo-app --subnet-ids '["<subnetId>"]'
 oci fn function create $E --application-id <appId> --display-name hello \
   --image <your-fdk-image>:latest --memory-in-mbs 128
 oci fn function invoke $E --function-id <fnId> --body '{"name":"floci"}' --file -

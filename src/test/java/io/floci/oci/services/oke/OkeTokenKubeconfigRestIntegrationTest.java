@@ -1,6 +1,7 @@
 package io.floci.oci.services.oke;
 
 import io.floci.oci.testing.TestCompartments;
+import io.floci.oci.testing.TestNetworks;
 import io.quarkus.test.junit.QuarkusTest;
 import io.quarkus.test.junit.QuarkusTestProfile;
 import io.quarkus.test.junit.TestProfile;
@@ -24,12 +25,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class OkeTokenKubeconfigRestIntegrationTest {
 
     private static String compartment;
-    private static final String VCN = "ocid1.vcn.oc1.iad.tokenmodevcn";
+    private static TestNetworks.Network network;
 
     @BeforeEach
     void createTestCompartment() {
         if (compartment == null) {
             compartment = TestCompartments.create("oketokenmode");
+            network = TestNetworks.create(compartment);
         }
     }
 
@@ -52,7 +54,7 @@ class OkeTokenKubeconfigRestIntegrationTest {
     private static String createCluster(String name) {
         return OkeWorkRequests.createdId(given()
             .contentType(ContentType.JSON)
-            .body(Map.of("compartmentId", compartment, "name", name, "vcnId", VCN))
+            .body(Map.of("compartmentId", compartment, "name", name, "vcnId", network.vcnId()))
             .when().post("/20180222/clusters")
             .then().statusCode(202)
             .extract().header("opc-work-request-id"));

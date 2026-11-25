@@ -1,6 +1,7 @@
 package io.floci.oci.services.psql;
 
 import io.floci.oci.testing.TestCompartments;
+import io.floci.oci.testing.TestNetworks;
 import io.quarkus.test.junit.QuarkusTest;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -22,11 +23,13 @@ import static org.hamcrest.Matchers.notNullValue;
 class PsqlConfigurationsRestIntegrationTest {
 
     private static String compartment;
+    private static TestNetworks.Network network;
 
     @BeforeEach
     void createTestCompartment() {
         if (compartment == null) {
             compartment = TestCompartments.create("itpsqlconfigcompartment");
+            network = TestNetworks.create(compartment);
         }
     }
 
@@ -68,7 +71,7 @@ class PsqlConfigurationsRestIntegrationTest {
         details.put("instanceMemorySizeInGBs", 32);
         details.put("configId", configId);
         details.put("storageDetails", Map.of("systemType", "OCI_OPTIMIZED_STORAGE", "isRegionallyDurable", true));
-        details.put("networkDetails", Map.of("subnetId", "ocid1.subnet.oc1.iad.itpsqlsubnet"));
+        details.put("networkDetails", Map.of("subnetId", network.subnetId()));
         details.put("credentials", Map.of("username", "adminUser",
                 "passwordDetails", Map.of("passwordType", "PLAIN_TEXT", "password", "BEstrO0ng_#11")));
         return details;

@@ -61,7 +61,7 @@ class FunctionsCompatibilityTest {
                 .createApplicationDetails(CreateApplicationDetails.builder()
                         .compartmentId(TENANCY)
                         .displayName("java-app-" + System.nanoTime())
-                        .subnetIds(List.of("ocid1.subnet.oc1.iad.javasubnet"))
+                        .subnetIds(List.of(CompatNetworks.create(TENANCY, "java-fn").subnetId()))
                         .build())
                 .build()).getApplication();
         try {

@@ -1,6 +1,7 @@
 package io.floci.oci.services.functions;
 
 import io.floci.oci.testing.TestCompartments;
+import io.floci.oci.testing.TestNetworks;
 import io.quarkus.test.junit.QuarkusTest;
 import io.quarkus.test.junit.QuarkusTestProfile;
 import io.quarkus.test.junit.TestProfile;
@@ -31,7 +32,7 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 class FunctionsDockerTest {
 
     private static String compartment;
-    private static final String SUBNET = "ocid1.subnet.oc1.iad.dockersubnet";
+    private static TestNetworks.Network network;
 
     private String appId;
     private String fnId;
@@ -40,6 +41,7 @@ class FunctionsDockerTest {
     void createTestCompartment() {
         if (compartment == null) {
             compartment = TestCompartments.create("dockerfncompartment");
+            network = TestNetworks.create(compartment);
         }
     }
 
@@ -91,7 +93,7 @@ class FunctionsDockerTest {
                 .contentType("application/json")
                 .body(Map.of("compartmentId", compartment,
                         "displayName", "docker-app-" + System.nanoTime(),
-                        "subnetIds", List.of(SUBNET)))
+                        "subnetIds", List.of(network.subnetId())))
             .when().post("/20181201/applications")
             .then().statusCode(200).extract().path("id");
 
