@@ -2,6 +2,7 @@ package io.floci.oci.services.nosql.query;
 
 import org.junit.jupiter.api.Test;
 
+import java.math.BigDecimal;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -102,6 +103,32 @@ class NosqlQueryEvaluatorTest {
         assertEquals(15L, result.get("Column_5"));
         assertEquals(3.0, result.get("Column_6"));
         assertEquals(2, run("SELECT count(*) FROM users WHERE info.city = 'Lima'").getFirst().get("Column_1"));
+    }
+
+    @Test
+    void integerOverflowWidensToNumberInsteadOfWrapping() {
+        long big = 4611686018427387904L;
+        List<Map<String, Object>> rows = List.of(Map.of("id", 1, "v", big), Map.of("id", 2, "v", big));
+        List<String> columns = List.of("id", "v");
+        BigDecimal twice = BigDecimal.valueOf(big).multiply(BigDecimal.valueOf(2));
+
+        Map<String, Object> sum = new NosqlQueryEvaluator(NosqlQueryParser.parse("SELECT sum(v) FROM t"),
+                Map.of(), columns).execute(rows).getFirst();
+        assertEquals(twice, sum.get("Column_1"));
+
+        Map<String, Object> first = new NosqlQueryEvaluator(NosqlQueryParser.parse("SELECT v + v AS added,"
+                + " v * 2 AS doubled, v * 2 - v AS back, -v - v - v AS negative, v - 1 AS small FROM t WHERE id = 1"),
+                Map.of(), columns).execute(rows).getFirst();
+        assertEquals(twice, first.get("added"));
+        assertEquals(twice, first.get("doubled"));
+        assertEquals(new BigDecimal(big), first.get("back"));
+        assertEquals(BigDecimal.valueOf(big).multiply(BigDecimal.valueOf(3)).negate(), first.get("negative"));
+        assertEquals(big - 1, first.get("small"));
+
+        Map<String, Object> minimum = new NosqlQueryEvaluator(NosqlQueryParser.parse("SELECT -v AS n FROM t"
+                + " WHERE id = 1"), Map.of(), columns).execute(List.of(Map.of("id", 1, "v", Long.MIN_VALUE)))
+                .getFirst();
+        assertEquals(BigDecimal.valueOf(Long.MIN_VALUE).negate(), minimum.get("n"));
     }
 
     @Test

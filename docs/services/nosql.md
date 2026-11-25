@@ -163,6 +163,10 @@ and may differ from the real service:
   values of different types are never equal; ORDER BY sorts numbers before strings before
   booleans, with nulls last ascending and first descending; an unnamed SELECT expression is
   named after its last path step, or `Column_<n>`.
+- Query arithmetic is exact. Integer operands give INTEGER or LONG, and a sum, difference,
+  product or negation outside the LONG range widens to NUMBER instead of wrapping; SUM over
+  integers does the same. A FLOAT or DOUBLE operand gives a DOUBLE, and a NUMBER operand
+  with integer or NUMBER operands gives a NUMBER. Division always gives a DOUBLE.
 - DeleteWorkRequest on a finished work request is `409 Conflict`. Every emulated work request
   is finished, so a cancel always reports that.
 - A PrepareStatement result is the statement text, base64-encoded; `queryPlan` is not

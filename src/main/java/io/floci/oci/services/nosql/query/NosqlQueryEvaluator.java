@@ -47,6 +47,9 @@ public final class NosqlQueryEvaluator {
         }
     };
 
+    private static final BigDecimal LONG_MIN = BigDecimal.valueOf(Long.MIN_VALUE);
+    private static final BigDecimal LONG_MAX = BigDecimal.valueOf(Long.MAX_VALUE);
+
     private final SelectQuery query;
     private final Map<String, Object> variables;
     private final List<String> columns;
@@ -271,7 +274,7 @@ public final class NosqlQueryEvaluator {
                     eval(arithmetic.right(), row));
             case Negate negate -> {
                 Object value = eval(negate.operand(), row);
-                yield value instanceof Number n ? narrow(decimal(n).negate(), isIntegral(n)) : null;
+                yield value instanceof Number n ? numeric(decimal(n).negate(), isIntegral(n), isFloating(n)) : null;
             }
             case Aggregate aggregate -> throw new NosqlSyntaxException(
                     aggregate.function().toLowerCase(Locale.ROOT) + "() is only allowed in the SELECT list");
@@ -351,12 +354,13 @@ public final class NosqlQueryEvaluator {
             return null;
         }
         boolean integral = isIntegral(l) && isIntegral(r);
+        boolean floating = isFloating(l) || isFloating(r);
         BigDecimal a = decimal(l);
         BigDecimal b = decimal(r);
         return switch (op) {
-            case '+' -> narrow(a.add(b), integral);
-            case '-' -> narrow(a.subtract(b), integral);
-            case '*' -> narrow(a.multiply(b), integral);
+            case '+' -> numeric(a.add(b), integral, floating);
+            case '-' -> numeric(a.subtract(b), integral, floating);
+            case '*' -> numeric(a.multiply(b), integral, floating);
             case '/' -> {
                 if (b.signum() == 0) {
                     yield null;
@@ -372,15 +376,32 @@ public final class NosqlQueryEvaluator {
                 || n instanceof BigInteger;
     }
 
-    private static Object narrow(BigDecimal value, boolean integral) {
-        if (!integral) {
+    private static boolean isFloating(Number n) {
+        return n instanceof Double || n instanceof Float;
+    }
+
+    /**
+     * An exact arithmetic result in the type the operands call for: DOUBLE when one of them is a
+     * FLOAT or DOUBLE; for integer operands the narrowest of INTEGER and LONG that holds it, or a
+     * NUMBER ({@link BigDecimal}) outside the LONG range, so an overflow never wraps; otherwise
+     * a NUMBER.
+     */
+    private static Object numeric(BigDecimal value, boolean integral, boolean floating) {
+        if (floating) {
             return value.doubleValue();
         }
-        long asLong = value.longValue();
+        if (!integral || !fitsLong(value)) {
+            return value;
+        }
+        long asLong = value.longValueExact();
         if (asLong >= Integer.MIN_VALUE && asLong <= Integer.MAX_VALUE) {
             return (int) asLong;
         }
         return asLong;
+    }
+
+    private static boolean fitsLong(BigDecimal value) {
+        return value.compareTo(LONG_MIN) >= 0 && value.compareTo(LONG_MAX) <= 0;
     }
 
     private Object aggregate(Aggregate aggregate, List<Map<String, Object>> rows) {
@@ -406,17 +427,22 @@ public final class NosqlQueryEvaluator {
                 }
                 BigDecimal sum = BigDecimal.ZERO;
                 boolean integral = true;
+                boolean floating = false;
                 for (Number n : numbers) {
                     sum = sum.add(decimal(n));
                     integral &= isIntegral(n);
+                    floating |= isFloating(n);
                 }
                 if ("AVG".equals(aggregate.function())) {
                     yield sum.divide(BigDecimal.valueOf(numbers.size()), MathContext.DECIMAL64).doubleValue();
                 }
-                if (integral) {
-                    yield Long.valueOf(sum.longValue());
+                if (floating) {
+                    yield Double.valueOf(sum.doubleValue());
                 }
-                yield Double.valueOf(sum.doubleValue());
+                if (integral && fitsLong(sum)) {
+                    yield Long.valueOf(sum.longValueExact());
+                }
+                yield sum;
             }
             default -> throw new NosqlSyntaxException("Unknown aggregate " + aggregate.function());
         };
