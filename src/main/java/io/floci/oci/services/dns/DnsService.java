@@ -745,7 +745,10 @@ public class DnsService implements CompartmentUsage {
         return resolver;
     }
 
-    /** Removes a deleted VCN's resolver, its default view, and the zones in that view. */
+    /**
+     * Removes a deleted VCN's resolver, its default view, and the zones in that view. Other resolvers
+     * that attached the view stop attaching it, so none keeps naming a deleted view.
+     */
     public synchronized void deleteVcnResolver(String vcnId) {
         Optional<StoredResolver> resolver = resolverForVcn(vcnId);
         if (resolver.isEmpty()) {
@@ -755,6 +758,17 @@ public class DnsService implements CompartmentUsage {
         for (StoredZone zone : zones.scan(k -> true)) {
             if (viewId.equals(zone.getViewId())) {
                 zones.delete(zone.getId());
+            }
+        }
+        for (StoredResolver other : resolvers.scan(k -> true)) {
+            if (!other.getId().equals(resolver.get().getId()) && other.getAttachedViewIds().contains(viewId)) {
+                List<String> attached = new ArrayList<>(other.getAttachedViewIds());
+                attached.remove(viewId);
+                other.setAttachedViewIds(attached);
+                other.setTimeUpdated(Instant.now().toString());
+                other.setEtag(Etags.newEtag());
+                resolvers.put(other.getId(), other);
+                LOG.infov("Detached deleted view {0} from resolver {1}", viewId, other.getId());
             }
         }
         views.delete(viewId);

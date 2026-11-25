@@ -84,7 +84,9 @@ deleted. `GetVcnDnsResolverAssociation` in [Networking](networking.md) names it.
 - **Default view:** protected, so it cannot be updated, moved or deleted (`400 InvalidParameter`). A
   private zone at or under `oraclevcn.com` cannot be created in it (`400 InvalidParameter`), as the
   SDK documentation says.
-- **Attached views:** a view a resolver still attaches cannot be deleted (`409 Conflict`).
+- **Attached views:** a view a resolver still attaches cannot be deleted (`409 Conflict`). A default
+  view deleted with its VCN is removed from every other resolver that attached it, and those resolvers
+  get a new `etag`.
 - **Not used for resolution yet:** the embedded DNS server answers from every zone, whatever view it
   is in and whichever resolver attaches it.
 
@@ -162,7 +164,8 @@ closest evidence:
 - **VCN resolvers:** the resolver and default view take the VCN's display name; the resolver is
   `isProtected: true`; the VCN's deletion removes the zones of its default view; FORWARD rules are
   stored without checking `sourceEndpointName`, since no endpoints exist; the association's
-  `etag` is the VCN's.
+  `etag` is the VCN's; a VCN's deletion detaches its default view from the other resolvers that
+  attached it.
 - **GetRRSet** for an RRSet with no records answers `200` with no items.
 - **IPv4-mapped AAAA** rdata is returned in the mixed notation RFC 5952 section 5 recommends
   (`::ffff:192.0.2.1`). Terraform compares AAAA through Go's `net.ParseIP(...).String()`, which prints

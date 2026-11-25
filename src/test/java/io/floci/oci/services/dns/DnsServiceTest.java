@@ -364,6 +364,25 @@ class DnsServiceTest {
     }
 
     @Test
+    void deleteVcnResolver_detachesItsDefaultViewFromOtherResolvers() {
+        StoredResolver deleted = service.ensureVcnResolver("ocid1.vcn.oc1.iad.d", COMPARTMENT, "vcn-d");
+        StoredResolver other = service.ensureVcnResolver("ocid1.vcn.oc1.iad.e", COMPARTMENT, "vcn-e");
+        StoredView shared = service.createView(Map.of("compartmentId", COMPARTMENT, "displayName", "kept"));
+        service.updateResolver(other.getId(), Map.of("attachedViews", List.of(
+                Map.of("viewId", deleted.getDefaultViewId()), Map.of("viewId", shared.getId()))), null);
+        String etag = service.getResolver(other.getId()).getEtag();
+
+        service.deleteVcnResolver("ocid1.vcn.oc1.iad.d");
+
+        StoredResolver after = service.getResolver(other.getId());
+        assertEquals(List.of(shared.getId()), after.getAttachedViewIds());
+        assertNotEquals(etag, after.getEtag());
+        assertError(404, "NotAuthorizedOrNotFound", () -> service.getView(deleted.getDefaultViewId()));
+        assertEquals(other.getDefaultViewId(), after.getDefaultViewId());
+        service.getView(other.getDefaultViewId());
+    }
+
+    @Test
     void resourcesIn_reportsZonesAndViews() {
         globalZone("usage.example");
         service.createView(Map.of("compartmentId", COMPARTMENT));
