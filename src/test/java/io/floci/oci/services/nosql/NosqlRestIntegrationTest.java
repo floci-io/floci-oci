@@ -185,6 +185,29 @@ class NosqlRestIntegrationTest {
     }
 
     @Test
+    void negativeStorageIsRejectedInEveryCapacityMode() {
+        for (String mode : List.of("ON_DEMAND", "PROVISIONED")) {
+            Map<String, Object> limits = new LinkedHashMap<>();
+            limits.put("capacityMode", mode);
+            limits.put("maxReadUnits", 1);
+            limits.put("maxWriteUnits", 1);
+            limits.put("maxStorageInGBs", -1);
+            String name = "neg_" + System.nanoTime();
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("name", name);
+            body.put("compartmentId", compartment);
+            body.put("ddlStatement", "CREATE TABLE " + name + " (id INTEGER, PRIMARY KEY (id))");
+            body.put("tableLimits", limits);
+            given().contentType("application/json").body(body)
+                .when().post(API + "/tables")
+                .then().statusCode(400)
+                    .header("opc-request-id", notNullValue())
+                    .body("code", equalTo("InvalidParameter"))
+                    .body("message", equalTo("tableLimits values must not be negative"));
+        }
+    }
+
+    @Test
     void indexesThroughTheWire() {
         String name = "idx_" + System.nanoTime();
         String tableId = createTable(name, "CREATE TABLE " + name + " (id INTEGER, info JSON, PRIMARY KEY (id))",

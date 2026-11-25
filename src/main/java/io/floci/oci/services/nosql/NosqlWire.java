@@ -162,6 +162,9 @@ final class NosqlWire {
         if (storage == null) {
             throw OciException.missingParameter("tableLimits.maxStorageInGBs is required");
         }
+        if (storage < 0) {
+            throw OciException.invalidParameter("tableLimits values must not be negative");
+        }
         if ("ON_DEMAND".equals(mode)) {
             return new StoredNosqlTable.Limits(0, 0, storage, mode);
         }
@@ -169,7 +172,7 @@ final class NosqlWire {
             throw OciException.missingParameter(
                     "tableLimits.maxReadUnits and tableLimits.maxWriteUnits are required for PROVISIONED tables");
         }
-        if (read.intValue() < 0 || write.intValue() < 0 || storage < 0) {
+        if (read.intValue() < 0 || write.intValue() < 0) {
             throw OciException.invalidParameter("tableLimits values must not be negative");
         }
         return new StoredNosqlTable.Limits(read.intValue(), write.intValue(), storage, mode);
