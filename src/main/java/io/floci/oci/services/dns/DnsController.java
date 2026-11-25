@@ -7,6 +7,7 @@ import io.floci.oci.services.dns.DnsService.RecordFilter;
 import io.floci.oci.services.dns.DnsService.RecordScope;
 import io.floci.oci.services.dns.DnsService.ZoneQuery;
 import io.floci.oci.services.dns.model.StoredRecord;
+import io.floci.oci.services.dns.model.StoredResolver;
 import io.floci.oci.services.dns.model.StoredView;
 import io.floci.oci.services.dns.model.StoredZone;
 import io.floci.oci.services.identity.CompartmentValidator;
@@ -33,8 +34,8 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * OCI DNS, {@code /20180115} (oci-go-sdk dns/dns_client.go). ListZones and ListViews return bare
- * arrays; every record read and write returns a {@code {"items": [...]}} collection with
+ * OCI DNS, {@code /20180115} (oci-go-sdk dns/dns_client.go). ListZones, ListViews and ListResolvers
+ * return bare arrays; every record read and write returns a {@code {"items": [...]}} collection with
  * {@code opc-total-items}, {@code opc-next-page} and the zone's {@code etag}.
  */
 @Path(DnsService.API_PREFIX)
@@ -343,6 +344,75 @@ public class DnsController {
         }
     }
 
+    // ── Resolvers ──────────────────────────────────────────────────────────────
+
+    @GET
+    @Path("/resolvers")
+    public Response listResolvers(@QueryParam("compartmentId") String compartmentId,
+                                  @QueryParam("displayName") String displayName, @QueryParam("id") String id,
+                                  @QueryParam("lifecycleState") String lifecycleState,
+                                  @QueryParam("sortBy") String sortBy, @QueryParam("sortOrder") String sortOrder,
+                                  @QueryParam("limit") Integer limit, @QueryParam("page") String page) {
+        requireCompartment(compartmentId);
+        List<Map<String, Object>> items = new ArrayList<>();
+        for (StoredResolver resolver : service.listResolvers(compartmentId, displayName, id, lifecycleState, sortBy,
+                sortOrder)) {
+            items.add(resolverJson(resolver, resolverSelf(resolver), false));
+        }
+        OciPage.Page<Map<String, Object>> result = OciPage.paginate(items, limit, page);
+        Response.ResponseBuilder builder = Response.ok(result.items());
+        if (result.hasNextPage()) {
+            builder.header(OciPage.OPC_NEXT_PAGE, result.nextPage());
+        }
+        return builder.build();
+    }
+
+    @GET
+    @Path("/resolvers/{resolverId}")
+    public Response getResolver(@PathParam("resolverId") String resolverId,
+                                @HeaderParam("If-None-Match") String ifNoneMatch) {
+        StoredResolver resolver = service.getResolver(resolverId);
+        if (notModified(ifNoneMatch, resolver.getEtag())) {
+            return Response.notModified().header("etag", resolver.getEtag()).build();
+        }
+        return Response.ok(resolverJson(resolver, resolverSelf(resolver), true)).header("etag", resolver.getEtag())
+                .build();
+    }
+
+    @PUT
+    @Path("/resolvers/{resolverId}")
+    public Response updateResolver(@PathParam("resolverId") String resolverId, @HeaderParam("If-Match") String ifMatch,
+                                   Map<String, Object> body) {
+        StoredResolver resolver = service.updateResolver(resolverId, body, ifMatch);
+        return Response.ok(resolverJson(resolver, resolverSelf(resolver), true)).header("etag", resolver.getEtag())
+                .build();
+    }
+
+    @POST
+    @Path("/resolvers/{resolverId}/actions/changeCompartment")
+    public Response changeResolverCompartment(@PathParam("resolverId") String resolverId,
+                                              @HeaderParam("If-Match") String ifMatch, Map<String, Object> body) {
+        String compartmentId = DnsService.str(body, "compartmentId");
+        try (CompartmentValidator.Use ignored = compartments.useInBody(compartmentId)) {
+            service.changeResolverCompartment(resolverId, compartmentId, ifMatch);
+            return Response.ok().build();
+        }
+    }
+
+    /** floci-oci emulates no resolver endpoints, so a resolver lists none. */
+    @GET
+    @Path("/resolvers/{resolverId}/endpoints")
+    public Response listResolverEndpoints(@PathParam("resolverId") String resolverId) {
+        service.getResolver(resolverId);
+        return Response.ok(List.of()).build();
+    }
+
+    @POST
+    @Path("/resolvers/{resolverId}/endpoints")
+    public Response createResolverEndpoint(@PathParam("resolverId") String resolverId) {
+        throw OciException.notImplemented("Resolver endpoints are not emulated");
+    }
+
     // ── Rendering ──────────────────────────────────────────────────────────────
 
     private Response readRecords(StoredZone zone, RecordScope scope, RecordFilter filter, String ifNoneMatch,
@@ -403,6 +473,10 @@ public class DnsController {
         return ociContext.baseUrl() + DnsService.API_PREFIX + "/zones/" + zone.getId();
     }
 
+    private String resolverSelf(StoredResolver resolver) {
+        return ociContext.baseUrl() + DnsService.API_PREFIX + "/resolvers/" + resolver.getId();
+    }
+
     private String viewSelf(StoredView view) {
         return ociContext.baseUrl() + DnsService.API_PREFIX + "/views/" + view.getId();
     }
@@ -450,6 +524,33 @@ public class DnsController {
         json.put("rrsetVersion", record.getRrsetVersion());
         json.put("rtype", record.getRtype());
         json.put("ttl", record.getTtl());
+        return json;
+    }
+
+    /** Resolver (resolver.go); ResolverSummary leaves out endpoints, attached views and rules. */
+    static Map<String, Object> resolverJson(StoredResolver resolver, String self, boolean full) {
+        Map<String, Object> json = new LinkedHashMap<>();
+        json.put("compartmentId", resolver.getCompartmentId());
+        json.put("attachedVcnId", resolver.getAttachedVcnId());
+        json.put("displayName", resolver.getDisplayName());
+        json.put("freeformTags", resolver.getFreeformTags());
+        json.put("definedTags", resolver.getDefinedTags());
+        json.put("id", resolver.getId());
+        json.put("timeCreated", resolver.getTimeCreated());
+        json.put("timeUpdated", resolver.getTimeUpdated());
+        json.put("lifecycleState", resolver.getLifecycleState());
+        json.put("self", self);
+        json.put("defaultViewId", resolver.getDefaultViewId());
+        json.put("isProtected", true);
+        if (full) {
+            json.put("endpoints", List.of());
+            List<Map<String, Object>> attached = new ArrayList<>();
+            for (String viewId : resolver.getAttachedViewIds()) {
+                attached.add(Map.of("viewId", viewId));
+            }
+            json.put("attachedViews", attached);
+            json.put("rules", resolver.getRules());
+        }
         return json;
     }
 

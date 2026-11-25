@@ -8,7 +8,7 @@ port 4599. Resources are kept as state only: no Docker network is created for a 
 
 | Area | Operations |
 |---|---|
-| VCNs | CreateVcn, GetVcn, ListVcns, UpdateVcn, DeleteVcn, ChangeVcnCompartment |
+| VCNs | CreateVcn, GetVcn, ListVcns, UpdateVcn, DeleteVcn, ChangeVcnCompartment, GetVcnDnsResolverAssociation |
 | Subnets | CreateSubnet, GetSubnet, ListSubnets, UpdateSubnet, DeleteSubnet, ChangeSubnetCompartment |
 | Gateways | Internet, NAT and service gateways: Create, Get, List, Update, Delete, ChangeCompartment; AttachServiceId, DetachServiceId |
 | Services | ListServices, GetService |
@@ -40,6 +40,15 @@ port 4599. Resources are kept as state only: no Docker network is created for a 
 - VCN and subnet compartment moves return `202` with `opc-work-request-id`, polled at
   `/20160918/workRequests/{id}` (the path the Core work-request client uses). The other
   compartment moves return `200`.
+
+## DNS resolver association
+
+Every VCN gets a VCN-dedicated DNS resolver with a protected default view, created by the
+[DNS](dns.md) service when the VCN is created and removed when it is deleted.
+`GET /20160918/vcns/{vcnId}/dnsResolverAssociation` answers `vcnId`, `dnsResolverId` and
+`lifecycleState: AVAILABLE`, with the VCN's `etag`. A VCN created while DNS was disabled gets its
+resolver the first time the association is read; with DNS disabled the association has no
+`dnsResolverId`.
 
 ## Validation
 

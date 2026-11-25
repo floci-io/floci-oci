@@ -12,9 +12,11 @@ serves it on the `dns.{region}.oci.oraclecloud.com` host.
 | Domain records | GetDomainRecords, UpdateDomainRecords, PatchDomainRecords, DeleteDomainRecords |
 | RRSets | GetRRSet, UpdateRRSet, PatchRRSet, DeleteRRSet |
 | Views | CreateView, GetView, ListViews, UpdateView, DeleteView, ChangeViewCompartment |
+| Resolvers | GetResolver, ListResolvers, UpdateResolver, ChangeResolverCompartment, ListResolverEndpoints (always empty) |
 
 Not emulated: steering policies and their attachments, TSIG keys, DNSSEC (`dnssecState: ENABLED`),
-zone transfers and secondary zones (`zoneType: SECONDARY`), zone migration, and CreateZoneFromZoneFile.
+zone transfers and secondary zones (`zoneType: SECONDARY`), zone migration, CreateZoneFromZoneFile,
+and resolver endpoints (CreateResolverEndpoint answers `501`).
 Those that have a route answer `501 MethodNotImplemented`; the others have no route.
 
 ## Wire notes
@@ -64,7 +66,27 @@ Those that have a route answer `501 MethodNotImplemented`; the others have no ro
   it matches.
 - **Views:** CreateView answers `201` with an `etag`, `ACTIVE`. A view that still holds zones cannot
   be deleted (`409 Conflict`).
-- **OCIDs** use `dns-zone` and `dnsview`, with the region in the OCID.
+- **OCIDs** use `dns-zone`, `dnsview` and `dnsresolver`, with the region in the OCID.
+
+## VCN resolvers
+
+Every VCN has a VCN-dedicated resolver. The DNS service creates it, with a protected default view,
+when Networking creates the VCN, and removes both, with the zones in that view, when the VCN is
+deleted. `GetVcnDnsResolverAssociation` in [Networking](networking.md) names it.
+
+- **Resolver:** `isProtected: true`, `ACTIVE`, in the VCN's compartment, with the VCN's display name,
+  `attachedVcnId` and `defaultViewId`. There is no CreateResolver or DeleteResolver in the API.
+- **UpdateResolver** sets `displayName`, tags, `attachedViews` (each `viewId` must be an existing view:
+  `400 RelatedResourceNotAuthorizedOrNotFound`) and `rules`. A rule must be `FORWARD` with
+  `destinationAddresses` and `sourceEndpointName`, as `ResolverForwardRuleDetails` requires.
+  Terraform's `oci_dns_resolver` creates and deletes through it.
+- **ChangeResolverCompartment** moves the resolver and its default view; zones stay where they are.
+- **Default view:** protected, so it cannot be updated, moved or deleted (`400 InvalidParameter`). A
+  private zone at or under `oraclevcn.com` cannot be created in it (`400 InvalidParameter`), as the
+  SDK documentation says.
+- **Attached views:** a view a resolver still attaches cannot be deleted (`409 Conflict`).
+- **Not used for resolution yet:** the embedded DNS server answers from every zone, whatever view it
+  is in and whichever resolver attaches it.
 
 ## Resolution from containers
 
@@ -136,5 +158,9 @@ closest evidence:
 - **`recordHash`** is an MD5 of the domain, type, rdata and TTL. **`zoneVersion`** is accepted and
   ignored: no history is kept.
 - **GLOBAL zones are regional** in floci-oci: they live in the region the request addressed.
-- **OCID types** `dns-zone` and `dnsview`.
+- **OCID types** `dns-zone`, `dnsview` and `dnsresolver`, all regional.
+- **VCN resolvers:** the resolver and default view take the VCN's display name; the resolver is
+  `isProtected: true`; the VCN's deletion removes the zones of its default view; FORWARD rules are
+  stored without checking `sourceEndpointName`, since no endpoints exist; the association's
+  `etag` is the VCN's.
 - **GetRRSet** for an RRSet with no records answers `200` with no items.

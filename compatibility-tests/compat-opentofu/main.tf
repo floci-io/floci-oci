@@ -321,7 +321,7 @@ resource "oci_dns_rrset" "tf_cname" {
   items {
     domain = "alias.tf-compat-global.example"
     rtype  = "CNAME"
-    rdata  = "www.tf-compat-global.example"
+    rdata  = "www.tf-compat-global.example."
     ttl    = 300
   }
 }
@@ -338,6 +338,23 @@ resource "oci_dns_rrset" "tf_txt" {
     rdata  = "hello from terraform"
     ttl    = 60
   }
+}
+
+data "oci_core_vcn_dns_resolver_association" "tf_vcn_resolver" {
+  vcn_id = oci_core_vcn.tf_vcn.id
+}
+
+resource "oci_dns_resolver" "tf_resolver" {
+  resolver_id = data.oci_core_vcn_dns_resolver_association.tf_vcn_resolver.dns_resolver_id
+  scope       = "PRIVATE"
+
+  attached_views {
+    view_id = oci_dns_view.tf_view.id
+  }
+}
+
+output "dns_resolver_vcn" {
+  value = oci_dns_resolver.tf_resolver.attached_vcn_id
 }
 
 output "dns_zone_state" {

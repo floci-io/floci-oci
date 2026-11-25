@@ -192,6 +192,21 @@ public class NetworkingController {
         return paged(service.listSecurityRules(id, direction), limit, page);
     }
 
+    /**
+     * GetVcnDnsResolverAssociation (oci-go-sdk core/vcn_dns_resolver_association.go): the VCN's
+     * dedicated DNS resolver, which the DNS service creates with the VCN.
+     */
+    @GET
+    @Path("/vcns/{vcnId}/dnsResolverAssociation")
+    public Response getVcnDnsResolverAssociation(@PathParam("vcnId") String vcnId) {
+        StoredNetworkResource vcn = service.get(NetworkKind.VCN, vcnId);
+        Map<String, Object> json = new LinkedHashMap<>();
+        json.put("vcnId", vcn.getId());
+        service.dnsResolverId(vcnId).ifPresent(id -> json.put("dnsResolverId", id));
+        json.put("lifecycleState", "AVAILABLE");
+        return Response.ok(json).header("etag", vcn.getEtag()).build();
+    }
+
     /** floci-oci attaches no VNICs to anything, so this list is always empty. */
     @GET
     @Path("/networkSecurityGroups/{id}/vnics")

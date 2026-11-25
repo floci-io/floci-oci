@@ -18,7 +18,7 @@ setup() {
 @test "apply creates identity and object storage resources" {
     run "$TF_BIN" apply -auto-approve -input=false -no-color
     [ "$status" -eq 0 ]
-    [[ "$output" == *"Apply complete! Resources: 47 added"* ]]
+    [[ "$output" == *"Apply complete! Resources: 48 added"* ]]
 }
 
 @test "outputs reflect emulator state" {
@@ -103,6 +103,9 @@ setup() {
     run "$TF_BIN" output -raw dns_cname_rdata
     [[ "$output" == "www.tf-compat-global.example"* ]]
 
+    run "$TF_BIN" output -raw dns_resolver_vcn
+    [[ "$output" == ocid1.vcn.* ]]
+
     run "$TF_BIN" output -raw db_system_ca_certificate
     [[ "$output" == "-----BEGIN CERTIFICATE-----"* ]]
 
@@ -151,7 +154,7 @@ setup() {
 @test "destroy removes every resource" {
     run "$TF_BIN" destroy -auto-approve -input=false -no-color
     [ "$status" -eq 0 ]
-    [[ "$output" == *"Destroy complete! Resources: 47 destroyed"* ]]
+    [[ "$output" == *"Destroy complete! Resources: 48 destroyed"* ]]
 
     run curl -s -o /dev/null -w '%{http_code}' \
         "${FLOCI_OCI_ENDPOINT:-http://localhost:4599}/n/floci-local/b/tf-compat-bucket"

@@ -195,6 +195,60 @@ class DnsRestIntegrationTest {
     }
 
     @Test
+    void vcnResolverFollowsItsVcn() {
+        String vcnId = given().contentType("application/json")
+                .body(Map.of("compartmentId", compartment, "cidrBlock", "10.71.0.0/16", "displayName", "dns-vcn"))
+            .when().post("/20160918/vcns")
+            .then().statusCode(200).extract().path("id");
+
+        String resolverId = given().when().get("/20160918/vcns/" + vcnId + "/dnsResolverAssociation")
+            .then().statusCode(200)
+                .header("etag", notNullValue())
+                .body("vcnId", equalTo(vcnId))
+                .body("lifecycleState", equalTo("AVAILABLE"))
+                .body("dnsResolverId", startsWith("ocid1.dnsresolver."))
+                .extract().path("dnsResolverId");
+        String defaultViewId = given().when().get("/20180115/resolvers/" + resolverId)
+            .then().statusCode(200)
+                .header("etag", notNullValue())
+                .body("attachedVcnId", equalTo(vcnId))
+                .body("displayName", equalTo("dns-vcn"))
+                .body("isProtected", equalTo(true))
+                .body("lifecycleState", equalTo("ACTIVE"))
+                .body("endpoints", empty())
+                .body("attachedViews", empty())
+                .body("rules", empty())
+                .extract().path("defaultViewId");
+        given().when().get("/20180115/views/" + defaultViewId)
+            .then().statusCode(200).body("isProtected", equalTo(true));
+        given().queryParam("compartmentId", compartment).when().get("/20180115/resolvers")
+            .then().statusCode(200).body("id", hasItem(resolverId)).body("find { it.id == '" + resolverId
+                    + "' }.attachedViews", nullValue());
+
+        String viewId = given().contentType("application/json")
+                .body(Map.of("compartmentId", compartment, "displayName", "attached"))
+            .when().post("/20180115/views")
+            .then().statusCode(201).extract().path("id");
+        given().contentType("application/json")
+                .body(Map.of("attachedViews", List.of(Map.of("viewId", viewId))))
+            .when().put("/20180115/resolvers/" + resolverId)
+            .then().statusCode(200).body("attachedViews[0].viewId", equalTo(viewId));
+        given().when().delete("/20180115/views/" + viewId).then().statusCode(409);
+        given().when().delete("/20180115/views/" + defaultViewId)
+            .then().statusCode(400).body("code", equalTo("InvalidParameter"));
+        given().contentType("application/json").body("{}")
+            .when().post("/20180115/resolvers/" + resolverId + "/endpoints")
+            .then().statusCode(501);
+
+        given().when().delete("/20160918/vcns/" + vcnId).then().statusCode(204);
+        given().when().get("/20180115/resolvers/" + resolverId).then().statusCode(404);
+        given().when().get("/20180115/views/" + defaultViewId).then().statusCode(404);
+        given().contentType("application/json").body(Map.of("attachedViews", List.of()))
+            .when().put("/20180115/resolvers/" + resolverId).then().statusCode(404);
+        given().when().delete("/20180115/views/" + viewId).then().statusCode(204);
+    }
+
+    @Test
     void listRequiresCompartment() {
         given().when().get("/20180115/zones")
             .then().statusCode(400).body("code", equalTo("MissingParameter"));

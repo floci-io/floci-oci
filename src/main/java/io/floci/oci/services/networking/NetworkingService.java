@@ -18,6 +18,7 @@ import io.floci.oci.services.networking.model.StoredNetworkResource;
 import io.quarkus.runtime.StartupEvent;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.Observes;
+import jakarta.enterprise.inject.Instance;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
@@ -36,8 +37,10 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.function.Consumer;
 import java.util.regex.Pattern;
 
 /**
@@ -70,26 +73,34 @@ public class NetworkingService implements CompartmentUsage, NetworkReferences {
     private final OciContext ociContext;
     private final ServiceRegistry serviceRegistry;
     private final WorkRequestService workRequests;
+    private final Iterable<VcnLifecycleListener> vcnListeners;
 
     @Inject
     public NetworkingService(StorageFactory storageFactory, EmulatorConfig config,
                              ServiceRegistry serviceRegistry, WorkRequestService workRequests,
-                             OciContext ociContext) {
+                             OciContext ociContext, Instance<VcnLifecycleListener> vcnListeners) {
         this.config = config;
         this.ociContext = ociContext;
         this.serviceRegistry = serviceRegistry;
         this.workRequests = workRequests;
+        this.vcnListeners = vcnListeners;
         this.resources = storageFactory.create("networking", "networking-resources.json",
                 new TypeReference<Map<String, StoredNetworkResource>>() {});
     }
 
     NetworkingService(StorageBackend<String, StoredNetworkResource> resources, EmulatorConfig config,
                       WorkRequestService workRequests) {
+        this(resources, config, workRequests, List.of());
+    }
+
+    NetworkingService(StorageBackend<String, StoredNetworkResource> resources, EmulatorConfig config,
+                      WorkRequestService workRequests, Iterable<VcnLifecycleListener> vcnListeners) {
         this.resources = resources;
         this.config = config;
         this.ociContext = OciContext.fromConfig(config);
         this.serviceRegistry = null;
         this.workRequests = workRequests;
+        this.vcnListeners = vcnListeners;
     }
 
     void onStart(@Observes StartupEvent ev) {
@@ -110,6 +121,8 @@ public class NetworkingService implements CompartmentUsage, NetworkReferences {
         r.setDefinedTags(definedTags(b));
         if (kind == NetworkKind.VCN) {
             createVcn(r, b);
+            VcnLifecycleListener.Vcn vcn = vcnOf(r);
+            notifyVcnListeners(listener -> listener.vcnCreated(vcn), r.getId());
         } else {
             StoredNetworkResource vcn = requireVcnInBody(requireString(b, "vcnId"));
             r.setVcnId(vcn.getId());
@@ -536,6 +549,34 @@ public class NetworkingService implements CompartmentUsage, NetworkReferences {
         }
         owned.forEach(r -> resources.delete(r.getId()));
         resources.delete(vcn.getId());
+        notifyVcnListeners(listener -> listener.vcnDeleted(vcn.getId()), vcn.getId());
+    }
+
+    /** The DNS resolver attached to a VCN (GetVcnDnsResolverAssociation), from the first listener that has one. */
+    public Optional<String> dnsResolverId(String vcnId) {
+        VcnLifecycleListener.Vcn vcn = vcnOf(get(NetworkKind.VCN, vcnId));
+        for (VcnLifecycleListener listener : vcnListeners) {
+            Optional<String> resolverId = listener.dnsResolverId(vcn);
+            if (resolverId.isPresent()) {
+                return resolverId;
+            }
+        }
+        return Optional.empty();
+    }
+
+    private static VcnLifecycleListener.Vcn vcnOf(StoredNetworkResource vcn) {
+        return new VcnLifecycleListener.Vcn(vcn.getId(), vcn.getCompartmentId(), vcn.getDisplayName());
+    }
+
+    private void notifyVcnListeners(Consumer<VcnLifecycleListener> event, String vcnId) {
+        for (VcnLifecycleListener listener : vcnListeners) {
+            try {
+                event.accept(listener);
+            } catch (RuntimeException e) {
+                LOG.warnv("VCN listener {0} failed for {1}: {2}", listener.getClass().getSimpleName(), vcnId,
+                        e.getMessage());
+            }
+        }
     }
 
     // ── Subnet ─────────────────────────────────────────────────────────────────

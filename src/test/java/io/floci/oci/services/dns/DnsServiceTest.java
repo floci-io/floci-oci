@@ -7,6 +7,7 @@ import io.floci.oci.services.dns.DnsService.RecordFilter;
 import io.floci.oci.services.dns.DnsService.RecordScope;
 import io.floci.oci.services.dns.DnsService.ZoneQuery;
 import io.floci.oci.services.dns.model.StoredRecord;
+import io.floci.oci.services.dns.model.StoredResolver;
 import io.floci.oci.services.dns.model.StoredView;
 import io.floci.oci.services.dns.model.StoredZone;
 import org.junit.jupiter.api.BeforeEach;
@@ -35,7 +36,8 @@ class DnsServiceTest {
         lenient().when(config.defaultRealm()).thenReturn("oc1");
         lenient().when(config.defaultRegion()).thenReturn("us-ashburn-1");
         lenient().when(config.defaultTenancyId()).thenReturn(TENANCY);
-        service = new DnsService(new InMemoryStorage<>(), new InMemoryStorage<>(), config, null, null);
+        service = new DnsService(new InMemoryStorage<>(), new InMemoryStorage<>(), new InMemoryStorage<>(), config,
+                null, null);
     }
 
     private StoredZone globalZone(String name) {
@@ -275,6 +277,68 @@ class DnsServiceTest {
                 List.of(op("ADD", "a.etag.example", "A", "192.0.2.1", 30)), "stale"));
         service.patchRecords(zone.getId(), null, RecordScope.ZONE,
                 List.of(op("ADD", "a.etag.example", "A", "192.0.2.1", 30)), zone.getEtag());
+    }
+
+    @Test
+    void vcnResolver_isCreatedOnceWithAProtectedDefaultView() {
+        StoredResolver resolver = service.ensureVcnResolver("ocid1.vcn.oc1.iad.a", COMPARTMENT, "vcn-a");
+
+        assertTrue(resolver.getId().startsWith("ocid1.dnsresolver.oc1.iad."));
+        assertEquals("ocid1.vcn.oc1.iad.a", resolver.getAttachedVcnId());
+        assertEquals("ACTIVE", resolver.getLifecycleState());
+        StoredView view = service.getView(resolver.getDefaultViewId());
+        assertTrue(view.isProtectedView());
+        assertEquals("vcn-a", view.getDisplayName());
+        assertEquals(resolver.getId(), service.ensureVcnResolver("ocid1.vcn.oc1.iad.a", COMPARTMENT, "vcn-a").getId());
+        assertEquals(1, service.listResolvers(COMPARTMENT, null, null, null, null, null).size());
+
+        assertError(400, "InvalidParameter", () -> service.deleteView(view.getId(), null));
+        assertError(400, "InvalidParameter", () -> service.updateView(view.getId(), Map.of("displayName", "x"), null));
+        assertError(400, "InvalidParameter", () -> service.createZone(Map.of("name", "a.oraclevcn.com",
+                "compartmentId", COMPARTMENT, "scope", "PRIVATE", "viewId", view.getId()), null, null, null));
+    }
+
+    @Test
+    void updateResolver_attachesViewsAndStoresForwardRules() {
+        StoredResolver resolver = service.ensureVcnResolver("ocid1.vcn.oc1.iad.b", COMPARTMENT, "vcn-b");
+        StoredView view = service.createView(Map.of("compartmentId", COMPARTMENT, "displayName", "shared"));
+
+        assertError(400, "RelatedResourceNotAuthorizedOrNotFound", () -> service.updateResolver(resolver.getId(),
+                Map.of("attachedViews", List.of(Map.of("viewId", "ocid1.dnsview.oc1.iad.missing"))), null));
+        assertError(400, "InvalidParameter", () -> service.updateResolver(resolver.getId(),
+                Map.of("rules", List.of(Map.of("action", "DROP"))), null));
+        assertError(400, "MissingParameter", () -> service.updateResolver(resolver.getId(),
+                Map.of("rules", List.of(Map.of("action", "FORWARD", "sourceEndpointName", "e"))), null));
+
+        StoredResolver updated = service.updateResolver(resolver.getId(), Map.of(
+                "displayName", "renamed",
+                "attachedViews", List.of(Map.of("viewId", view.getId())),
+                "rules", List.of(Map.of("action", "FORWARD", "destinationAddresses", List.of("10.0.0.2"),
+                        "sourceEndpointName", "forwarder", "qnameCoverConditions", List.of("corp.example")))),
+                resolver.getEtag());
+        assertEquals("renamed", updated.getDisplayName());
+        assertEquals(List.of(view.getId()), updated.getAttachedViewIds());
+        assertEquals("FORWARD", updated.getRules().getFirst().get("action"));
+        assertEquals(List.of(), updated.getRules().getFirst().get("clientAddressConditions"));
+        assertError(409, "Conflict", () -> service.deleteView(view.getId(), null));
+        assertError(412, "NoEtagMatch", () -> service.updateResolver(resolver.getId(), Map.of(), resolver.getEtag()
+                + "-stale"));
+
+        service.updateResolver(resolver.getId(), Map.of("attachedViews", List.of()), null);
+        service.deleteView(view.getId(), null);
+    }
+
+    @Test
+    void deleteVcnResolver_removesTheDefaultViewAndItsZones() {
+        StoredResolver resolver = service.ensureVcnResolver("ocid1.vcn.oc1.iad.c", COMPARTMENT, "vcn-c");
+        StoredZone zone = service.createZone(Map.of("name", "app.internal", "compartmentId", COMPARTMENT,
+                "scope", "PRIVATE", "viewId", resolver.getDefaultViewId()), null, null, null);
+
+        service.deleteVcnResolver("ocid1.vcn.oc1.iad.c");
+        assertError(404, "NotAuthorizedOrNotFound", () -> service.getResolver(resolver.getId()));
+        assertError(404, "NotAuthorizedOrNotFound", () -> service.getView(resolver.getDefaultViewId()));
+        assertError(404, "NotAuthorizedOrNotFound", () -> service.getZone(zone.getId(), null));
+        service.deleteVcnResolver("ocid1.vcn.oc1.iad.c");
     }
 
     @Test

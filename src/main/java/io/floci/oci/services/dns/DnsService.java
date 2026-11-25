@@ -13,6 +13,7 @@ import io.floci.oci.core.storage.StorageBackend;
 import io.floci.oci.core.storage.StorageFactory;
 import io.floci.oci.core.storage.TenancyAwareStorageBackend;
 import io.floci.oci.services.dns.model.StoredRecord;
+import io.floci.oci.services.dns.model.StoredResolver;
 import io.floci.oci.services.dns.model.StoredView;
 import io.floci.oci.services.dns.model.StoredZone;
 import io.quarkus.runtime.StartupEvent;
@@ -32,6 +33,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Stream;
 
@@ -52,6 +54,7 @@ public class DnsService implements CompartmentUsage {
     static final String API_PREFIX = "/20180115";
     static final String ZONE_OCID_TYPE = "dns-zone";
     static final String VIEW_OCID_TYPE = "dnsview";
+    static final String RESOLVER_OCID_TYPE = "dnsresolver";
     /** Apex nameservers floci-oci publishes: names under {@code localhost.floci.io}, which resolve to the emulator. */
     static final List<String> NAMESERVERS = List.of("ns1.dns.localhost.floci.io", "ns2.dns.localhost.floci.io",
             "ns3.dns.localhost.floci.io", "ns4.dns.localhost.floci.io");
@@ -66,6 +69,7 @@ public class DnsService implements CompartmentUsage {
 
     private final StorageBackend<String, StoredZone> zones;
     private final StorageBackend<String, StoredView> views;
+    private final StorageBackend<String, StoredResolver> resolvers;
     private final EmulatorConfig config;
     private final OciContext ociContext;
     private final ServiceRegistry serviceRegistry;
@@ -75,13 +79,17 @@ public class DnsService implements CompartmentUsage {
                       ServiceRegistry serviceRegistry) {
         this(storageFactory.create("dns", "dns-zones.json", new TypeReference<Map<String, StoredZone>>() {}),
                 storageFactory.create("dns", "dns-views.json", new TypeReference<Map<String, StoredView>>() {}),
+                storageFactory.create("dns", "dns-resolvers.json",
+                        new TypeReference<Map<String, StoredResolver>>() {}),
                 config, ociContext, serviceRegistry);
     }
 
     DnsService(StorageBackend<String, StoredZone> zones, StorageBackend<String, StoredView> views,
-               EmulatorConfig config, OciContext ociContext, ServiceRegistry serviceRegistry) {
+               StorageBackend<String, StoredResolver> resolvers, EmulatorConfig config, OciContext ociContext,
+               ServiceRegistry serviceRegistry) {
         this.zones = zones;
         this.views = views;
+        this.resolvers = resolvers;
         this.config = config;
         this.ociContext = ociContext != null ? ociContext : OciContext.fromConfig(config);
         this.serviceRegistry = serviceRegistry;
@@ -144,7 +152,11 @@ public class DnsService implements CompartmentUsage {
             if (viewId == null) {
                 throw OciException.missingParameter("viewId is required for a PRIVATE zone");
             }
-            requireView(viewId);
+            StoredView view = requireView(viewId);
+            if (view.isProtectedView() && DnsRdata.isWithin(name, "oraclevcn.com")) {
+                throw OciException.invalidParameter("A private zone at or under oraclevcn.com cannot be created "
+                        + "in the default protected view of a VCN-dedicated resolver");
+            }
         } else if (viewId != null) {
             throw OciException.invalidParameter("viewId applies to PRIVATE zones only");
         }
@@ -645,6 +657,10 @@ public class DnsService implements CompartmentUsage {
         if (hasZones) {
             throw OciException.conflict("View " + viewId + " still contains zones; delete them first");
         }
+        boolean attached = resolvers.scan(k -> true).stream().anyMatch(r -> r.getAttachedViewIds().contains(viewId));
+        if (attached) {
+            throw OciException.conflict("View " + viewId + " is still attached to a resolver; detach it first");
+        }
         views.delete(viewId);
         LOG.infov("deleteView {0}", viewId);
     }
@@ -661,11 +677,10 @@ public class DnsService implements CompartmentUsage {
         views.put(viewId, view);
     }
 
-    private void requireView(String viewId) {
-        if (views.get(viewId).filter(v -> "ACTIVE".equals(v.getLifecycleState())).isEmpty()) {
-            throw OciException.relatedResourceNotAuthorizedOrNotFound(
-                    "Authorization failed or requested resource not found: view " + viewId);
-        }
+    private StoredView requireView(String viewId) {
+        return views.get(viewId).filter(v -> "ACTIVE".equals(v.getLifecycleState()))
+                .orElseThrow(() -> OciException.relatedResourceNotAuthorizedOrNotFound(
+                        "Authorization failed or requested resource not found: view " + viewId));
     }
 
     private static void requireUnprotected(StoredView view, String verb) {
@@ -683,6 +698,163 @@ public class DnsService implements CompartmentUsage {
     private static void touch(StoredView view) {
         view.setTimeUpdated(Instant.now().toString());
         view.setEtag(Etags.newEtag());
+    }
+
+    // ── Resolvers ──────────────────────────────────────────────────────────────
+
+    /**
+     * The resolver dedicated to a VCN, with its protected default view: created with the VCN, and on
+     * first use for a VCN that predates the DNS service.
+     */
+    public synchronized StoredResolver ensureVcnResolver(String vcnId, String compartmentId, String displayName) {
+        Optional<StoredResolver> existing = resolverForVcn(vcnId);
+        if (existing.isPresent()) {
+            return existing.get();
+        }
+        StoredView view = newView(compartmentId, displayName, true);
+        views.put(view.getId(), view);
+        StoredResolver resolver = new StoredResolver();
+        resolver.setId(Ocids.generate(RESOLVER_OCID_TYPE, ociContext.realm(), ociContext.regionCode()));
+        resolver.setCompartmentId(compartmentId);
+        resolver.setDisplayName(displayName);
+        resolver.setAttachedVcnId(vcnId);
+        resolver.setDefaultViewId(view.getId());
+        resolver.setLifecycleState("ACTIVE");
+        String now = Instant.now().toString();
+        resolver.setTimeCreated(now);
+        resolver.setTimeUpdated(now);
+        resolver.setEtag(Etags.newEtag());
+        resolvers.put(resolver.getId(), resolver);
+        LOG.infov("Created resolver {0} and default view {1} for VCN {2}", resolver.getId(), view.getId(), vcnId);
+        return resolver;
+    }
+
+    /** Removes a deleted VCN's resolver, its default view, and the zones in that view. */
+    public synchronized void deleteVcnResolver(String vcnId) {
+        Optional<StoredResolver> resolver = resolverForVcn(vcnId);
+        if (resolver.isEmpty()) {
+            return;
+        }
+        String viewId = resolver.get().getDefaultViewId();
+        for (StoredZone zone : zones.scan(k -> true)) {
+            if (viewId.equals(zone.getViewId())) {
+                zones.delete(zone.getId());
+            }
+        }
+        views.delete(viewId);
+        resolvers.delete(resolver.get().getId());
+        LOG.infov("Deleted resolver {0} of VCN {1}", resolver.get().getId(), vcnId);
+    }
+
+    private Optional<StoredResolver> resolverForVcn(String vcnId) {
+        return resolvers.scan(k -> true).stream().filter(r -> vcnId.equals(r.getAttachedVcnId())).findFirst();
+    }
+
+    public StoredResolver getResolver(String resolverId) {
+        return resolvers.get(resolverId).orElseThrow(() -> OciException.notAuthorizedOrNotFound(
+                "Authorization failed or requested resource not found: resolver " + resolverId));
+    }
+
+    public List<StoredResolver> listResolvers(String compartmentId, String displayName, String id,
+                                              String lifecycleState, String sortBy, String sortOrder) {
+        Comparator<StoredResolver> order = switch (sortBy == null ? "timeCreated" : sortBy) {
+            case "displayName" -> Comparator.comparing(r -> r.getDisplayName().toLowerCase(Locale.ROOT));
+            case "timeCreated" -> Comparator.comparing(StoredResolver::getTimeCreated);
+            default -> throw OciException.invalidParameter("sortBy must be displayName or timeCreated");
+        };
+        return resolvers.scan(k -> true).stream()
+                .filter(r -> compartmentId.equals(r.getCompartmentId()))
+                .filter(r -> displayName == null || displayName.equals(r.getDisplayName()))
+                .filter(r -> id == null || id.equals(r.getId()))
+                .filter(r -> lifecycleState == null || lifecycleState.equals(r.getLifecycleState()))
+                .sorted("DESC".equals(sortOrder) ? order.reversed() : order)
+                .toList();
+    }
+
+    public synchronized StoredResolver updateResolver(String resolverId, Map<String, Object> body, String ifMatch) {
+        StoredResolver resolver = getResolver(resolverId);
+        Etags.checkIfMatch(ifMatch, resolver.getEtag());
+        Map<String, Object> b = body == null ? Map.of() : body;
+        List<String> attached = null;
+        if (b.get("attachedViews") instanceof List<?> given) {
+            attached = new ArrayList<>();
+            for (Map<String, Object> item : maps(given)) {
+                String viewId = str(item, "viewId");
+                if (viewId == null) {
+                    throw OciException.missingParameter("Every attached view needs a viewId");
+                }
+                requireView(viewId);
+                if (!attached.contains(viewId)) {
+                    attached.add(viewId);
+                }
+            }
+        }
+        List<Map<String, Object>> rules = b.get("rules") instanceof List<?> given ? forwardRules(given) : null;
+        if (str(b, "displayName") != null) {
+            resolver.setDisplayName(str(b, "displayName"));
+        }
+        if (attached != null) {
+            resolver.setAttachedViewIds(attached);
+        }
+        if (rules != null) {
+            resolver.setRules(rules);
+        }
+        if (b.get("freeformTags") instanceof Map<?, ?>) {
+            resolver.setFreeformTags(tags(b.get("freeformTags")));
+        }
+        if (b.get("definedTags") instanceof Map<?, ?>) {
+            resolver.setDefinedTags(tags(b.get("definedTags")));
+        }
+        resolver.setTimeUpdated(Instant.now().toString());
+        resolver.setEtag(Etags.newEtag());
+        resolvers.put(resolverId, resolver);
+        return resolver;
+    }
+
+    /** ResolverForwardRuleDetails, the one rule action (dns/resolver_forward_rule_details.go). */
+    private static List<Map<String, Object>> forwardRules(List<?> given) {
+        List<Map<String, Object>> rules = new ArrayList<>();
+        for (Map<String, Object> item : maps(given)) {
+            String action = str(item, "action");
+            if (action == null) {
+                throw OciException.missingParameter("Every resolver rule needs an action");
+            }
+            if (!"FORWARD".equals(action)) {
+                throw OciException.invalidParameter("Resolver rule action must be FORWARD, got " + action);
+            }
+            if (!(item.get("destinationAddresses") instanceof List<?> destinations) || destinations.isEmpty()) {
+                throw OciException.missingParameter("A FORWARD rule needs destinationAddresses");
+            }
+            String sourceEndpointName = str(item, "sourceEndpointName");
+            if (sourceEndpointName == null) {
+                throw OciException.missingParameter("A FORWARD rule needs a sourceEndpointName");
+            }
+            Map<String, Object> rule = new LinkedHashMap<>();
+            rule.put("action", "FORWARD");
+            rule.put("clientAddressConditions", item.get("clientAddressConditions") instanceof List<?> l ? l : List.of());
+            rule.put("qnameCoverConditions", item.get("qnameCoverConditions") instanceof List<?> l ? l : List.of());
+            rule.put("destinationAddresses", destinations);
+            rule.put("sourceEndpointName", sourceEndpointName);
+            rules.add(rule);
+        }
+        return rules;
+    }
+
+    public synchronized void changeResolverCompartment(String resolverId, String compartmentId, String ifMatch) {
+        StoredResolver resolver = getResolver(resolverId);
+        Etags.checkIfMatch(ifMatch, resolver.getEtag());
+        if (compartmentId == null) {
+            throw OciException.missingParameter("compartmentId is required");
+        }
+        resolver.setCompartmentId(compartmentId);
+        resolver.setTimeUpdated(Instant.now().toString());
+        resolver.setEtag(Etags.newEtag());
+        resolvers.put(resolverId, resolver);
+        views.get(resolver.getDefaultViewId()).ifPresent(view -> {
+            view.setCompartmentId(compartmentId);
+            touch(view);
+            views.put(view.getId(), view);
+        });
     }
 
     // ── Resolution support ─────────────────────────────────────────────────────
@@ -743,7 +915,7 @@ public class DnsService implements CompartmentUsage {
     }
 
     @SuppressWarnings("unchecked")
-    private static List<Map<String, Object>> maps(Object items) {
+    static List<Map<String, Object>> maps(Object items) {
         if (items == null) {
             return List.of();
         }
@@ -774,7 +946,10 @@ public class DnsService implements CompartmentUsage {
         return Stream.concat(
                 CompartmentUsage.live(zones, tenancyId, compartmentId, StoredZone::getCompartmentId,
                         StoredZone::getLifecycleState, z -> "dns zone " + z.getId()),
-                CompartmentUsage.live(views, tenancyId, compartmentId, StoredView::getCompartmentId,
-                        StoredView::getLifecycleState, v -> "dns view " + v.getId())).toList();
+                Stream.concat(
+                        CompartmentUsage.live(views, tenancyId, compartmentId, StoredView::getCompartmentId,
+                                StoredView::getLifecycleState, v -> "dns view " + v.getId()),
+                        CompartmentUsage.live(resolvers, tenancyId, compartmentId, StoredResolver::getCompartmentId,
+                                StoredResolver::getLifecycleState, r -> "dns resolver " + r.getId()))).toList();
     }
 }
