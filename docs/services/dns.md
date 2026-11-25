@@ -66,6 +66,39 @@ Those that have a route answer `501 MethodNotImplemented`; the others have no ro
   be deleted (`409 Conflict`).
 - **OCIDs** use `dns-zone` and `dnsview`, with the region in the OCID.
 
+## Resolution from containers
+
+The embedded DNS server answers from the zones of the DNS service, so the sidecar containers
+floci-oci starts resolve the records managed through the API.
+
+- **Who gets it:** the containers started with Floci's resolver: OKE's k3s node, the Functions
+  `fnserver`, and PostgreSQL DB systems. Their `/etc/resolv.conf` names the embedded server.
+- **Only in a container:** the server starts only when floci-oci itself runs in Docker (as with
+  `docker compose`). On the host, the sidecars keep Docker's resolver; set
+  `FLOCI_OCI_DNS_HOST_PORT` to query the server from the host with `dig @127.0.0.1 -p <port>`.
+- **Which zones:** every `ACTIVE` zone of every tenancy, region and view, `GLOBAL` and `PRIVATE`
+  alike. The most specific zone covering a name answers it. When several zones share that name, the
+  oldest answers and the collision is logged at debug level. Views do not scope resolution yet.
+- **Answers:** A, AAAA, CNAME, NS, SOA and TXT records, authoritative, with each record's TTL.
+  - A CNAME is followed through the zones floci-oci holds, up to 8 links, and each link is
+    answered under its own name. A chain that leaves those zones ends at the last CNAME.
+  - A name with no records of the asked type is NODATA, and a name the zone does not hold is
+    NXDOMAIN, both with the zone's SOA in the authority section.
+  - Other types (MX, SRV, CAA and the rest) answer NODATA.
+- **Names outside every zone** are forwarded upstream as before.
+- **Changes apply at once:** the server reads the zones on every query.
+
+### Limits
+
+- **OKE:** k3s's CoreDNS forwards to the node's `/etc/resolv.conf`, so pods should resolve zone
+  records through the node (inferred from k3s's defaults; not covered by a test).
+- **Functions:** only `fnserver` is given the resolver. Function containers are created by
+  fnserver's Docker driver, which never sets DNS servers on them (`local/oracle/fn`
+  `api/agent/drivers/docker/docker.go` builds a `HostConfig` without `Dns`, and `cookie.go` sets
+  only the network mode), so functions keep Docker's resolver and do not see zone records.
+- **No wildcard records** (`*.example.com`) in resolution, and no zone transfers.
+- **UDP only:** an answer larger than 512 bytes is truncated (`TC`), and there is no TCP fallback.
+
 ## RDATA normalization
 
 OCI says "All RDATA is normalized and the returned presentation of your RDATA may differ from its

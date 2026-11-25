@@ -165,6 +165,7 @@ public class PsqlContainerManager {
                     .withPortBinding(POSTGRES_PORT, hostPort)
                     .withNamedVolume(system.getVolumeName(), dataPath(major))
                     .withDockerNetwork(Optional.empty())
+                    .withEmbeddedDns()
                     .withLogRotation()
                     .withLabels(ContainerStorageHelper.resourceIdentityLabels(
                             "psql", system.getId(), system.getCompartmentId(), system.getRegion()))

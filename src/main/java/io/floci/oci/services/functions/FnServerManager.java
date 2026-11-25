@@ -133,6 +133,7 @@ public class FnServerManager {
                 .withBind("/var/run/docker.sock", "/var/run/docker.sock")
                 .withNamedVolume(iofsVolume, "/iofs")
                 .withDockerNetwork(config.services().dockerNetwork())
+                .withEmbeddedDns()
                 .withLogRotation()
                 // One Fn server serves every tenancy and region, so it names no resource,
                 // compartment or region.

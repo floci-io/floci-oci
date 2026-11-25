@@ -204,6 +204,7 @@ public class OkeClusterManager implements Resettable {
                         .withPortBinding(K3S_CONTAINER_PORT, hostPort)
                         .withNamedVolume(volumeName, "/var/lib/rancher/k3s")
                         .withDockerNetwork(Optional.empty())
+                        .withEmbeddedDns()
                         .withHostDockerInternalOnLinux()
                         .withPrivileged(true)
                         .withLabels(ContainerStorageHelper.resourceIdentityLabels(
