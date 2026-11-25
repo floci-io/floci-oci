@@ -20,6 +20,7 @@ teardown_file() {
     if [ -f "$BATS_FILE_TMPDIR/cluster_id" ]; then
         oci_json ce cluster delete --cluster-id "$(cat "$BATS_FILE_TMPDIR/cluster_id")" --force > /dev/null 2>&1 || true
     fi
+    delete_test_network "$BATS_FILE_TMPDIR"
 }
 
 @test "ce: cluster create is accepted" {

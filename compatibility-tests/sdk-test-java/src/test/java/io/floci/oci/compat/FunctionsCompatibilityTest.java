@@ -53,6 +53,7 @@ class FunctionsCompatibilityTest {
         if (workRequests != null) {
             workRequests.close();
         }
+        CompatNetworks.deleteAll();
     }
 
     @Test

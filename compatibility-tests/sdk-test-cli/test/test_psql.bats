@@ -20,6 +20,7 @@ teardown_file() {
     if [ -f "$BATS_FILE_TMPDIR/db_id" ]; then
         oci_json psql db-system delete --db-system-id "$(cat "$BATS_FILE_TMPDIR/db_id")" --force > /dev/null 2>&1 || true
     fi
+    delete_test_network "$BATS_FILE_TMPDIR"
 }
 
 @test "psql: shapes and default configurations are listed" {

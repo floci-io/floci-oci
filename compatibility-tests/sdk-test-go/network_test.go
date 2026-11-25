@@ -10,7 +10,8 @@ import (
 )
 
 // testNetwork creates a VCN and a subnet in the tenancy: OKE, Functions and PostgreSQL reject
-// network OCIDs that do not exist. It returns their OCIDs.
+// network OCIDs that do not exist. It returns their OCIDs. Both are deleted when the test ends,
+// the subnet first; cleanups run last-in first-out, so after the resources that use them.
 func testNetwork(t *testing.T, name string) (vcnId string, subnetId string) {
 	client, err := core.NewVirtualNetworkClientWithConfigurationProvider(configProvider(t))
 	require.NoError(t, err)
@@ -25,6 +26,10 @@ func testNetwork(t *testing.T, name string) (vcnId string, subnetId string) {
 		},
 	})
 	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, err := client.DeleteVcn(ctx, core.DeleteVcnRequest{VcnId: vcn.Id})
+		require.NoError(t, err)
+	})
 	subnet, err := client.CreateSubnet(ctx, core.CreateSubnetRequest{
 		CreateSubnetDetails: core.CreateSubnetDetails{
 			CompartmentId: common.String(tenancy()),
@@ -34,5 +39,9 @@ func testNetwork(t *testing.T, name string) (vcnId string, subnetId string) {
 		},
 	})
 	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, err := client.DeleteSubnet(ctx, core.DeleteSubnetRequest{SubnetId: subnet.Id})
+		require.NoError(t, err)
+	})
 	return *vcn.Id, *subnet.Id
 }

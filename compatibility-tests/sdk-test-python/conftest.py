@@ -66,4 +66,6 @@ def network(sdk_config):
             compartment_id=TENANCY, vcn_id=vcn.id, display_name="py-compat-subnet", cidr_block="10.0.0.0/24"
         )
     ).data
-    return {"vcn_id": vcn.id, "subnet_id": subnet.id}
+    yield {"vcn_id": vcn.id, "subnet_id": subnet.id}
+    client.delete_subnet(subnet.id)
+    client.delete_vcn(vcn.id)

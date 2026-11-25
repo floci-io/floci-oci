@@ -42,6 +42,7 @@ class OkeCompatibilityTest {
         if (okeClient != null) {
             okeClient.close();
         }
+        CompatNetworks.deleteAll();
     }
 
     @Test

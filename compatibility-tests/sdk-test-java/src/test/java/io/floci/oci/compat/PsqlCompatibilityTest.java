@@ -76,6 +76,7 @@ class PsqlCompatibilityTest {
     @AfterAll
     static void tearDown() {
         postgresql.close();
+        CompatNetworks.deleteAll();
     }
 
     @Test

@@ -24,6 +24,7 @@ teardown_file() {
     if [ -f "$BATS_FILE_TMPDIR/app_id" ]; then
         oci_json fn application delete --application-id "$(cat "$BATS_FILE_TMPDIR/app_id")" --force > /dev/null 2>&1 || true
     fi
+    delete_test_network "$BATS_FILE_TMPDIR"
 }
 
 @test "fn: application create" {

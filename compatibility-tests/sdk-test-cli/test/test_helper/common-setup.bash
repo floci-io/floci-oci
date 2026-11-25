@@ -70,3 +70,15 @@ create_test_network() {
         | jq -r '.data.id' > "$dir/subnet_id"
     [ -s "$dir/subnet_id" ] && [ "$(cat "$dir/subnet_id")" != "null" ]
 }
+
+# delete_test_network <dir>: deletes the subnet, then the VCN, that create_test_network wrote to
+# <dir>. Call it last in teardown_file, after the resources that use them are deleted.
+delete_test_network() {
+    local dir="$1"
+    if [ -f "$dir/subnet_id" ]; then
+        oci_json network subnet delete --subnet-id "$(cat "$dir/subnet_id")" --force > /dev/null 2>&1 || true
+    fi
+    if [ -f "$dir/vcn_id" ]; then
+        oci_json network vcn delete --vcn-id "$(cat "$dir/vcn_id")" --force > /dev/null 2>&1 || true
+    fi
+}
