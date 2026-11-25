@@ -403,7 +403,7 @@ public class OkeService implements Resettable, CompartmentUsage {
         networkReferences.requireVcn(vcnId);
         requireEndpointNetwork(endpointConfig, vcnId);
         if (options != null) {
-            networkReferences.requireSubnetsInVcn(NetworkReferences.ids(options.get("serviceLbSubnetIds")), vcnId,
+            networkReferences.requireSubnetsInVcn(NetworkReferences.ids(options.get("serviceLbSubnetIds"), "options.serviceLbSubnetIds"), vcnId,
                     "options.serviceLbSubnetIds");
         }
         Map<String, Object> imagePolicyConfig = OkeClusterSettings.imagePolicyConfig(settings.imagePolicyConfig());
@@ -535,7 +535,7 @@ public class OkeService implements Resettable, CompartmentUsage {
         StoredOkeCluster cluster = getCluster(clusterId);
         Etags.checkIfMatch(ifMatch, cluster.getEtag());
         Map<String, Object> update = details != null ? details : Map.of();
-        networkReferences.requireNsgs(NetworkReferences.ids(update.get("nsgIds")));
+        networkReferences.requireNsgs(NetworkReferences.ids(update.get("nsgIds"), "nsgIds"));
         cluster.setEndpointConfig(OkeClusterSettings.updatedEndpointConfig(cluster.getEndpointConfig(), update));
         return clusterUpdated(cluster);
     }
@@ -569,7 +569,7 @@ public class OkeService implements Resettable, CompartmentUsage {
             networkReferences.requireSubnetsInVcn(List.of(String.valueOf(endpointConfig.get("subnetId"))), vcnId,
                     "endpointConfig.subnetId");
         }
-        networkReferences.requireNsgs(NetworkReferences.ids(endpointConfig.get("nsgIds")));
+        networkReferences.requireNsgs(NetworkReferences.ids(endpointConfig.get("nsgIds"), "endpointConfig.nsgIds"));
     }
 
     private String clusterUpdated(StoredOkeCluster cluster) {

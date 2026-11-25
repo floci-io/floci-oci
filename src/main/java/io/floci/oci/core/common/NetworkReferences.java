@@ -56,15 +56,24 @@ public interface NetworkReferences {
         return instance != null && instance.isResolvable() ? instance.get() : NONE;
     }
 
-    /** The string ids of a JSON list field, or an empty list when it is absent or not a list. */
-    static List<String> ids(Object value) {
+    /**
+     * The string ids of the JSON list field {@code field}, or an empty list when it is absent. A
+     * value that is not a list of strings is a 400 InvalidParameter, so a malformed reference is
+     * never stored unchecked.
+     */
+    static List<String> ids(Object value, String field) {
         List<String> ids = new ArrayList<>();
-        if (value instanceof Collection<?> items) {
-            for (Object item : items) {
-                if (item != null) {
-                    ids.add(String.valueOf(item));
-                }
+        if (value == null) {
+            return ids;
+        }
+        if (!(value instanceof Collection<?> items)) {
+            throw OciException.invalidParameter(field + " must be a list of OCIDs");
+        }
+        for (Object item : items) {
+            if (!(item instanceof String id)) {
+                throw OciException.invalidParameter(field + " must be a list of OCIDs");
             }
+            ids.add(id);
         }
         return ids;
     }

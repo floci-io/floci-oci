@@ -264,7 +264,7 @@ public class PsqlService implements Resettable, CompartmentUsage {
         Map<String, Object> storage = storageDetails(PsqlRequests.requireMap(details, "storageDetails"));
         Map<String, Object> network = networkDetails(PsqlRequests.requireMap(details, "networkDetails"));
         networkReferences.requireSubnet((String) network.get("subnetId"));
-        networkReferences.requireNsgs(NetworkReferences.ids(network.get("nsgIds")));
+        networkReferences.requireNsgs(NetworkReferences.ids(network.get("nsgIds"), "networkDetails.nsgIds"));
         RestoreSource source = sourceDetails(PsqlRequests.map(details, "source"), major);
         // A replica may leave out credentials: it takes the primary's admin username, and a
         // password nobody knows until ResetMasterUserPassword sets one, since none is stored.
@@ -428,7 +428,7 @@ public class PsqlService implements Resettable, CompartmentUsage {
         Map<String, Object> insights = odspInsightDetails(PsqlRequests.map(details, "odspInsightDetails"));
         Map<String, Object> requestedNetwork = PsqlRequests.map(details, "networkDetails");
         if (requestedNetwork != null) {
-            networkReferences.requireNsgs(NetworkReferences.ids(requestedNetwork.get("nsgIds")));
+            networkReferences.requireNsgs(NetworkReferences.ids(requestedNetwork.get("nsgIds"), "networkDetails.nsgIds"));
         }
 
         if (PsqlRequests.string(details, "displayName") != null) {

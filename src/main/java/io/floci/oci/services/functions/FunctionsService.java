@@ -226,7 +226,7 @@ public class FunctionsService implements Resettable, CompartmentUsage {
 
     private void requireNsgs(Map<String, Object> settings) {
         if (settings != null) {
-            networkReferences.requireNsgs(NetworkReferences.ids(settings.get("networkSecurityGroupIds")));
+            networkReferences.requireNsgs(NetworkReferences.ids(settings.get("networkSecurityGroupIds"), "networkSecurityGroupIds"));
         }
     }
 

@@ -89,6 +89,27 @@ class NetworkReferencesRestIntegrationTest {
     }
 
     @Test
+    void aNetworkSecurityGroupListThatIsNotAListIsInvalid() {
+        malformed("/20220915/dbSystems", dbSystem(Map.of("subnetId", network.subnetId(), "nsgIds", MISSING_NSG)),
+                "networkDetails.nsgIds");
+        malformed("/20180222/clusters", cluster(Map.of("subnetId", network.subnetId(), "nsgIds", MISSING_NSG), List.of()),
+                "endpointConfig.nsgIds");
+        malformed("/20181201/applications",
+                Map.of("compartmentId", compartment, "displayName", "refs-app-malformed",
+                        "subnetIds", List.of(network.subnetId()), "networkSecurityGroupIds", MISSING_NSG),
+                "networkSecurityGroupIds");
+    }
+
+    private static void malformed(String path, Object body, String field) {
+        given().contentType("application/json").body(body)
+            .when().post(path)
+            .then().statusCode(400)
+                .header("opc-request-id", notNullValue())
+                .body("code", equalTo("InvalidParameter"))
+                .body("message", equalTo(field + " must be a list of OCIDs"));
+    }
+
+    @Test
     void okeAcceptsNetworkResourcesThatExist() {
         given().contentType("application/json")
                 .body(cluster(Map.of("subnetId", network.subnetId(), "nsgIds", List.of(network.nsgId())),
