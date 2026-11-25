@@ -14,6 +14,7 @@ import io.floci.oci.core.common.Regions;
 import io.floci.oci.core.common.Resettable;
 import io.floci.oci.core.common.ServiceDescriptor;
 import io.floci.oci.core.common.ServiceRegistry;
+import io.floci.oci.core.common.dns.EmbeddedDnsServer;
 import io.floci.oci.core.storage.StorageBackend;
 import io.floci.oci.core.storage.StorageFactory;
 import io.floci.oci.core.storage.TenancyAwareStorageBackend;
@@ -73,6 +74,7 @@ public class ArtifactsService implements Resettable, CompartmentUsage, Container
             "application/vnd.docker.distribution.manifest.v2+json");
     private static final String CONFIGURATION_KEY = "configuration";
     private static final long GIGABYTE = 1024L * 1024L * 1024L;
+    private static final String OCIR_DOMAIN = EmbeddedDnsServer.DEFAULT_SUFFIX;
 
     private final StorageBackend<String, StoredContainerRepository> repositories;
     private final StorageBackend<String, Map<String, Object>> configurations;
@@ -695,6 +697,37 @@ public class ArtifactsService implements Resettable, CompartmentUsage, Container
                 + Regions.code(region.get()).toLowerCase(Locale.ROOT) + "/" + path;
         LOG.debugv("OCIR image {0} is pulled as {1}", image, pullable);
         return pullable;
+    }
+
+    /**
+     * The local OCIR as a registry mirror for one region. The hosts are the names an image reference
+     * may give this emulator's OCIR in that region ({@code iad.ocir.localhost.floci.io},
+     * {@code us-ashburn-1.ocir.localhost.floci.io}, {@code ocir.us-ashburn-1.oci.localhost.floci.io}),
+     * each with and without floci-oci's port, also under the configured hostname. They all mirror to
+     * the registry sidecar over plain HTTP, with the region code as the path prefix the data plane
+     * stores the region's images under. The registry is started, not waited for: the runtime retries
+     * a pull, and a cluster create should not wait on a registry nobody may use. Empty when Artifacts
+     * is disabled or in mock mode.
+     */
+    @Override
+    public Optional<RegistryMirror> registryMirror(String region) {
+        if (region == null || !config.services().artifacts().enabled() || mock()) {
+            return Optional.empty();
+        }
+        registry.ensureStarted();
+        String code = Regions.code(region).toLowerCase(Locale.ROOT);
+        List<String> domains = new ArrayList<>();
+        domains.add(OCIR_DOMAIN);
+        config.hostname().filter(h -> !h.isBlank() && !h.equalsIgnoreCase(OCIR_DOMAIN)).ifPresent(domains::add);
+        List<String> hosts = new ArrayList<>();
+        for (String domain : domains) {
+            for (String host : List.of(code + ".ocir." + domain, region + ".ocir." + domain,
+                    "ocir." + region + ".oci." + domain)) {
+                hosts.add(host);
+                hosts.add(host + ":" + config.port());
+            }
+        }
+        return Optional.of(new RegistryMirror(hosts, "http://" + registry.sidecarEndpoint(), code + "/"));
     }
 
     ArtifactsRegistryManager registry() {

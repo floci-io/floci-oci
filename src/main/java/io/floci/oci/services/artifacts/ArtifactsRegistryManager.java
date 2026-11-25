@@ -37,6 +37,7 @@ public class ArtifactsRegistryManager {
     private static final int REGISTRY_PORT = 5000;
     private static final String BASE_NAME = "ocir-registry";
     private static final Duration READY_TIMEOUT = Duration.ofSeconds(30);
+    private static final String HOST_DOCKER_INTERNAL = "host.docker.internal";
 
     private final ContainerBuilder containerBuilder;
     private final ContainerLifecycleManager lifecycleManager;
@@ -159,6 +160,23 @@ public class ArtifactsRegistryManager {
             Thread.currentThread().interrupt();
             return false;
         }
+    }
+
+    /**
+     * Where another sidecar reaches the registry, {@code null} until it has started. When floci-oci
+     * runs in a container that is the address floci-oci itself uses, the registry's IP on the
+     * network the sidecars share. On the host the sidecars sit on Docker's {@code bridge}, so it is
+     * the published port on the daemon's host, which {@code host.docker.internal} names from inside a
+     * container (Docker Desktop provides it; on Linux the sidecar adds it as {@code host-gateway}).
+     */
+    public String sidecarEndpoint() {
+        if (containerId == null) {
+            return null;
+        }
+        if (containerDetector.isRunningInContainer()) {
+            return endpoint;
+        }
+        return HOST_DOCKER_INTERNAL + ":" + hostPort;
     }
 
     public boolean isStarted() {
