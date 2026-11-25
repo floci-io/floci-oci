@@ -321,6 +321,34 @@ class NosqlServiceTest {
     }
 
     @Test
+    void tableChangesReplaceTheStoredTableSoReadersKeepAStableSnapshot() {
+        String table = createUsers();
+        StoredNosqlTable read = service.getTable(table, null);
+        Map<String, Object> wire = NosqlWire.table(read);
+
+        service.updateTable(table, null, "ALTER TABLE users (ADD email STRING, DROP info)", null, null, null,
+                null);
+        service.createIndex(table, null, "nameIdx", List.of(new IndexKey("name", null, null)), null);
+        service.changeCompartment(table, null, "ocid1.compartment.oc1..other", null);
+
+        assertEquals(List.of("id", "name", "info"), read.getColumns().stream().map(c -> c.getName()).toList());
+        assertTrue(read.getIndexes().isEmpty());
+        assertEquals(COMPARTMENT, read.getCompartmentId());
+        assertEquals(wire, NosqlWire.table(read));
+
+        StoredNosqlTable current = service.getTable(table, null);
+        assertNotSame(read, current);
+        assertEquals(List.of("id", "name", "email"), current.getColumns().stream().map(c -> c.getName()).toList());
+        assertEquals(1, current.getIndexes().size());
+
+        service.deleteIndex(table, null, "nameIdx", null, null);
+        assertEquals(1, current.getIndexes().size());
+        service.deleteTable(table, null, null, null);
+        assertEquals("ACTIVE", current.getLifecycleState());
+        assertEquals("DELETED", service.getTable(table, null).getLifecycleState());
+    }
+
+    @Test
     void indexesReportUpdateTable() {
         String table = createUsers();
         NosqlService.WorkRequestOutcome created = service.createIndex(table, null, "cityIdx",

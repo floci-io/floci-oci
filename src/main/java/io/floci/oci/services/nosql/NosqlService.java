@@ -362,7 +362,7 @@ public class NosqlService implements CompartmentUsage, Resettable {
                                                        Boolean isIfExists, String ifMatch) {
         StoredNosqlTable table;
         try {
-            table = liveTable(tableNameOrId, compartmentId);
+            table = copyOf(liveTable(tableNameOrId, compartmentId));
         } catch (OciException e) {
             if (Boolean.TRUE.equals(isIfExists) && e.getHttpStatus() == 404) {
                 String wr = workRequests.succeeded(WR_SERVICE, "DELETE_TABLE", compartmentId, List.of());
@@ -386,7 +386,7 @@ public class NosqlService implements CompartmentUsage, Resettable {
     public synchronized WorkRequestOutcome changeCompartment(String tableNameOrId, String fromCompartmentId,
                                                              String toCompartmentId, String ifMatch) {
         require(toCompartmentId, "toCompartmentId");
-        StoredNosqlTable table = liveTable(tableNameOrId, fromCompartmentId);
+        StoredNosqlTable table = copyOf(liveTable(tableNameOrId, fromCompartmentId));
         Etags.checkIfMatch(ifMatch, table.getEtag());
         if (!toCompartmentId.equals(table.getCompartmentId())
                 && findByName(toCompartmentId, table.getName()).isPresent()) {
@@ -406,7 +406,7 @@ public class NosqlService implements CompartmentUsage, Resettable {
         if (keys == null || keys.isEmpty()) {
             throw OciException.missingParameter("keys is required");
         }
-        StoredNosqlTable table = liveTable(tableNameOrId, compartmentId);
+        StoredNosqlTable table = copyOf(liveTable(tableNameOrId, compartmentId));
         if (table.index(name) != null) {
             if (Boolean.TRUE.equals(isIfNotExists)) {
                 return outcome("UPDATE_TABLE", table, "UPDATED");
@@ -468,7 +468,7 @@ public class NosqlService implements CompartmentUsage, Resettable {
 
     public synchronized WorkRequestOutcome deleteIndex(String tableNameOrId, String compartmentId,
                                                        String indexName, Boolean isIfExists, String ifMatch) {
-        StoredNosqlTable table = liveTable(tableNameOrId, compartmentId);
+        StoredNosqlTable table = copyOf(liveTable(tableNameOrId, compartmentId));
         Index index = table.index(indexName);
         if (index == null) {
             if (Boolean.TRUE.equals(isIfExists)) {
@@ -766,8 +766,12 @@ public class NosqlService implements CompartmentUsage, Resettable {
     }
 
     /**
-     * A deep copy of a stored table. A mutation works on the copy and stores it only once every
-     * check has passed, so a rejected request leaves the stored table as it was.
+     * A deep copy of a stored table. Every schema, index, limit, tag or state change works on a
+     * copy and stores it only once every check has passed, so a rejected request leaves the
+     * stored table as it was, and a reader outside the lock (GetTable and its wire mapping,
+     * GetRow, Query) keeps a table object that no writer changes under it. PutRow advances the
+     * {@code identityNext} and {@code versionSequence} counters in place, under the lock: they
+     * are scalars that no reader maps to the wire.
      */
     private static StoredNosqlTable copyOf(StoredNosqlTable table) {
         return MAPPER.convertValue(table, StoredNosqlTable.class);
