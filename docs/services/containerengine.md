@@ -71,6 +71,7 @@ KUBECONFIG=./kubeconfig kubectl get namespaces
 
 # Push an image to the local OCIR, then run it in the cluster by its OCIR reference
 NS=$(oci artifacts container configuration get $E --compartment-id "$TENANCY" --query data.namespace --raw-output)
+oci artifacts container repository create $E --compartment-id "$TENANCY" --display-name demo/busybox
 docker login iad.ocir.localhost.floci.io:4599 -u "$NS/user" -p anything
 docker tag busybox:1.36 iad.ocir.localhost.floci.io:4599/$NS/demo/busybox:1
 docker push iad.ocir.localhost.floci.io:4599/$NS/demo/busybox:1
