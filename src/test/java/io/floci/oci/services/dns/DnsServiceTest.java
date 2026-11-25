@@ -228,11 +228,13 @@ class DnsServiceTest {
         StoredZone zone = globalZone("norm.example");
         service.patchRecords(zone.getId(), null, RecordScope.ZONE, List.of(
                 op("ADD", "v6.norm.example", "AAAA", "2001:0db8:85a3:0000:0000:8a2e:0370:7334", 30),
+                op("ADD", "mapped.norm.example", "AAAA", "0:0:0:0:0:ffff:c000:201", 30),
                 op("ADD", "alias.norm.example", "CNAME", "target.norm.example", 30),
                 op("ADD", "txt.norm.example", "TXT", "v=spf1 \"quoted string\" ~all", 30),
                 op("ADD", "mail.norm.example", "MX", "10 mx.norm.example", 30)), null);
 
         assertEquals("2001:db8:85a3::8a2e:370:7334", rrset(zone, "v6.norm.example", "AAAA").getFirst().getRdata());
+        assertEquals("::ffff:192.0.2.1", rrset(zone, "mapped.norm.example", "AAAA").getFirst().getRdata());
         assertEquals("target.norm.example.", rrset(zone, "alias.norm.example", "CNAME").getFirst().getRdata());
         assertEquals("\"v=spf1\" \"quoted string\" \"~all\"",
                 rrset(zone, "txt.norm.example", "TXT").getFirst().getRdata());

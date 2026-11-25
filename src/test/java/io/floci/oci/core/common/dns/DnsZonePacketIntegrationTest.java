@@ -174,6 +174,29 @@ class DnsZonePacketIntegrationTest {
     }
 
     @Test
+    void ipv4MappedAaaaIsAnsweredAsSixteenBytes() throws Exception {
+        String zone = createZone(uniqueName());
+        add(zone, "mapped." + zone, "AAAA", "::FFFF:c000:0201", 45);
+        add(zone, "compat." + zone, "AAAA", "::192.0.2.1", 45);
+
+        List<String> echoed = dns.records(dns.getZone(zone, null), DnsService.RecordScope.ZONE,
+                DnsService.RecordFilter.NONE).stream()
+                .filter(r -> "AAAA".equals(r.getRtype())).map(r -> r.getDomain() + " " + r.getRdata()).toList();
+        assertEquals(List.of("compat." + zone + " ::c000:201", "mapped." + zone + " ::ffff:192.0.2.1"), echoed);
+
+        byte[] mapped = query(DnsTestQuery.query("mapped." + zone, 28, 0x6666));
+        assertHeader(mapped, 0x6666, 0, 1, 0);
+        assertEquals(16, ByteBuffer.wrap(mapped).getShort(mapped.length - 18), "RDLENGTH");
+        assertArrayEquals(new byte[]{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, (byte) 0xFF, (byte) 0xFF, (byte) 192, 0, 2, 1},
+                Arrays.copyOfRange(mapped, mapped.length - 16, mapped.length));
+
+        byte[] compat = query(DnsTestQuery.query("compat." + zone, 28, 0x6667));
+        assertHeader(compat, 0x6667, 0, 1, 0);
+        assertArrayEquals(new byte[]{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, (byte) 192, 0, 2, 1},
+                Arrays.copyOfRange(compat, compat.length - 16, compat.length));
+    }
+
+    @Test
     void namesOutsideEveryZoneAreLeftToTheUpstreams() {
         assertTrue(source.resolve("nothing-" + System.nanoTime() + ".invalid", 1).isEmpty());
         EmbeddedDnsServer server = new EmbeddedDnsServer(List.of(), List.of(source));

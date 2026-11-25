@@ -131,7 +131,7 @@ empty:
 | Type | Stored and returned as |
 |---|---|
 | `A` | the IPv4 address; anything else is `400 InvalidParameter` |
-| `AAAA` | the compressed IPv6 form: `2001:0db8:85a3:0000:0000:8a2e:0370:7334` becomes `2001:db8:85a3::8a2e:370:7334` |
+| `AAAA` | the compressed IPv6 form: `2001:0db8:85a3:0000:0000:8a2e:0370:7334` becomes `2001:db8:85a3::8a2e:370:7334`; an IPv4-mapped address stays IPv6, as `::ffff:192.0.2.1` |
 | `ALIAS`, `CNAME`, `DNAME`, `NS`, `PTR` | the name with a trailing dot |
 | `MX` | the preference and the exchange with a trailing dot |
 | `TXT`, `SPF` | every word or quoted string as its own quoted string: `v=spf1 ~all` becomes `"v=spf1" "~all"` |
@@ -164,3 +164,6 @@ closest evidence:
   stored without checking `sourceEndpointName`, since no endpoints exist; the association's
   `etag` is the VCN's.
 - **GetRRSet** for an RRSet with no records answers `200` with no items.
+- **IPv4-mapped AAAA** rdata is returned in the mixed notation RFC 5952 section 5 recommends
+  (`::ffff:192.0.2.1`). Terraform compares AAAA through Go's `net.ParseIP(...).String()`, which prints
+  both forms the same, so either echo gives an empty plan.

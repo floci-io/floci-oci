@@ -3,6 +3,7 @@ package io.floci.oci.core.common.dns;
 import io.netty.util.NetUtil;
 
 import java.io.ByteArrayOutputStream;
+import java.net.InetAddress;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 
@@ -21,7 +22,24 @@ public sealed interface DnsRecord {
 
         @Override
         public byte[] data() {
-            return NetUtil.createByteArrayFromIpAddressString(value);
+            return type == 28 ? ipv6Bytes(value) : NetUtil.createByteArrayFromIpAddressString(value);
+        }
+
+        /**
+         * The 16 bytes of an IPv6 literal. An IPv4-mapped address ({@code ::ffff:192.0.2.1}) stays 16
+         * bytes, where the JDK parses it to an {@code Inet4Address} and Netty's parser also rewrites an
+         * IPv4-compatible one ({@code ::192.0.2.1}) as mapped.
+         */
+        public static byte[] ipv6Bytes(String literal) {
+            byte[] bytes = InetAddress.ofLiteral(literal).getAddress();
+            if (bytes.length == 16) {
+                return bytes;
+            }
+            byte[] mapped = new byte[16];
+            mapped[10] = (byte) 0xFF;
+            mapped[11] = (byte) 0xFF;
+            System.arraycopy(bytes, 0, mapped, 12, 4);
+            return mapped;
         }
     }
 

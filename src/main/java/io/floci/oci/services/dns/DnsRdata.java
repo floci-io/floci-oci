@@ -1,9 +1,10 @@
 package io.floci.oci.services.dns;
 
 import io.floci.oci.core.common.OciException;
+import io.floci.oci.core.common.dns.DnsRecord;
 import io.netty.util.NetUtil;
 
-import java.net.InetAddress;
+import java.net.Inet6Address;
 import java.net.UnknownHostException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -106,11 +107,16 @@ final class DnsRdata {
         };
     }
 
-    /** RFC 5952 form, the one Go's {@code net.IP.String} prints (Terraform compares through it). */
+    /**
+     * RFC 5952 form, with an IPv4-mapped address kept as IPv6 in the mixed notation of RFC 5952 section 5
+     * ({@code ::ffff:192.0.2.1}). Go's {@code net.IP.String} prints that one as dotted IPv4, but Terraform
+     * passes both sides through it, so either echo compares equal.
+     */
     private static String compressed(String ipv6) {
         try {
-            return NetUtil.toAddressString(InetAddress.getByAddress(NetUtil.createByteArrayFromIpAddressString(ipv6)));
-        } catch (UnknownHostException e) {
+            byte[] bytes = DnsRecord.Address.ipv6Bytes(ipv6);
+            return NetUtil.toAddressString(Inet6Address.getByAddress(null, bytes, -1), true);
+        } catch (IllegalArgumentException | UnknownHostException e) {
             throw OciException.invalidParameter("AAAA rdata must be an IPv6 address, got " + ipv6);
         }
     }
