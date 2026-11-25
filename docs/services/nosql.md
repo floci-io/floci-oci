@@ -149,6 +149,9 @@ and may differ from the real service:
 - Column `type` is the upper-case DDL spelling (`INTEGER`, `TIMESTAMP(3)`, `ARRAY(STRING)`);
   a UUID column is `STRING` with `isAsUuid`. Oracle's reference writes type names in upper
   case, but no source shows the REST field.
+- An ENUM value must match one of the declared symbols exactly, case included. A RECORD
+  value names its fields case-insensitively, may not name a field the type does not declare,
+  and is stored with every declared field, an absent one as null.
 - `schema.ttl` for an hour-based TTL is rounded up to whole days.
 - Row versions are opaque base64 counters, and the row `etag` equals the version.
 - `usage` units are nominal: one read or write unit per row operation, and one read unit per

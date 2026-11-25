@@ -28,6 +28,22 @@ public final class NosqlDdlParser {
         String tableName();
     }
 
+    /**
+     * A parsed column type. {@code text} is the canonical DDL spelling and {@code base} its first
+     * word; {@code element} is the item type of an ARRAY or MAP, {@code fields} the fields of a
+     * RECORD and {@code symbols} the values of an ENUM.
+     */
+    public record ColumnType(String text, String base, ColumnType element, List<RecordField> fields,
+                             List<String> symbols) {
+
+        static ColumnType simple(String text, String base) {
+            return new ColumnType(text, base, null, List.of(), List.of());
+        }
+    }
+
+    public record RecordField(String name, ColumnType type) {
+    }
+
     public record IdentityDef(boolean always, boolean onNull, long start, long increment) {
     }
 
@@ -76,6 +92,14 @@ public final class NosqlDdlParser {
 
     public static DdlStatement parse(String ddl) {
         return new NosqlDdlParser(ddl).statement();
+    }
+
+    /** Parses a column type in its canonical spelling, as {@link ColumnDef#type()} holds it. */
+    public static ColumnType parseType(String type) {
+        NosqlDdlParser parser = new NosqlDdlParser(type);
+        ColumnType parsed = parser.type();
+        parser.tokens.expectEnd();
+        return parsed;
     }
 
     private DdlStatement statement() {
@@ -255,7 +279,7 @@ public final class NosqlDdlParser {
 
     private ColumnDef columnDefinition() {
         String name = tokens.identifier("a column name");
-        TypeSpec type = type();
+        ColumnType type = type();
         boolean asUuid = false;
         boolean uuidGenerated = false;
         if ("STRING".equals(type.base()) && tokens.peek().is("AS") && tokens.peek(1).is("UUID")) {
@@ -295,7 +319,7 @@ public final class NosqlDdlParser {
                 identity);
     }
 
-    private IdentityDef identity(String column, TypeSpec type) {
+    private IdentityDef identity(String column, ColumnType type) {
         tokens.expect("GENERATED");
         boolean always;
         boolean onNull = false;
@@ -366,10 +390,7 @@ public final class NosqlDdlParser {
         };
     }
 
-    private record TypeSpec(String text, String base) {
-    }
-
-    private TypeSpec type() {
+    private ColumnType type() {
         Token token = tokens.peek();
         if (token.kind() != Kind.IDENT) {
             throw tokens.error("Expected a column type");
@@ -378,14 +399,14 @@ public final class NosqlDdlParser {
         tokens.next();
         return switch (base) {
             case "INTEGER", "LONG", "FLOAT", "DOUBLE", "NUMBER", "BOOLEAN", "JSON", "STRING" ->
-                    new TypeSpec(base, base);
+                    ColumnType.simple(base, base);
             case "BINARY", "TIMESTAMP" -> {
                 if (tokens.acceptSymbol("(")) {
                     long size = tokens.integer("a size or precision");
                     tokens.expectSymbol(")");
-                    yield new TypeSpec(base + "(" + size + ")", base);
+                    yield ColumnType.simple(base + "(" + size + ")", base);
                 }
-                yield new TypeSpec(base, base);
+                yield ColumnType.simple(base, base);
             }
             case "ENUM" -> {
                 tokens.expectSymbol("(");
@@ -394,23 +415,25 @@ public final class NosqlDdlParser {
                     values.add(tokens.identifier("an ENUM value"));
                 } while (tokens.acceptSymbol(","));
                 tokens.expectSymbol(")");
-                yield new TypeSpec("ENUM(" + String.join(", ", values) + ")", base);
+                yield new ColumnType("ENUM(" + String.join(", ", values) + ")", base, null, List.of(),
+                        List.copyOf(values));
             }
             case "ARRAY", "MAP" -> {
                 tokens.expectSymbol("(");
-                TypeSpec element = type();
+                ColumnType element = type();
                 tokens.expectSymbol(")");
-                yield new TypeSpec(base + "(" + element.text() + ")", base);
+                yield new ColumnType(base + "(" + element.text() + ")", base, element, List.of(), List.of());
             }
             case "RECORD" -> {
                 tokens.expectSymbol("(");
-                List<String> fields = new ArrayList<>();
+                List<RecordField> fields = new ArrayList<>();
                 do {
                     String field = tokens.identifier("a RECORD field name");
-                    fields.add(field + " " + type().text());
+                    fields.add(new RecordField(field, type()));
                 } while (tokens.acceptSymbol(","));
                 tokens.expectSymbol(")");
-                yield new TypeSpec("RECORD(" + String.join(", ", fields) + ")", base);
+                String text = String.join(", ", fields.stream().map(f -> f.name() + " " + f.type().text()).toList());
+                yield new ColumnType("RECORD(" + text + ")", base, null, List.copyOf(fields), List.of());
             }
             default -> throw new NosqlSyntaxException("Unknown column type " + token.text()
                     + " at position " + token.position() + "; expected one of " + SCALAR_TYPES

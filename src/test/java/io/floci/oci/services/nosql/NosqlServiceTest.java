@@ -13,6 +13,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -220,6 +221,50 @@ class NosqlServiceTest {
         assertNotNull(put(table, Map.of("id", 1, "extra", 2), null, null).version());
         assertThrows(OciException.class, () -> service.getRow(table, null, List.of("name:x")));
         assertThrows(OciException.class, () -> service.getRow(table, null, List.of("id:abc")));
+    }
+
+    @Test
+    void collectionMembersAndEnumValuesAreValidatedAgainstTheFullType() {
+        String table = service.createTable("typed", COMPARTMENT, "CREATE TABLE typed (id INTEGER,"
+                + " scores ARRAY(INTEGER), address RECORD(zip INTEGER, city STRING), color ENUM(red, green),"
+                + " labels MAP(STRING), PRIMARY KEY (id))", null, null, null, null).tableId();
+
+        assertTypeRejected(table, "scores", List.of(1, "bad"), "Column scores[1] is INTEGER and cannot hold bad");
+        assertTypeRejected(table, "address", Map.of("zip", "bad"),
+                "Column address.zip is INTEGER and cannot hold bad");
+        assertTypeRejected(table, "address", Map.of("street", "Main"),
+                "Column address is RECORD(zip INTEGER, city STRING) and has no field street");
+        assertTypeRejected(table, "color", "blue", "Column color is ENUM(red, green) and cannot hold blue");
+        assertTypeRejected(table, "labels", Map.of("a", 1), "Column labels.a is STRING and cannot hold 1");
+        List<Object> withNull = new ArrayList<>();
+        withNull.add(null);
+        assertTypeRejected(table, "scores", withNull, "Column scores[0] is INTEGER and cannot hold null");
+
+        Map<String, Object> value = new LinkedHashMap<>();
+        value.put("id", 1);
+        value.put("scores", List.of(1, 2L));
+        value.put("address", Map.of("ZIP", 10115));
+        value.put("color", "green");
+        value.put("labels", Map.of("a", "x"));
+        assertNotNull(put(table, value, null, null).version());
+
+        Map<String, Object> stored = service.getRow(table, null, List.of("id:1")).orElseThrow().value();
+        assertEquals(List.of(1, 2), stored.get("scores"));
+        Map<String, Object> address = new LinkedHashMap<>();
+        address.put("zip", 10115);
+        address.put("city", null);
+        assertEquals(address, stored.get("address"));
+        assertEquals("green", stored.get("color"));
+    }
+
+    private void assertTypeRejected(String table, String column, Object columnValue, String message) {
+        Map<String, Object> value = new LinkedHashMap<>();
+        value.put("id", 1);
+        value.put(column, columnValue);
+        OciException error = assertThrows(OciException.class, () -> put(table, value, null, null));
+        assertEquals(400, error.getHttpStatus());
+        assertEquals("InvalidParameter", error.getCode());
+        assertEquals(message, error.getMessage());
     }
 
     @Test

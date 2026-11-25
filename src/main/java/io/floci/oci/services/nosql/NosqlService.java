@@ -19,11 +19,13 @@ import io.floci.oci.core.workrequest.WorkRequestService;
 import io.floci.oci.services.nosql.ddl.NosqlDdlParser;
 import io.floci.oci.services.nosql.ddl.NosqlDdlParser.AlterTable;
 import io.floci.oci.services.nosql.ddl.NosqlDdlParser.ColumnDef;
+import io.floci.oci.services.nosql.ddl.NosqlDdlParser.ColumnType;
 import io.floci.oci.services.nosql.ddl.NosqlDdlParser.CreateIndex;
 import io.floci.oci.services.nosql.ddl.NosqlDdlParser.CreateTable;
 import io.floci.oci.services.nosql.ddl.NosqlDdlParser.DdlStatement;
 import io.floci.oci.services.nosql.ddl.NosqlDdlParser.DropIndex;
 import io.floci.oci.services.nosql.ddl.NosqlDdlParser.DropTable;
+import io.floci.oci.services.nosql.ddl.NosqlDdlParser.RecordField;
 import io.floci.oci.services.nosql.model.StoredNosqlRow;
 import io.floci.oci.services.nosql.model.StoredNosqlTable;
 import io.floci.oci.services.nosql.model.StoredNosqlTable.Column;
@@ -853,73 +855,140 @@ public class NosqlService implements CompartmentUsage, Resettable {
         };
     }
 
-    /** Validates {@code raw} against the column type and returns the value to store. */
+    /**
+     * Validates {@code raw} against the full column type and returns the value to store: ARRAY,
+     * MAP and RECORD members are checked against their declared types, and an ENUM value against
+     * its symbols.
+     */
     static Object coerce(Column column, Object raw) {
-        String type = column.getBaseType();
-        return switch (type) {
+        ColumnType type;
+        try {
+            type = NosqlDdlParser.parseType(column.getType());
+        } catch (NosqlSyntaxException e) {
+            throw new IllegalStateException("Column " + column.getName() + " has an unreadable type "
+                    + column.getType(), e);
+        }
+        Object value = coerce(column.getName(), type, raw);
+        if (column.isAsUuid() && value instanceof String s) {
+            try {
+                UUID.fromString(s);
+            } catch (IllegalArgumentException e) {
+                throw OciException.invalidParameter("Column " + column.getName()
+                        + " is a UUID column and " + s + " is not a UUID");
+            }
+        }
+        return value;
+    }
+
+    /** {@code path} names the value in messages: the column, then {@code [i]} or {@code .field} steps. */
+    private static Object coerce(String path, ColumnType type, Object raw) {
+        return switch (type.base()) {
             case "INTEGER" -> {
-                long value = integral(column, raw);
+                long value = integral(path, type, raw);
                 if (value > Integer.MAX_VALUE || value < Integer.MIN_VALUE) {
-                    throw typeMismatch(column, raw);
+                    throw typeMismatch(path, type, raw);
                 }
                 yield (int) value;
             }
-            case "LONG" -> integral(column, raw);
+            case "LONG" -> integral(path, type, raw);
             case "FLOAT", "DOUBLE" -> {
                 if (!(raw instanceof Number n)) {
-                    throw typeMismatch(column, raw);
+                    throw typeMismatch(path, type, raw);
                 }
                 yield n.doubleValue();
             }
             case "NUMBER" -> {
                 if (!(raw instanceof Number)) {
-                    throw typeMismatch(column, raw);
+                    throw typeMismatch(path, type, raw);
                 }
                 yield raw;
             }
             case "BOOLEAN" -> {
                 if (!(raw instanceof Boolean)) {
-                    throw typeMismatch(column, raw);
+                    throw typeMismatch(path, type, raw);
                 }
                 yield raw;
             }
-            case "STRING", "ENUM", "BINARY" -> {
+            case "STRING", "BINARY" -> {
                 if (!(raw instanceof String s)) {
-                    throw typeMismatch(column, raw);
+                    throw typeMismatch(path, type, raw);
                 }
-                if (column.isAsUuid()) {
-                    try {
-                        UUID.fromString(s);
-                    } catch (IllegalArgumentException e) {
-                        throw OciException.invalidParameter("Column " + column.getName()
-                                + " is a UUID column and " + s + " is not a UUID");
-                    }
+                yield s;
+            }
+            case "ENUM" -> {
+                if (!(raw instanceof String s) || !type.symbols().contains(s)) {
+                    throw typeMismatch(path, type, raw);
                 }
                 yield s;
             }
             case "TIMESTAMP" -> {
                 if (!(raw instanceof String s) || !isTimestamp(s)) {
-                    throw typeMismatch(column, raw);
+                    throw typeMismatch(path, type, raw);
                 }
                 yield s;
             }
             case "ARRAY" -> {
-                if (!(raw instanceof List<?>)) {
-                    throw typeMismatch(column, raw);
+                if (!(raw instanceof List<?> list)) {
+                    throw typeMismatch(path, type, raw);
                 }
-                yield raw;
+                List<Object> items = new ArrayList<>();
+                for (int i = 0; i < list.size(); i++) {
+                    items.add(member(path + "[" + i + "]", type.element(), list.get(i)));
+                }
+                yield items;
             }
-            case "MAP", "RECORD" -> {
-                if (!(raw instanceof Map<?, ?>)) {
-                    throw typeMismatch(column, raw);
+            case "MAP" -> {
+                if (!(raw instanceof Map<?, ?> map)) {
+                    throw typeMismatch(path, type, raw);
                 }
-                yield raw;
+                Map<String, Object> entries = new LinkedHashMap<>();
+                for (Map.Entry<?, ?> entry : map.entrySet()) {
+                    String key = String.valueOf(entry.getKey());
+                    entries.put(key, member(path + "." + key, type.element(), entry.getValue()));
+                }
+                yield entries;
+            }
+            case "RECORD" -> {
+                if (!(raw instanceof Map<?, ?> map)) {
+                    throw typeMismatch(path, type, raw);
+                }
+                yield record(path, type, map);
             }
             default -> raw;
         };
     }
 
-    private static long integral(Column column, Object raw) {
+    /** An ARRAY item or MAP value: only a JSON item type admits null. */
+    private static Object member(String path, ColumnType type, Object raw) {
+        if (raw == null) {
+            if (!"JSON".equals(type.base())) {
+                throw typeMismatch(path, type, null);
+            }
+            return null;
+        }
+        return coerce(path, type, raw);
+    }
+
+    /** A RECORD value has every declared field, in declared order; an absent field is null. */
+    private static Map<String, Object> record(String path, ColumnType type, Map<?, ?> raw) {
+        Map<String, Object> given = new LinkedHashMap<>();
+        for (Map.Entry<?, ?> entry : raw.entrySet()) {
+            String name = String.valueOf(entry.getKey());
+            RecordField field = type.fields().stream().filter(f -> f.name().equalsIgnoreCase(name))
+                    .findFirst()
+                    .orElseThrow(() -> OciException.invalidParameter("Column " + path + " is " + type.text()
+                            + " and has no field " + name));
+            given.put(field.name(), entry.getValue());
+        }
+        Map<String, Object> record = new LinkedHashMap<>();
+        for (RecordField field : type.fields()) {
+            Object value = given.get(field.name());
+            record.put(field.name(), value == null ? null : coerce(path + "." + field.name(), field.type(), value));
+        }
+        return record;
+    }
+
+    private static long integral(String path, ColumnType type, Object raw) {
         if (raw instanceof Integer || raw instanceof Long || raw instanceof Short || raw instanceof Byte) {
             return ((Number) raw).longValue();
         }
@@ -932,11 +1001,11 @@ public class NosqlService implements CompartmentUsage, Resettable {
                 try {
                     return decimal.longValueExact();
                 } catch (ArithmeticException e) {
-                    throw typeMismatch(column, raw);
+                    throw typeMismatch(path, type, raw);
                 }
             }
         }
-        throw typeMismatch(column, raw);
+        throw typeMismatch(path, type, raw);
     }
 
     private static boolean isTimestamp(String s) {
@@ -963,6 +1032,10 @@ public class NosqlService implements CompartmentUsage, Resettable {
     private static OciException typeMismatch(Column column, Object raw) {
         return OciException.invalidParameter("Column " + column.getName() + " is " + column.getType()
                 + " and cannot hold " + raw);
+    }
+
+    private static OciException typeMismatch(String path, ColumnType type, Object raw) {
+        return OciException.invalidParameter("Column " + path + " is " + type.text() + " and cannot hold " + raw);
     }
 
     /** Parses GetRow/DeleteRow {@code key} values, each {@code column:value}, into typed key values. */
