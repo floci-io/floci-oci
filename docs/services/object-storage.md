@@ -42,6 +42,10 @@ oci os object get $E --namespace floci-local --bucket-name demo \
   OCID>` that tenancy's (a compartment OCID resolves to the caller's namespace).
 - A namespace in the path that is not the caller's is answered with `404 NamespaceNotFound`,
   as on real OCI. Ask `GetNamespace` for the namespace instead of hard-coding one.
+- `CreatePreauthenticatedRequest` returns `accessUri`, the relative `/p/{token}/n/…` path, and
+  `fullPath`, the absolute URL: the request's host when it names a region, otherwise
+  `FLOCI_OCI_BASE_URL` (or `FLOCI_OCI_HOSTNAME`). As on real OCI, the URL is shown only at
+  creation: Get and List return the summary, with neither field.
 - Pre-authenticated request URLs work for every tenancy: the token is looked up across tenancies
   in the request's region, must match the namespace in the URL, and acts as the tenancy that
   created it.

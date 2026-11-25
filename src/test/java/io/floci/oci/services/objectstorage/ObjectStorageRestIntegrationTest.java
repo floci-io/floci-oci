@@ -15,6 +15,7 @@ import java.util.Map;
 
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @QuarkusTest
@@ -399,6 +400,71 @@ class ObjectStorageRestIntegrationTest {
         given().when().get(accessUri).then().statusCode(404);
 
         given().when().delete("/n/" + NS + "/b/" + bucket + "/o/shared.txt").then().statusCode(204);
+        given().when().delete("/n/" + NS + "/b/" + bucket).then().statusCode(204);
+    }
+
+    @Test
+    void preauthenticatedRequestFullPathIsAbsoluteAndOnlyReturnedOnCreate() {
+        String bucket = uniqueBucket("it-par-fullpath");
+        createBucket(bucket);
+        given().contentType("text/plain").body("full-path-payload")
+            .when().put("/n/" + NS + "/b/" + bucket + "/o/report.txt")
+            .then().statusCode(200);
+
+        Map<String, Object> created = given()
+                .contentType("application/json")
+                .body(Map.of("name", "share", "accessType", "ObjectRead",
+                        "timeExpires", "2999-01-01T00:00:00Z", "objectName", "report.txt"))
+            .when().post("/n/" + NS + "/b/" + bucket + "/p")
+            .then().statusCode(200)
+                .header("opc-request-id", notNullValue())
+                .extract().path("$");
+        String accessUri = (String) created.get("accessUri");
+        String fullPath = (String) created.get("fullPath");
+        assertEquals(config.effectiveBaseUrl() + accessUri, fullPath);
+
+        given()
+            .when().get(fullPath.substring(config.effectiveBaseUrl().length()))
+            .then().statusCode(200).body(equalTo("full-path-payload"));
+
+        String parId = (String) created.get("id");
+        given()
+            .when().get("/n/" + NS + "/b/" + bucket + "/p/" + parId)
+            .then().statusCode(200)
+                .body("id", equalTo(parId))
+                .body("$", not(hasKey("accessUri")))
+                .body("$", not(hasKey("fullPath")));
+        given()
+            .when().get("/n/" + NS + "/b/" + bucket + "/p")
+            .then().statusCode(200)
+                .body("$", hasSize(1))
+                .body("[0]", not(hasKey("accessUri")))
+                .body("[0]", not(hasKey("fullPath")));
+
+        given().when().delete("/n/" + NS + "/b/" + bucket + "/p/" + parId).then().statusCode(204);
+        given().when().delete("/n/" + NS + "/b/" + bucket + "/o/report.txt").then().statusCode(204);
+        given().when().delete("/n/" + NS + "/b/" + bucket).then().statusCode(204);
+    }
+
+    @Test
+    void preauthenticatedRequestFullPathUsesTheRegionalHostOfTheRequest() {
+        String host = "objectstorage.us-ashburn-1.localhost.floci.io";
+        String bucket = uniqueBucket("it-par-host");
+        createBucket(bucket);
+
+        String fullPath = given().header("Host", host)
+                .contentType("application/json")
+                .body(Map.of("name", "uploads", "accessType", "AnyObjectWrite",
+                        "timeExpires", "2999-01-01T00:00:00Z"))
+            .when().post("/n/" + NS + "/b/" + bucket + "/p")
+            .then().statusCode(200)
+                .extract().path("fullPath");
+        assertTrue(fullPath.startsWith("http://" + host + "/p/"), fullPath);
+        assertTrue(fullPath.endsWith("/n/" + NS + "/b/" + bucket + "/o/"), fullPath);
+
+        String parId = given().when().get("/n/" + NS + "/b/" + bucket + "/p")
+                .then().statusCode(200).extract().path("[0].id");
+        given().when().delete("/n/" + NS + "/b/" + bucket + "/p/" + parId).then().statusCode(204);
         given().when().delete("/n/" + NS + "/b/" + bucket).then().statusCode(204);
     }
 

@@ -71,10 +71,16 @@ teardown_file() {
     run oci_cmd os preauth-request create -ns "$NAMESPACE" -bn "$BUCKET" --name cli-par \
         --access-type ObjectRead -on hello2.txt --time-expires "2030-01-01T00:00:00+00:00"
     [ "$status" -eq 0 ]
-    local uri
+    local uri full_path
     uri="$(json_get '.data."access-uri"')"
+    full_path="$(json_get '.data."full-path"')"
+    [ "$full_path" = "$ENDPOINT$uri" ]
 
     run curl -sf "$ENDPOINT$uri"
+    [ "$status" -eq 0 ]
+    [ "$output" = "hello-from-oci-cli" ]
+
+    run curl -sf "$full_path"
     [ "$status" -eq 0 ]
     [ "$output" = "hello-from-oci-cli" ]
 }

@@ -10,9 +10,11 @@ import com.oracle.bmc.objectstorage.model.CommitMultipartUploadPartDetails;
 import com.oracle.bmc.objectstorage.model.CopyObjectDetails;
 import com.oracle.bmc.objectstorage.model.CreateBucketDetails;
 import com.oracle.bmc.objectstorage.model.CreateMultipartUploadDetails;
+import com.oracle.bmc.objectstorage.model.CreatePreauthenticatedRequestDetails;
 import com.oracle.bmc.objectstorage.model.CreateReplicationPolicyDetails;
 import com.oracle.bmc.objectstorage.model.DeletedObjectResult;
 import com.oracle.bmc.objectstorage.model.FailedObjectResult;
+import com.oracle.bmc.objectstorage.model.PreauthenticatedRequest;
 import com.oracle.bmc.objectstorage.model.RenameObjectDetails;
 import com.oracle.bmc.objectstorage.model.ReplicationPolicy;
 import com.oracle.bmc.objectstorage.model.ReplicationPolicySummary;
@@ -22,9 +24,11 @@ import com.oracle.bmc.objectstorage.requests.CommitMultipartUploadRequest;
 import com.oracle.bmc.objectstorage.requests.CopyObjectRequest;
 import com.oracle.bmc.objectstorage.requests.CreateBucketRequest;
 import com.oracle.bmc.objectstorage.requests.CreateMultipartUploadRequest;
+import com.oracle.bmc.objectstorage.requests.CreatePreauthenticatedRequestRequest;
 import com.oracle.bmc.objectstorage.requests.CreateReplicationPolicyRequest;
 import com.oracle.bmc.objectstorage.requests.DeleteBucketRequest;
 import com.oracle.bmc.objectstorage.requests.DeleteObjectRequest;
+import com.oracle.bmc.objectstorage.requests.DeletePreauthenticatedRequestRequest;
 import com.oracle.bmc.objectstorage.requests.DeleteReplicationPolicyRequest;
 import com.oracle.bmc.objectstorage.requests.GetBucketRequest;
 import com.oracle.bmc.objectstorage.requests.GetNamespaceRequest;
@@ -46,7 +50,13 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 import java.io.ByteArrayInputStream;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
+import java.util.Date;
 import java.util.List;
 import java.util.Map;
 
@@ -108,6 +118,42 @@ class ObjectStorageCompatibilityTest {
                     assertThat(e.getStatusCode()).isEqualTo(404);
                     assertThat(e.getServiceCode()).isEqualTo("BucketNotFound");
                 });
+    }
+
+    @Test
+    void preauthenticatedRequestFullPathIsAnAbsoluteUploadUrl() throws Exception {
+        String bucket = createBucket("sdk-par");
+        PreauthenticatedRequest par = client.createPreauthenticatedRequest(
+                CreatePreauthenticatedRequestRequest.builder()
+                        .namespaceName(namespace).bucketName(bucket)
+                        .createPreauthenticatedRequestDetails(CreatePreauthenticatedRequestDetails.builder()
+                                .name("upload")
+                                .accessType(CreatePreauthenticatedRequestDetails.AccessType.ObjectWrite)
+                                .objectName("incoming/report.txt")
+                                .timeExpires(Date.from(Instant.parse("2030-01-01T00:00:00Z")))
+                                .build())
+                        .build()).getPreauthenticatedRequest();
+        assertThat(par.getAccessUri()).startsWith("/p/");
+        assertThat(par.getFullPath()).startsWith("http").endsWith(par.getAccessUri());
+
+        HttpResponse<String> put = HttpClient.newHttpClient().send(
+                HttpRequest.newBuilder(URI.create(par.getFullPath()))
+                        .PUT(HttpRequest.BodyPublishers.ofString("uploaded through fullPath"))
+                        .build(),
+                HttpResponse.BodyHandlers.ofString());
+        assertThat(put.statusCode()).isEqualTo(200);
+
+        GetObjectResponse got = client.getObject(GetObjectRequest.builder()
+                .namespaceName(namespace).bucketName(bucket).objectName("incoming/report.txt").build());
+        assertThat(new String(got.getInputStream().readAllBytes(), StandardCharsets.UTF_8))
+                .isEqualTo("uploaded through fullPath");
+
+        client.deletePreauthenticatedRequest(DeletePreauthenticatedRequestRequest.builder()
+                .namespaceName(namespace).bucketName(bucket).parId(par.getId()).build());
+        client.deleteObject(DeleteObjectRequest.builder()
+                .namespaceName(namespace).bucketName(bucket).objectName("incoming/report.txt").build());
+        client.deleteBucket(DeleteBucketRequest.builder()
+                .namespaceName(namespace).bucketName(bucket).build());
     }
 
     @Test
