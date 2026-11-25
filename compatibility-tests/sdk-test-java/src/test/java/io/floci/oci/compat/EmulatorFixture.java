@@ -14,6 +14,7 @@ import com.oracle.bmc.logging.LoggingManagementClient;
 import com.oracle.bmc.loggingingestion.LoggingClient;
 import com.oracle.bmc.loggingsearch.LogSearchClient;
 import com.oracle.bmc.monitoring.MonitoringClient;
+import com.oracle.bmc.nosql.NosqlClient;
 import com.oracle.bmc.objectstorage.ObjectStorageClient;
 import com.oracle.bmc.ons.NotificationControlPlaneClient;
 import com.oracle.bmc.ons.NotificationDataPlaneClient;
@@ -167,6 +168,13 @@ public final class EmulatorFixture {
 
     public static LogSearchClient logSearch() {
         LogSearchClient client = LogSearchClient.builder()
+                .region(Region.US_ASHBURN_1).build(AUTH);
+        client.setEndpoint(ENDPOINT);
+        return client;
+    }
+
+    public static NosqlClient nosql() {
+        NosqlClient client = NosqlClient.builder()
                 .region(Region.US_ASHBURN_1).build(AUTH);
         client.setEndpoint(ENDPOINT);
         return client;

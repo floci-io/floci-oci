@@ -32,6 +32,8 @@ All configuration lives under the `floci-oci.*` prefix; every property maps to a
 | `FLOCI_OCI_SERVICES_FUNCTIONS_ENABLED` | `true` | Enable/disable Functions |
 | `FLOCI_OCI_SERVICES_EVENTS_ENABLED` | `true` | Enable/disable Events (rules, event delivery to Functions, Streaming and Notifications) |
 | `FLOCI_OCI_SERVICES_LOGGING_ENABLED` | `true` | Enable/disable Logging (log groups, logs, ingestion, search) |
+| `FLOCI_OCI_SERVICES_NOSQL_ENABLED` | `true` | Enable/disable NoSQL Database (tables, indexes, rows, queries) |
+| `FLOCI_OCI_SERVICES_NOSQL_TTL_SWEEP_INTERVAL_SECONDS` | `60` | Seconds between sweeps that delete rows whose time to live has passed |
 | `FLOCI_OCI_SERVICES_MONITORING_ENABLED` | `true` | Enable/disable Monitoring (metrics, alarms, suppressions) |
 | `FLOCI_OCI_SERVICES_MONITORING_ALARM_EVALUATION_INTERVAL_SECONDS` | `60` | Seconds between alarm evaluations (OCI evaluates once a minute) |
 | `FLOCI_OCI_SERVICES_NOTIFICATIONS_ENABLED` | `true` | Enable/disable Notifications (topics, subscriptions, message delivery) |

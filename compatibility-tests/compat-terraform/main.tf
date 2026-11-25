@@ -633,3 +633,44 @@ output "backup_state" {
 output "backup_source_type" {
   value = oci_psql_backup.tf_db_backup.source_type
 }
+
+# NoSQL Database: the provider acceptance test's DDL (identity and UUID columns, a shard key),
+# an index on it and the tables data source. Both resources wait on work requests whose
+# resource is entityType TABLE.
+resource "oci_nosql_table" "tf_table" {
+  compartment_id = var.tenancy_ocid
+  name           = "tf_compat_table"
+  ddl_statement  = "CREATE TABLE IF NOT EXISTS tf_compat_table(id INTEGER GENERATED ALWAYS AS IDENTITY, name STRING, age STRING, info JSON, guid STRING AS UUID, PRIMARY KEY(SHARD(id)))"
+
+  table_limits {
+    max_read_units     = 10
+    max_write_units    = 10
+    max_storage_in_gbs = 1
+  }
+}
+
+resource "oci_nosql_index" "tf_index" {
+  table_name_or_id = oci_nosql_table.tf_table.id
+  name             = "tf_compat_name_idx"
+
+  keys {
+    column_name = "name"
+  }
+}
+
+data "oci_nosql_tables" "tf_tables" {
+  compartment_id = var.tenancy_ocid
+  name           = oci_nosql_table.tf_table.name
+}
+
+output "nosql_table_state" {
+  value = oci_nosql_table.tf_table.state
+}
+
+output "nosql_index_state" {
+  value = oci_nosql_index.tf_index.state
+}
+
+output "nosql_tables_listed" {
+  value = length(data.oci_nosql_tables.tf_tables.table_collection)
+}

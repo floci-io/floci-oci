@@ -32,6 +32,7 @@ It implements real OCI wire protocols so the official OCI SDKs, the OCI CLI, Ter
 | Streaming | `/20180418/…` | Streams, partitions, cursors, consumer groups |
 | Functions | `/20260325/…`, `/20181201/…` | Applications, functions, real invocation via an Fn Project sidecar |
 | Logging | `/20200531/…`, `/20200831/…`, `/20190909/…` | Log groups, logs, saved searches, PutLogs, SearchLogs with the query language |
+| NoSQL Database | `/20190828/…` | Tables from DDL, indexes, rows with conditional writes and TTL, SQL SELECT queries |
 | Monitoring | `/20180401/…` | Custom metrics, MQL queries, alarms notifying Notifications and Streaming, suppressions |
 | Notifications | `/20181201/…` | Topics, subscriptions, publish; HTTPS and Functions delivery, other protocols recorded |
 | Container Engine for Kubernetes (OKE) | `/20180222/…` | Clusters, node pools, options, kubeconfig generation, work requests, real k3s sidecar |
