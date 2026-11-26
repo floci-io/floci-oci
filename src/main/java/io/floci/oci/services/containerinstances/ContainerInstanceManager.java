@@ -145,7 +145,8 @@ public class ContainerInstanceManager {
 
     /**
      * Writes the files of every CONFIGFILE volume into its named volume, through a container that
-     * is created (never started) with the volume mounted writable and removed again.
+     * is created (never started) with the volume mounted writable and removed again. A helper
+     * Docker cannot remove fails the start, and {@link #removePod} removes it before the volume.
      */
     private void seedConfigVolumes(StoredContainerInstance instance) {
         for (Map<String, Object> volume : mapList(instance.getAttributes().get("volumes"))) {
@@ -163,8 +164,8 @@ public class ContainerInstanceManager {
             if (files.isEmpty()) {
                 continue;
             }
-            String seed = volumeName + "-seed";
-            lifecycle.removeIfExists(seed);
+            String seed = seedName(instance, String.valueOf(volume.get("name")));
+            lifecycle.forceRemove(seed);
             ContainerSpec spec = containerBuilder.newContainer(config.services().containerinstances().pauseImage())
                     .withName(seed)
                     .withNetworkMode("none")
@@ -174,10 +175,21 @@ public class ContainerInstanceManager {
             String id = lifecycle.create(spec);
             try {
                 copyFiles(id, files);
-            } finally {
-                lifecycle.removeIfExists(seed);
+            } catch (RuntimeException e) {
+                try {
+                    lifecycle.forceRemove(seed);
+                } catch (RuntimeException cleanup) {
+                    e.addSuppressed(cleanup);
+                }
+                throw e;
             }
+            lifecycle.forceRemove(seed);
         }
+    }
+
+    /** The helper that seeds a CONFIGFILE volume: one fixed name per instance and volume. */
+    String seedName(StoredContainerInstance instance, String volume) {
+        return volumeName(instance, volume) + "-seed";
     }
 
     private void pull(StoredContainerInstance instance, String image) {
@@ -431,7 +443,11 @@ public class ContainerInstanceManager {
         }
         failures.attempt(() -> lifecycle.forceRemove(podName(instance)));
         for (Map<String, Object> volume : mapList(instance.getAttributes().get("volumes"))) {
-            failures.attempt(() -> lifecycle.deleteVolume(volumeName(instance, String.valueOf(volume.get("name")))));
+            String name = String.valueOf(volume.get("name"));
+            if ("CONFIGFILE".equals(volume.get("volumeType"))) {
+                failures.attempt(() -> lifecycle.forceRemove(seedName(instance, name)));
+            }
+            failures.attempt(() -> lifecycle.deleteVolume(volumeName(instance, name)));
         }
         failures.throwIfAny();
     }

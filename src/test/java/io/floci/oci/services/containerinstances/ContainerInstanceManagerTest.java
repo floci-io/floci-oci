@@ -126,9 +126,31 @@ class ContainerInstanceManagerTest {
         InOrder order = inOrder(lifecycle, spec);
         order.verify(spec).withNamedVolume(volume, "/floci-config", false);
         order.verify(lifecycle).copyToContainer(eq("created-id"), any(), eq("/"));
-        order.verify(lifecycle).removeIfExists(volume + "-seed");
+        order.verify(lifecycle).forceRemove(manager.seedName(instance, "conf"));
         order.verify(spec).withNamedVolume(volume, "/etc/app", false);
         order.verify(lifecycle).startCreated(eq("created-id"), any());
+    }
+
+    @Test
+    void aSeedHelperDockerCannotRemoveFailsTheStartAndIsRemovedBeforeItsVolume() {
+        String data = Base64.getEncoder().encodeToString("x".getBytes(StandardCharsets.UTF_8));
+        StoredContainerInstance instance = instance(List.of(Map.of("name", "conf", "volumeType", "CONFIGFILE",
+                "configs", List.of(Map.of("fileName", "a", "data", data)))));
+        StoredContainer container = container(Map.of());
+        String seed = manager.seedName(instance, "conf");
+        String volume = manager.volumeName(instance, "conf");
+        assertEquals(seed, manager.seedName(instance, "conf"));
+        doNothing().doThrow(new InternalServerErrorException("removal failed")).doNothing()
+                .when(lifecycle).forceRemove(seed);
+
+        InternalServerErrorException e = assertThrows(InternalServerErrorException.class,
+                () -> manager.startPod(instance, List.of(container), i -> i));
+
+        assertTrue(e.getMessage().contains("removal failed"), e.getMessage());
+        verify(lifecycle, never()).startCreated(any(), any());
+        InOrder order = inOrder(lifecycle);
+        order.verify(lifecycle).forceRemove(seed);
+        order.verify(lifecycle).deleteVolume(volume);
     }
 
     @Test
