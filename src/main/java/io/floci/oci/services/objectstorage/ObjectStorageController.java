@@ -1,6 +1,7 @@
 package io.floci.oci.services.objectstorage;
 
 import io.floci.oci.core.common.Etags;
+import io.floci.oci.core.common.OciContext;
 import io.floci.oci.core.common.OciException;
 import io.floci.oci.core.common.OciPage;
 import io.floci.oci.core.common.Regions;
@@ -61,13 +62,15 @@ public class ObjectStorageController {
     private final ObjectStorageService service;
     private final CompartmentValidator compartments;
     private final WorkRequestService workRequests;
+    private final OciContext ociContext;
 
     @Inject
     public ObjectStorageController(ObjectStorageService service, WorkRequestService workRequests,
-                                   CompartmentValidator compartments) {
+                                   CompartmentValidator compartments, OciContext ociContext) {
         this.service = service;
         this.compartments = compartments;
         this.workRequests = workRequests;
+        this.ociContext = ociContext;
     }
 
     // ── Namespace ──────────────────────────────────────────────────────────────
@@ -808,11 +811,13 @@ public class ObjectStorageController {
         String accessPath = "/p/" + par.getToken() + "/n/" + par.getNamespace()
                 + "/b/" + par.getBucket() + "/o/"
                 + (par.getObjectName() != null ? par.getObjectName() : "");
+        // Only CreatePreauthenticatedRequest returns the URL: Get and List answer with
+        // PreauthenticatedRequestSummary, which carries neither field, and the token
+        // cannot be retrieved after creation.
         if (includeUri) {
-            // accessUri is only returned on create — the token cannot be retrieved later.
             json.put("accessUri", accessPath);
+            json.put("fullPath", ociContext.baseUrl() + accessPath);
         }
-        json.put("fullPath", accessPath);
         return json;
     }
 
