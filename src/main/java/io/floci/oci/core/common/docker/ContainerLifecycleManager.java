@@ -10,8 +10,10 @@ import com.github.dockerjava.api.command.InspectContainerResponse;
 import com.github.dockerjava.api.exception.DockerException;
 import com.github.dockerjava.api.exception.NotFoundException;
 import com.github.dockerjava.api.model.Bind;
+import com.github.dockerjava.api.model.Capability;
 import com.github.dockerjava.api.model.Container;
 import com.github.dockerjava.api.model.ContainerNetwork;
+import com.github.dockerjava.api.model.Device;
 import com.github.dockerjava.api.model.ExposedPort;
 import com.github.dockerjava.api.model.Frame;
 import com.github.dockerjava.api.model.HostConfig;
@@ -824,6 +826,15 @@ public class ContainerLifecycleManager {
         // group-shared volume without changing its primary uid/gid.
         if (spec.groupAdd() != null && !spec.groupAdd().isEmpty()) {
             hostConfig.withGroupAdd(spec.groupAdd());
+        }
+
+        // Capabilities and devices (Docker --cap-add, --device): what a sidecar needs short of
+        // privileged mode, e.g. SYS_ADMIN and /dev/fuse for FUSE mounts.
+        if (spec.capAdd() != null && !spec.capAdd().isEmpty()) {
+            hostConfig.withCapAdd(spec.capAdd().stream().map(Capability::valueOf).toArray(Capability[]::new));
+        }
+        if (spec.devices() != null && !spec.devices().isEmpty()) {
+            hostConfig.withDevices(spec.devices().stream().map(path -> new Device("rwm", path, path)).toList());
         }
 
         // Memory limit
