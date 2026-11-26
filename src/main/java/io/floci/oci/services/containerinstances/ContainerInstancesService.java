@@ -48,13 +48,13 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.function.UnaryOperator;
@@ -66,12 +66,12 @@ import java.util.function.UnaryOperator;
  * update and change-compartment finish at once. In mock mode nothing touches Docker and every
  * instance is ACTIVE as soon as it is created.
  *
- * <p>Every change to stored state happens under this object's lock. The Docker work runs on one
- * worker thread outside it, inside a request context for the instance's tenancy and region, and
- * records its outcome under the lock again, so a delete that arrives while a start is running
- * wins. The restart-policy check runs on that same worker, so it never overlaps a stop, start,
- * restart or delete. A step that finishes after its instance was forgotten (a state reset)
- * removes what it started.
+ * <p>Every change to stored state happens under this object's lock. The Docker work runs outside
+ * it, inside a request context for the instance's tenancy and region, and records its outcome
+ * under the lock again, so a delete that arrives while a start is running wins. Each instance has
+ * its own serial queue: its lifecycle steps and restart-policy checks run one at a time in order,
+ * while other instances' work runs in parallel, so a slow image pull delays nobody else. A step
+ * that finishes after its instance was forgotten (a state reset) removes what it started.
  */
 @ApplicationScoped
 public class ContainerInstancesService implements Resettable, CompartmentUsage {
@@ -111,10 +111,10 @@ public class ContainerInstancesService implements Resettable, CompartmentUsage {
     private final Instance<VaultSecretsService> vaultSecrets;
     private final PartitionRunner partitions;
     private final Clock clock;
-    private final Executor lifecycle;
+    private final KeyedSerialExecutor lifecycle;
     private final ExecutorService ownedLifecycle;
     private final ScheduledExecutorService poller;
-    private final AtomicBoolean refreshQueued = new AtomicBoolean();
+    private final Set<String> refreshQueued = ConcurrentHashMap.newKeySet();
 
     @Inject
     public ContainerInstancesService(StorageFactory storageFactory, EmulatorConfig config,
@@ -138,7 +138,8 @@ public class ContainerInstancesService implements Resettable, CompartmentUsage {
     /**
      * Storage-injecting constructor for tests.
      *
-     * @param lifecycle runs the Docker work; null for the service's own worker thread
+     * @param lifecycle runs the Docker work, serialized per instance on top of it; null for the
+     *                  service's own daemon thread pool
      */
     ContainerInstancesService(StorageBackend<String, StoredContainerInstance> instances,
                               StorageBackend<String, StoredContainer> containers, EmulatorConfig config,
@@ -161,8 +162,8 @@ public class ContainerInstancesService implements Resettable, CompartmentUsage {
         this.partitions = partitions;
         this.clock = clock;
         // No thread starts until the first task is submitted, which only real mode does.
-        this.ownedLifecycle = lifecycle != null ? null : Executors.newSingleThreadExecutor(daemon("ci-lifecycle"));
-        this.lifecycle = lifecycle != null ? lifecycle : ownedLifecycle;
+        this.ownedLifecycle = lifecycle != null ? null : Executors.newCachedThreadPool(daemon("ci-lifecycle"));
+        this.lifecycle = new KeyedSerialExecutor(lifecycle != null ? lifecycle : ownedLifecycle);
         this.poller = Executors.newSingleThreadScheduledExecutor(daemon("ci-poller"));
     }
 
@@ -845,7 +846,7 @@ public class ContainerInstancesService implements Resettable, CompartmentUsage {
     private void submit(StoredContainerInstance instance, Runnable task) {
         String tenancyId = instance.getTenancyId();
         String region = instance.getRegion();
-        lifecycle.execute(() -> {
+        lifecycle.execute(instance.getId(), () -> {
             try {
                 partitions.runAs(tenancyId, region, task);
             } catch (RuntimeException e) {
@@ -858,89 +859,92 @@ public class ContainerInstancesService implements Resettable, CompartmentUsage {
         return instances.get(id).orElse(null);
     }
 
-    private void pollSafely() {
+    /**
+     * Queues a restart-policy check of every ACTIVE instance on that instance's own queue, at most
+     * one per instance at a time.
+     */
+    void pollSafely() {
         try {
-            Set<List<String>> partitionsWithWork = new LinkedHashSet<>();
             for (StoredContainerInstance instance : TenancyAwareStorageBackend.scanAll(instances)) {
-                if ("ACTIVE".equals(instance.getLifecycleState()) && instance.getTenancyId() != null) {
-                    partitionsWithWork.add(List.of(instance.getTenancyId(), instance.getRegion()));
+                String id = instance.getId();
+                if (!"ACTIVE".equals(instance.getLifecycleState()) || instance.getWorkRequestId() != null
+                        || instance.getTenancyId() == null || !refreshQueued.add(id)) {
+                    continue;
                 }
+                submit(instance, () -> {
+                    refreshQueued.remove(id);
+                    refreshInstance(id);
+                });
             }
-            if (partitionsWithWork.isEmpty() || !refreshQueued.compareAndSet(false, true)) {
-                return;
-            }
-            lifecycle.execute(() -> {
-                refreshQueued.set(false);
-                for (List<String> partition : partitionsWithWork) {
-                    try {
-                        partitions.runAs(partition.get(0), partition.get(1), this::refreshActive);
-                    } catch (RuntimeException e) {
-                        LOG.warnv("Container instance poll failed in {0}: {1}", partition, e.getMessage());
-                    }
-                }
-            });
         } catch (RuntimeException e) {
-            refreshQueued.set(false);
             LOG.warnv("Container instance poll failed: {0}", e.getMessage());
         }
     }
 
-    /**
-     * Reads what Docker reports for the containers of every ACTIVE instance in the current
-     * partition: a container that exited is restarted when the restart policy says so (ALWAYS, or
-     * ON_FAILURE with a non-zero exit code), otherwise it becomes INACTIVE with its exit code; an
-     * instance whose containers have all stopped becomes INACTIVE. It runs on the lifecycle worker,
-     * and a container is restarted only while its instance is still ACTIVE with no lifecycle step
-     * pending, so a stop the user asked for is never undone.
-     */
+    /** {@link #refreshInstance} for every ACTIVE instance of the current partition. */
     void refreshActive() {
-        List<StoredContainerInstance> active = instances.scan(k -> true).stream()
+        List<String> active = instances.scan(k -> true).stream()
                 .filter(i -> "ACTIVE".equals(i.getLifecycleState()) && i.getWorkRequestId() == null)
+                .map(StoredContainerInstance::getId)
                 .toList();
-        for (StoredContainerInstance instance : active) {
-            String policy = String.valueOf(instance.getAttributes().get("containerRestartPolicy"));
-            for (StoredContainer container : containersOf(instance)) {
-                if (!"ACTIVE".equals(container.getLifecycleState())) {
-                    continue;
-                }
-                Optional<ContainerInstanceManager.ContainerState> state = manager.state(container);
-                if (state.isEmpty() || state.get().running()) {
-                    continue;
-                }
-                Integer exitCode = state.get().exitCode();
-                boolean restart = "ALWAYS".equals(policy) || ("ON_FAILURE".equals(policy) && !Integer.valueOf(0).equals(exitCode));
-                if (!stillRunnable(instance.getId(), container.getId())) {
-                    continue;
-                }
-                if (restart) {
-                    try {
-                        manager.restartContainer(instance, container);
-                    } catch (RuntimeException e) {
-                        LOG.warnv("Could not restart container {0}: {1}", container.getId(), e.getMessage());
-                    }
-                }
-                synchronized (this) {
-                    containers.get(container.getId()).ifPresent(stored -> {
-                        stored.setExitCode(exitCode);
-                        stored.setTimeTerminated(state.get().finishedAt() != null
-                                ? state.get().finishedAt().toString() : clock.instant().toString());
-                        if (restart) {
-                            stored.setContainerRestartAttemptCount(stored.getContainerRestartAttemptCount() + 1);
-                        } else {
-                            stored.setLifecycleState("INACTIVE");
-                        }
-                        stored.setTimeUpdated(clock.instant().toString());
-                        containers.put(stored.getId(), stored);
-                    });
+        active.forEach(this::refreshInstance);
+    }
+
+    /**
+     * Reads what Docker reports for the containers of one ACTIVE instance: a container that exited
+     * is restarted when the restart policy says so (ALWAYS, or ON_FAILURE with a non-zero exit
+     * code), otherwise it becomes INACTIVE with its exit code; an instance whose containers have all
+     * stopped becomes INACTIVE. It runs on the instance's queue, and a container is restarted only
+     * while its instance is still ACTIVE with no lifecycle step pending, so a stop the user asked
+     * for is never undone.
+     */
+    void refreshInstance(String id) {
+        StoredContainerInstance instance = snapshot(id);
+        if (instance == null || !"ACTIVE".equals(instance.getLifecycleState()) || instance.getWorkRequestId() != null) {
+            return;
+        }
+        String policy = String.valueOf(instance.getAttributes().get("containerRestartPolicy"));
+        for (StoredContainer container : containersOf(instance)) {
+            if (!"ACTIVE".equals(container.getLifecycleState())) {
+                continue;
+            }
+            Optional<ContainerInstanceManager.ContainerState> state = manager.state(container);
+            if (state.isEmpty() || state.get().running()) {
+                continue;
+            }
+            Integer exitCode = state.get().exitCode();
+            boolean restart = "ALWAYS".equals(policy) || ("ON_FAILURE".equals(policy) && !Integer.valueOf(0).equals(exitCode));
+            if (!stillRunnable(id, container.getId())) {
+                continue;
+            }
+            if (restart) {
+                try {
+                    manager.restartContainer(instance, container);
+                } catch (RuntimeException e) {
+                    LOG.warnv("Could not restart container {0}: {1}", container.getId(), e.getMessage());
                 }
             }
             synchronized (this) {
-                StoredContainerInstance current = instances.get(instance.getId()).orElse(null);
-                if (current != null && "ACTIVE".equals(current.getLifecycleState()) && current.getWorkRequestId() == null
-                        && containersOf(current).stream().allMatch(c -> "INACTIVE".equals(c.getLifecycleState()))) {
-                    current.setLifecycleState("INACTIVE");
-                    touch(current);
-                }
+                containers.get(container.getId()).ifPresent(stored -> {
+                    stored.setExitCode(exitCode);
+                    stored.setTimeTerminated(state.get().finishedAt() != null
+                            ? state.get().finishedAt().toString() : clock.instant().toString());
+                    if (restart) {
+                        stored.setContainerRestartAttemptCount(stored.getContainerRestartAttemptCount() + 1);
+                    } else {
+                        stored.setLifecycleState("INACTIVE");
+                    }
+                    stored.setTimeUpdated(clock.instant().toString());
+                    containers.put(stored.getId(), stored);
+                });
+            }
+        }
+        synchronized (this) {
+            StoredContainerInstance current = instances.get(id).orElse(null);
+            if (current != null && "ACTIVE".equals(current.getLifecycleState()) && current.getWorkRequestId() == null
+                    && containersOf(current).stream().allMatch(c -> "INACTIVE".equals(c.getLifecycleState()))) {
+                current.setLifecycleState("INACTIVE");
+                touch(current);
             }
         }
     }

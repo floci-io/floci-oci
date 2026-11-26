@@ -22,6 +22,10 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.UnaryOperator;
@@ -29,6 +33,7 @@ import java.util.function.UnaryOperator;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
@@ -376,6 +381,48 @@ class ContainerInstancesServiceTest {
 
         verify(manager, never()).restartContainer(any(), any());
         assertEquals("INACTIVE", real.get(id).getLifecycleState());
+    }
+
+    @Test
+    void aSlowStartOfOneInstanceDoesNotHoldUpThePolicyCheckOfAnother() throws Exception {
+        ExecutorService pool = Executors.newCachedThreadPool();
+        CountDownLatch pulling = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        try {
+            ContainerInstancesService pooled = new ContainerInstancesService(instances, containers, config, null,
+                    workRequests, manager, OciContext.fromConfig(config), network, UnaryOperator.identity(),
+                    ad -> ad.equalsIgnoreCase(AD), null, (tenancy, region, task) -> task.run(), new MutableClock(),
+                    pool);
+            when(manager.startPod(any(), anyList(), any())).thenAnswer(call -> {
+                if ("slow".equals(call.getArgument(0, StoredContainerInstance.class).getDisplayName())) {
+                    pulling.countDown();
+                    release.await(30, TimeUnit.SECONDS);
+                }
+                return "172.18.0.9";
+            });
+            String fast = pooled.create(details()).instance().getId();
+            awaitState(pooled, fast, "ACTIVE");
+            Map<String, Object> slowDetails = details();
+            slowDetails.put("displayName", "slow");
+            String slow = pooled.create(slowDetails).instance().getId();
+            assertTrue(pulling.await(10, TimeUnit.SECONDS));
+            when(manager.state(any())).thenReturn(Optional.of(new ContainerInstanceManager.ContainerState(false, 1, null)));
+
+            pooled.pollSafely();
+
+            verify(manager, timeout(10_000)).restartContainer(argThat(i -> fast.equals(i.getId())), any());
+            assertEquals("CREATING", pooled.get(slow).getLifecycleState());
+        } finally {
+            release.countDown();
+            pool.shutdownNow();
+        }
+    }
+
+    private static void awaitState(ContainerInstancesService service, String id, String state) throws InterruptedException {
+        for (int i = 0; i < 200 && !state.equals(service.get(id).getLifecycleState()); i++) {
+            Thread.sleep(50);
+        }
+        assertEquals(state, service.get(id).getLifecycleState());
     }
 
     @Test

@@ -60,8 +60,9 @@ back for `oci_container_instances_container_instance`.
   exited is restarted under `ALWAYS`, and under `ON_FAILURE` when its exit code is not zero, and
   `containerRestartAttemptCount` counts it; otherwise it becomes `INACTIVE` with its `exitCode`
   and `timeTerminated`. An instance whose containers have all stopped becomes `INACTIVE`. The
-  check runs in turn with stop, start, restart and delete, and restarts a container only while
-  its instance is `ACTIVE` with nothing pending, so it never undoes a stop.
+  check of an instance runs in turn with that instance's stop, start, restart and delete (each
+  instance has its own queue, so a slow image pull for one never delays another), and restarts a
+  container only while its instance is `ACTIVE` with nothing pending, so it never undoes a stop.
 - **Logs.** `RetrieveLogs` returns the container's stdout and stderr as text (at most 20 MB).
   `isPrevious` is accepted and ignored.
 - **Restarts of floci-oci.** A create that was running is marked `FAILED`; an `ACTIVE` instance
