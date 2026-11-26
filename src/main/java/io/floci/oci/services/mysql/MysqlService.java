@@ -66,6 +66,7 @@ public class MysqlService implements Resettable, CompartmentUsage {
     private static final String BASE_PATH = API_PREFIX + "/dbSystems/";
     private static final long READINESS_POLL_SECONDS = 2;
     static final String INTERRUPTED = "The operation was interrupted by a restart of floci-oci";
+    static final String SUPERSEDED = "The operation was superseded by another operation on the DB system";
 
     static final Set<String> LIFECYCLE_STATES = Set.of("CREATING", "ACTIVE", "INACTIVE", "UPDATING", "DELETING",
             "DELETED", "FAILED");
@@ -339,7 +340,7 @@ public class MysqlService implements Resettable, CompartmentUsage {
         return configurations.attachingConfiguration(() -> update(dbSystemId, details, ifMatch));
     }
 
-    private String update(String dbSystemId, Map<String, Object> details, String ifMatch) {
+    private synchronized String update(String dbSystemId, Map<String, Object> details, String ifMatch) {
         StoredMysqlDbSystem system = mutable(dbSystemId, ifMatch, "ACTIVE", "INACTIVE");
         // Everything that can be rejected is checked before anything changes: the store hands out
         // the stored object itself, so a half-applied update would stick.
@@ -477,7 +478,7 @@ public class MysqlService implements Resettable, CompartmentUsage {
                 .anyMatch(system -> configurationId.equals(system.getConfigurationId()));
     }
 
-    public String deleteDbSystem(String dbSystemId, String ifMatch) {
+    public synchronized String deleteDbSystem(String dbSystemId, String ifMatch) {
         StoredMysqlDbSystem system = getDbSystem(dbSystemId);
         Etags.checkIfMatch(ifMatch, system.getEtag());
         if ("DELETED".equals(system.getLifecycleState()) || "DELETING".equals(system.getLifecycleState())) {
@@ -487,21 +488,18 @@ public class MysqlService implements Resettable, CompartmentUsage {
             throw new OciException("IncorrectState", "DB system " + dbSystemId
                     + " is delete protected; turn deletionPolicy.isDeleteProtected off first", 409);
         }
-        String workRequestId;
         // An operation still under way is abandoned: its work request ends CANCELED, and its step
         // is skipped, or its outcome dropped, because the system has moved on to another work
         // request. The lock keeps a step from recording its outcome in between.
-        synchronized (this) {
-            pending.remove(dbSystemId);
-            finishWorkRequest(system, "CANCELED", null);
-            if (!realMode()) {
-                markDeleted(system);
-                systems.put(system.getId(), system);
-                return workRequests.succeeded(WR_SERVICE, "DELETE_DBSYSTEM", system.getCompartmentId(),
-                        resources(system, "DELETED"));
-            }
-            workRequestId = begin(system, "DELETING", "DELETE_DBSYSTEM", "DELETED");
+        pending.remove(dbSystemId);
+        finishWorkRequest(system, "CANCELED", null);
+        if (!realMode()) {
+            markDeleted(system);
+            systems.put(system.getId(), system);
+            return workRequests.succeeded(WR_SERVICE, "DELETE_DBSYSTEM", system.getCompartmentId(),
+                    resources(system, "DELETED"));
         }
+        String workRequestId = begin(system, "DELETING", "DELETE_DBSYSTEM", "DELETED");
         runDelete(system);
         return workRequestId;
     }
@@ -520,8 +518,11 @@ public class MysqlService implements Resettable, CompartmentUsage {
     }
 
     // ── Runtime actions ────────────────────────────────────────────────────────
+    //
+    // Every mutation holds the service lock from its state check until its step is queued, so a
+    // second one sees the system UPDATING or DELETING and is refused with IncorrectState.
 
-    public String startDbSystem(String dbSystemId, String ifMatch) {
+    public synchronized String startDbSystem(String dbSystemId, String ifMatch) {
         StoredMysqlDbSystem system = mutable(dbSystemId, ifMatch, "INACTIVE");
         if (!realMode()) {
             return finishAtOnce(system, "ACTIVE", "START_DBSYSTEM");
@@ -531,7 +532,7 @@ public class MysqlService implements Resettable, CompartmentUsage {
         return workRequestId;
     }
 
-    public String stopDbSystem(String dbSystemId, Map<String, Object> details, String ifMatch) {
+    public synchronized String stopDbSystem(String dbSystemId, Map<String, Object> details, String ifMatch) {
         requireShutdownType(details);
         StoredMysqlDbSystem system = mutable(dbSystemId, ifMatch, "ACTIVE");
         if (!realMode()) {
@@ -550,7 +551,7 @@ public class MysqlService implements Resettable, CompartmentUsage {
         return workRequestId;
     }
 
-    public String restartDbSystem(String dbSystemId, Map<String, Object> details, String ifMatch) {
+    public synchronized String restartDbSystem(String dbSystemId, Map<String, Object> details, String ifMatch) {
         requireShutdownType(details);
         StoredMysqlDbSystem system = mutable(dbSystemId, ifMatch, "ACTIVE");
         if (!realMode()) {
@@ -572,8 +573,13 @@ public class MysqlService implements Resettable, CompartmentUsage {
         return containers != null && !config.services().mysql().mock();
     }
 
-    /** Moves the system to {@code state} and opens the work request the operation is tracked by. */
+    /**
+     * Moves the system to {@code state} and opens the work request the operation is tracked by.
+     * Called under the service lock. A work request the system still carries is failed first, so
+     * replacing it never leaves it IN_PROGRESS.
+     */
     private String begin(StoredMysqlDbSystem system, String state, String operationType, String actionType) {
+        finishWorkRequest(system, "FAILED", SUPERSEDED);
         system.setLifecycleState(state);
         system.setLifecycleDetails(null);
         touch(system);
@@ -602,8 +608,9 @@ public class MysqlService implements Resettable, CompartmentUsage {
      * Runs {@code step} on the lifecycle worker against the system as stored at that moment,
      * found in its own partition since the worker has no request scope. The step is skipped when
      * the system has gone, or has moved on to another operation, which shows as a different work
-     * request. Ownership is checked again before the outcome is recorded, under the lock delete
-     * and reset take: an outcome that arrives too late is dropped.
+     * request. Ownership is checked again before the outcome is recorded, under the lock every
+     * mutation and reset take: an outcome that arrives too late is dropped. A skipped or dropped
+     * step still finishes its own work request, so no caller is left polling IN_PROGRESS.
      */
     private void runAsync(StoredMysqlDbSystem system, LifecycleStep step) {
         String tenancyId = system.getTenancyId();
@@ -611,10 +618,14 @@ public class MysqlService implements Resettable, CompartmentUsage {
         String id = system.getId();
         String workRequestId = system.getWorkRequestId();
         lifecycle.execute(() -> {
-            Optional<StoredMysqlDbSystem> current = owned(tenancyId, region, id, workRequestId);
-            if (current.isEmpty()) {
-                LOG.debugv("DB system {0} has moved on; skipping its queued lifecycle step", id);
-                return;
+            Optional<StoredMysqlDbSystem> current;
+            synchronized (this) {
+                current = owned(tenancyId, region, id, workRequestId);
+                if (current.isEmpty()) {
+                    LOG.debugv("DB system {0} has moved on; skipping its queued lifecycle step", id);
+                    finishAbandoned(tenancyId, region, id, workRequestId);
+                    return;
+                }
             }
             Runnable outcome;
             try {
@@ -632,9 +643,23 @@ public class MysqlService implements Resettable, CompartmentUsage {
                     purgeQuietly(current.get());
                 } else {
                     LOG.debugv("DB system {0} moved on during its lifecycle step", id);
+                    finishAbandoned(tenancyId, region, id, workRequestId);
                 }
             }
         });
+    }
+
+    /**
+     * Fails the work request of a step whose system moved on without finishing it. Whoever moved
+     * the system on normally finished it already (a delete cancels it), and finishing a finished
+     * work request changes nothing. A system that is gone was reset, along with its work requests.
+     */
+    private void finishAbandoned(String tenancyId, String region, String id, String workRequestId) {
+        if (workRequestId == null || findIn(tenancyId, region, id).isEmpty()) {
+            return;
+        }
+        workRequests.finish(tenancyId, region, workRequestId, "FAILED",
+                List.of(new StoredWorkRequest.ErrorEntry("InternalServerError", SUPERSEDED)));
     }
 
     /** The system, while {@code workRequestId} is still the operation it is running. */
@@ -725,9 +750,10 @@ public class MysqlService implements Resettable, CompartmentUsage {
 
     /**
      * Records an outcome only while the system is still pending, atomically with dropping it from
-     * {@link #pending}: a delete or reset that removed it during the probe wins.
+     * {@link #pending}: a delete or reset that removed it during the probe wins. Holds the service
+     * lock, so no mutation sees the new state before the outcome has finished its work request.
      */
-    private void settle(StoredMysqlDbSystem system, Runnable outcome) {
+    private synchronized void settle(StoredMysqlDbSystem system, Runnable outcome) {
         AtomicBoolean recorded = new AtomicBoolean();
         pending.computeIfPresent(system.getId(), (id, waiting) -> {
             outcome.run();

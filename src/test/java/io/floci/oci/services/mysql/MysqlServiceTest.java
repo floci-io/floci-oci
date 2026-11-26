@@ -15,11 +15,18 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
@@ -30,6 +37,7 @@ import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -321,6 +329,99 @@ class MysqlServiceTest {
                 () -> real.restartDbSystem(system.getId(), Map.of("shutdownType", "FAST"), null));
         assertEquals("IncorrectState", error.getCode());
         assertEquals(409, error.getHttpStatus());
+    }
+
+    @Test
+    void aSecondMutationWhileTheFirstIsQueuedIsRefusedAndTheFirstStillFinishes() {
+        StoredMysqlDbSystem system = activeRealSystem();
+        List<Runnable> queued = new ArrayList<>();
+        MysqlService deferred = new MysqlService(systems, config, null, workRequests, containers, configurations,
+                OciContext.fromConfig(config), ONE_SUBNET, clock, queued::add);
+
+        String stop = deferred.stopDbSystem(system.getId(), Map.of("shutdownType", "FAST"), null);
+
+        OciException error = assertThrows(OciException.class,
+                () -> deferred.restartDbSystem(system.getId(), Map.of("shutdownType", "FAST"), null));
+        assertEquals("IncorrectState", error.getCode());
+        assertEquals(409, error.getHttpStatus());
+        assertEquals("DB system " + system.getId() + " is UPDATING and cannot be changed", error.getMessage());
+        assertEquals("IncorrectState", assertThrows(OciException.class,
+                () -> deferred.updateDbSystem(system.getId(), Map.of("mysqlVersion", "8.0.41"), null)).getCode());
+        assertEquals(1, queued.size());
+
+        queued.removeFirst().run();
+
+        assertEquals("INACTIVE", deferred.getDbSystem(system.getId()).getLifecycleState());
+        assertEquals("SUCCEEDED", workRequest(stop).getStatus());
+    }
+
+    @Test
+    void racingMutationsAcceptOneAndEveryAcceptedWorkRequestFinishes() throws Exception {
+        StoredMysqlDbSystem system = activeRealSystem();
+        List<Runnable> queued = Collections.synchronizedList(new ArrayList<>());
+        MysqlService deferred = new MysqlService(systems, config, null, workRequests, containers, configurations,
+                OciContext.fromConfig(config), ONE_SUBNET, clock, queued::add);
+        int callers = 8;
+        CountDownLatch go = new CountDownLatch(1);
+        List<String> accepted = Collections.synchronizedList(new ArrayList<>());
+        List<String> refusals = Collections.synchronizedList(new ArrayList<>());
+        ExecutorService threads = Executors.newFixedThreadPool(callers);
+        try {
+            List<Future<?>> calls = new ArrayList<>();
+            for (int i = 0; i < callers; i++) {
+                boolean stop = i % 2 == 0;
+                calls.add(threads.submit(() -> {
+                    go.await();
+                    try {
+                        accepted.add(stop
+                                ? deferred.stopDbSystem(system.getId(), Map.of("shutdownType", "FAST"), null)
+                                : deferred.restartDbSystem(system.getId(), Map.of("shutdownType", "FAST"), null));
+                    } catch (OciException e) {
+                        refusals.add(e.getHttpStatus() + " " + e.getCode());
+                    }
+                    return null;
+                }));
+            }
+            go.countDown();
+            for (Future<?> call : calls) {
+                call.get(10, TimeUnit.SECONDS);
+            }
+        } finally {
+            threads.shutdownNow();
+        }
+
+        assertEquals(1, accepted.size());
+        assertEquals(callers - 1, refusals.size());
+        assertTrue(refusals.stream().allMatch("409 IncorrectState"::equals), refusals.toString());
+
+        for (Runnable task : List.copyOf(queued)) {
+            task.run();
+        }
+        deferred.pollReadiness();
+
+        for (String workRequestId : accepted) {
+            assertEquals("SUCCEEDED", workRequest(workRequestId).getStatus());
+        }
+    }
+
+    @Test
+    void aDeleteCancelsAQueuedStopAndBothWorkRequestsFinish() {
+        StoredMysqlDbSystem system = activeRealSystem();
+        List<Runnable> queued = new ArrayList<>();
+        MysqlService deferred = new MysqlService(systems, config, null, workRequests, containers, configurations,
+                OciContext.fromConfig(config), ONE_SUBNET, clock, queued::add);
+
+        String stop = deferred.stopDbSystem(system.getId(), Map.of("shutdownType", "FAST"), null);
+        String delete = deferred.deleteDbSystem(system.getId(), null);
+        for (Runnable task : List.copyOf(queued)) {
+            task.run();
+        }
+
+        assertEquals("CANCELED", workRequest(stop).getStatus());
+        assertEquals("SUCCEEDED", workRequest(delete).getStatus());
+        assertEquals("DELETED", deferred.getDbSystem(system.getId()).getLifecycleState());
+        // Only the create stopped a container: the canceled stop's step was skipped.
+        verify(containers, times(1)).stop(any());
     }
 
     @Test
