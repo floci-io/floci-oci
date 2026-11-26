@@ -25,6 +25,17 @@ class StreamingDisabledRestIntegrationTest {
                 .body("message", equalTo("Service streaming is not enabled."));
     }
 
+    @Test
+    void disabledStreamingAlsoCoversStreamPools() {
+        given()
+            .queryParam("compartmentId", "ocid1.compartment.oc1..x")
+            .when().get("/20180418/streampools")
+            .then()
+                .statusCode(503)
+                .body("code", equalTo("ServiceUnavailable"))
+                .body("message", equalTo("Service streaming is not enabled."));
+    }
+
     public static class DisabledStreamingProfile implements QuarkusTestProfile {
         @Override
         public Map<String, String> getConfigOverrides() {

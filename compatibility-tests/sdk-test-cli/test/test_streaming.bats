@@ -4,6 +4,7 @@ setup_file() {
     load 'test_helper/common-setup'
     _common_setup
     unique_name cli-stream > "$BATS_FILE_TMPDIR/stream_name"
+    unique_name cli-pool > "$BATS_FILE_TMPDIR/pool_name"
 }
 
 setup() {
@@ -11,6 +12,8 @@ setup() {
     _common_setup
     STREAM_NAME="$(cat "$BATS_FILE_TMPDIR/stream_name")"
     if [ -f "$BATS_FILE_TMPDIR/stream_id" ]; then STREAM_ID="$(cat "$BATS_FILE_TMPDIR/stream_id")"; fi
+    POOL_NAME="$(cat "$BATS_FILE_TMPDIR/pool_name")"
+    if [ -f "$BATS_FILE_TMPDIR/pool_id" ]; then POOL_ID="$(cat "$BATS_FILE_TMPDIR/pool_id")"; fi
 }
 
 teardown_file() {
@@ -19,6 +22,10 @@ teardown_file() {
     if [ -f "$BATS_FILE_TMPDIR/stream_id" ]; then
         oci_json streaming admin stream delete \
             --stream-id "$(cat "$BATS_FILE_TMPDIR/stream_id")" --force > /dev/null 2>&1 || true
+    fi
+    if [ -f "$BATS_FILE_TMPDIR/pool_id" ]; then
+        oci_json streaming admin stream-pool delete \
+            --stream-pool-id "$(cat "$BATS_FILE_TMPDIR/pool_id")" --force > /dev/null 2>&1 || true
     fi
 }
 
@@ -63,6 +70,43 @@ teardown_file() {
 
 @test "streaming: get on a missing stream returns NotAuthorizedOrNotFound" {
     run oci_cmd streaming admin stream get --stream-id "ocid1.stream.oc1.iad.missing"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *NotAuthorizedOrNotFound* ]]
+}
+
+@test "streaming: stream-pool create becomes ACTIVE" {
+    run oci_cmd streaming admin stream-pool create --name "$POOL_NAME" \
+        --compartment-id "$TENANCY" --kafka-settings '{"numPartitions": 2}'
+    [ "$status" -eq 0 ]
+    local pool_id
+    pool_id="$(json_get '.data.id')"
+    [[ "$pool_id" == ocid1.streampool.* ]]
+    [ "$(json_get '.data."custom-encryption-key"."key-state"')" = "NONE" ]
+    echo "$pool_id" > "$BATS_FILE_TMPDIR/pool_id"
+
+    wait_for_state ACTIVE '.data."lifecycle-state"' 180 streaming admin stream-pool get --stream-pool-id "$pool_id"
+}
+
+@test "streaming: stream-pool list contains the pool" {
+    run oci_cmd streaming admin stream-pool list --compartment-id "$TENANCY" --name "$POOL_NAME"
+    [ "$status" -eq 0 ]
+    [ "$(json_get ".data | map(select(.id == \"$POOL_ID\")) | length")" -eq 1 ]
+}
+
+@test "streaming: stream-pool update renames the pool" {
+    run oci_cmd streaming admin stream-pool update --stream-pool-id "$POOL_ID" \
+        --name "$POOL_NAME-renamed" --force
+    [ "$status" -eq 0 ]
+    [ "$(json_get '.data.name')" = "$POOL_NAME-renamed" ]
+    [ "$(json_get '.data."kafka-settings"."num-partitions"')" -eq 2 ]
+}
+
+@test "streaming: stream-pool delete removes the pool" {
+    run oci_cmd streaming admin stream-pool delete --stream-pool-id "$POOL_ID" --force
+    [ "$status" -eq 0 ]
+    rm -f "$BATS_FILE_TMPDIR/pool_id"
+
+    run oci_cmd streaming admin stream-pool get --stream-pool-id "$POOL_ID"
     [ "$status" -ne 0 ]
     [[ "$output" == *NotAuthorizedOrNotFound* ]]
 }

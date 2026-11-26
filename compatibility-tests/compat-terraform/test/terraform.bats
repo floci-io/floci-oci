@@ -61,6 +61,12 @@ setup() {
     run "$TF_BIN" output -raw stream_messages_endpoint
     [ -n "$output" ]
 
+    run "$TF_BIN" output -raw stream_pool_state
+    [ "$output" = "ACTIVE" ]
+
+    run "$TF_BIN" output -raw pool_stream_compartment
+    [ "$output" = "true" ]
+
     run "$TF_BIN" output -raw organizations_read
     [ "$output" = "1" ]
 

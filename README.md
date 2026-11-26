@@ -190,7 +190,7 @@ flowchart LR
 |---|---|
 | Identity | Compartments, users, groups, user-group memberships, policies, availability domains, regions, region subscriptions, tenancies |
 | Storage | Object Storage: namespaces, buckets, objects, versioning, listing, rename, copy, batch delete, multipart uploads, pre-authenticated requests |
-| Messaging | Queue (visibility timeouts, dead-letter queues, channels), Streaming (partitioned log, cursors, consumer groups), Notifications (topics, subscriptions, HTTPS and Functions delivery) |
+| Messaging | Queue (visibility timeouts, dead-letter queues, channels), Streaming (stream pools, partitioned log, cursors, consumer groups), Notifications (topics, subscriptions, HTTPS and Functions delivery) |
 | Security | Vault + KMS (vaults, keys, key versions, **real** AES-GCM / RSA / ECDSA crypto), Secrets and secret bundles |
 | Serverless | Functions on API versions `20260325` and `20181201` (applications, functions, work requests, runtime catalog, real invocation through an Fn Project sidecar) |
 | Kubernetes | Container Engine for Kubernetes (OKE): clusters with their settings read back as sent, endpoint config updates, node pools, options, kubeconfig generation, work requests, real-mode k3s sidecar |

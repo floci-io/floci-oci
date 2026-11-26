@@ -5,6 +5,7 @@ import io.floci.oci.core.workrequest.StoredWorkRequest;
 import io.floci.oci.core.workrequest.WorkRequestService;
 import io.floci.oci.services.identity.CompartmentValidator;
 import io.floci.oci.services.streaming.model.StoredStream;
+import io.floci.oci.services.streaming.model.StoredStreamPool;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.Consumes;
@@ -25,7 +26,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * OCI Streaming control plane — {@code /20180418/streams…}. CreateStream is dual-mode:
+ * OCI Streaming control plane: {@code /20180418/streams…} and {@code /20180418/streampools…}. CreateStream is dual-mode:
  * it returns the FULL stream body AND an {@code opc-work-request-id} header; Terraform
  * waits on the work request and reads the stream OCID off its {@code resources[]}.
  * Lists are bare JSON arrays.
@@ -109,6 +110,87 @@ public class StreamAdminController {
         return Response.accepted().header("opc-work-request-id", workRequestId).build();
     }
 
+    // ── Stream pools ───────────────────────────────────────────────────────────
+
+    @POST
+    @Path("/streampools")
+    public Response createStreamPool(Map<String, Object> body) {
+        try (CompartmentValidator.Use ignored = compartments.useInBody(str(body, "compartmentId"))) {
+            StreamingService.PoolChange created = service.createStreamPool(str(body, "name"),
+                    str(body, "compartmentId"), objectMap(body, "kafkaSettings"),
+                    objectMap(body, "customEncryptionKeyDetails"), stringMap(body, "freeformTags"),
+                    definedTags(body));
+            return poolResponse(created);
+        }
+    }
+
+    @GET
+    @Path("/streampools/{streamPoolId}")
+    public Response getStreamPool(@PathParam("streamPoolId") String streamPoolId) {
+        StoredStreamPool pool = service.getStreamPool(streamPoolId);
+        return Response.ok(streamPoolJson(pool)).header("etag", pool.getEtag()).build();
+    }
+
+    @GET
+    @Path("/streampools")
+    public Response listStreamPools(@QueryParam("compartmentId") String compartmentId,
+                                    @QueryParam("id") String id,
+                                    @QueryParam("name") String name,
+                                    @QueryParam("lifecycleState") String lifecycleState,
+                                    @QueryParam("sortBy") String sortBy,
+                                    @QueryParam("sortOrder") String sortOrder,
+                                    @QueryParam("limit") Integer limit,
+                                    @QueryParam("page") String page) {
+        compartments.requireInQuery(compartmentId);
+        List<StoredStreamPool> found = service.listStreamPools(compartmentId, id, name, lifecycleState,
+                sortBy, sortOrder);
+        List<Map<String, Object>> summaries = found.stream().map(this::streamPoolSummaryJson).toList();
+        OciPage.Page<Map<String, Object>> result = OciPage.paginate(summaries, limit, page);
+        Response.ResponseBuilder builder = Response.ok(result.items());
+        if (result.hasNextPage()) {
+            builder.header(OciPage.OPC_NEXT_PAGE, result.nextPage());
+        }
+        return builder.build();
+    }
+
+    @PUT
+    @Path("/streampools/{streamPoolId}")
+    public Response updateStreamPool(@PathParam("streamPoolId") String streamPoolId,
+                                     @HeaderParam("if-match") String ifMatch,
+                                     Map<String, Object> body) {
+        StreamingService.PoolChange updated = service.updateStreamPool(streamPoolId, str(body, "name"),
+                objectMap(body, "kafkaSettings"), objectMap(body, "customEncryptionKeyDetails"),
+                stringMap(body, "freeformTags"), definedTags(body), ifMatch);
+        return poolResponse(updated);
+    }
+
+    @DELETE
+    @Path("/streampools/{streamPoolId}")
+    public Response deleteStreamPool(@PathParam("streamPoolId") String streamPoolId,
+                                     @HeaderParam("if-match") String ifMatch) {
+        String workRequestId = service.deleteStreamPool(streamPoolId, ifMatch);
+        return Response.accepted().header("opc-work-request-id", workRequestId).build();
+    }
+
+    @POST
+    @Path("/streampools/{streamPoolId}/actions/changeCompartment")
+    public Response changeStreamPoolCompartment(@PathParam("streamPoolId") String streamPoolId,
+                                                @HeaderParam("if-match") String ifMatch,
+                                                Map<String, Object> body) {
+        try (CompartmentValidator.Use ignored = compartments.useInBody(str(body, "compartmentId"))) {
+            String workRequestId = service.changeStreamPoolCompartment(streamPoolId,
+                    str(body, "compartmentId"), ifMatch);
+            return Response.ok().header("opc-work-request-id", workRequestId).build();
+        }
+    }
+
+    private Response poolResponse(StreamingService.PoolChange change) {
+        return Response.ok(streamPoolJson(change.pool()))
+                .header("etag", change.pool().getEtag())
+                .header("opc-work-request-id", change.workRequestId())
+                .build();
+    }
+
     // ── Work requests ──────────────────────────────────────────────────────────
 
     @GET
@@ -174,6 +256,62 @@ public class StreamAdminController {
             json.put("definedTags", stream.getDefinedTags());
         }
         return json;
+    }
+
+    private Map<String, Object> streamPoolJson(StoredStreamPool pool) {
+        Map<String, Object> json = new LinkedHashMap<>();
+        json.put("id", pool.getId());
+        json.put("compartmentId", pool.getCompartmentId());
+        json.put("name", pool.getName());
+        json.put("lifecycleState", pool.getLifecycleState());
+        json.put("timeCreated", pool.getTimeCreated());
+        Map<String, Object> kafka = new LinkedHashMap<>();
+        if (pool.getBootstrapServers() != null) {
+            kafka.put("bootstrapServers", pool.getBootstrapServers());
+        }
+        kafka.put("autoCreateTopicsEnable", pool.getAutoCreateTopicsEnable());
+        kafka.put("logRetentionHours", pool.getLogRetentionHours());
+        kafka.put("numPartitions", pool.getNumPartitions());
+        json.put("kafkaSettings", kafka);
+        Map<String, Object> key = new LinkedHashMap<>();
+        if (pool.getKmsKeyId() != null) {
+            key.put("kmsKeyId", pool.getKmsKeyId());
+        }
+        key.put("keyState", pool.getKmsKeyId() != null ? "ACTIVE" : "NONE");
+        json.put("customEncryptionKey", key);
+        if (pool.getLifecycleStateDetails() != null) {
+            json.put("lifecycleStateDetails", pool.getLifecycleStateDetails());
+        }
+        json.put("isPrivate", false);
+        putTags(json, pool.getFreeformTags(), pool.getDefinedTags());
+        return json;
+    }
+
+    private Map<String, Object> streamPoolSummaryJson(StoredStreamPool pool) {
+        Map<String, Object> json = new LinkedHashMap<>();
+        json.put("id", pool.getId());
+        json.put("compartmentId", pool.getCompartmentId());
+        json.put("name", pool.getName());
+        json.put("lifecycleState", pool.getLifecycleState());
+        json.put("timeCreated", pool.getTimeCreated());
+        json.put("isPrivate", false);
+        putTags(json, pool.getFreeformTags(), pool.getDefinedTags());
+        return json;
+    }
+
+    private static void putTags(Map<String, Object> json, Map<String, String> freeformTags,
+                                Map<String, Map<String, Object>> definedTags) {
+        if (freeformTags != null) {
+            json.put("freeformTags", freeformTags);
+        }
+        if (definedTags != null) {
+            json.put("definedTags", definedTags);
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> objectMap(Map<String, Object> body, String key) {
+        return body != null && body.get(key) instanceof Map<?, ?> m ? (Map<String, Object>) m : null;
     }
 
     private static String str(Map<String, Object> body, String key) {
