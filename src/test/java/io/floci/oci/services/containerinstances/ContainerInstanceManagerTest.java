@@ -1,5 +1,9 @@
 package io.floci.oci.services.containerinstances;
 
+import com.github.dockerjava.api.exception.InternalServerErrorException;
+import com.github.dockerjava.api.exception.NotFoundException;
+import com.github.dockerjava.api.exception.NotModifiedException;
+import com.github.dockerjava.api.model.Container;
 import io.floci.oci.config.EmulatorConfig;
 import io.floci.oci.core.common.docker.ContainerBuilder;
 import io.floci.oci.core.common.docker.ContainerLifecycleManager;
@@ -10,6 +14,7 @@ import io.floci.oci.services.containerinstances.model.StoredContainerInstance;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -23,6 +28,7 @@ import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
@@ -97,14 +103,14 @@ class ContainerInstanceManagerTest {
         verify(spec).withNanoCpus(500_000_000L);
         verify(spec).withMemoryBytes(1024L * 1024L * 1024L);
         String volume = manager.volumeName(instance, "scratch");
-        verify(lifecycle).ensureVolume(volume);
+        verify(lifecycle).ensureVolume(volume, Map.of());
         verify(spec).withNamedVolume(volume, "/data", false);
         verify(lifecycle).startCreated(eq("created-id"), any());
         assertEquals(manager.containerName(container), container.getDockerName());
     }
 
     @Test
-    void configFilesAreCopiedIntoTheContainerBeforeItStarts() {
+    void configFilesAreSeededIntoTheVolumeBeforeAnyContainerStarts() {
         String data = Base64.getEncoder().encodeToString("port=8080\n".getBytes(StandardCharsets.UTF_8));
         StoredContainerInstance instance = instance(List.of(Map.of("name", "conf", "volumeType", "CONFIGFILE",
                 "configs", List.of(Map.of("fileName", "app.conf", "data", data, "path", "nested")))));
@@ -113,9 +119,66 @@ class ContainerInstanceManagerTest {
 
         manager.startPod(instance, List.of(container), image -> image);
 
+        String volume = manager.volumeName(instance, "conf");
         assertEquals(1, copied.size());
-        assertArrayEquals("port=8080\n".getBytes(StandardCharsets.UTF_8), copied.get(0).get("etc/app/nested/app.conf"));
-        verify(lifecycle).copyToContainer(eq("created-id"), any(), eq("/"));
+        assertArrayEquals("port=8080\n".getBytes(StandardCharsets.UTF_8),
+                copied.get(0).get("floci-config/nested/app.conf"));
+        InOrder order = inOrder(lifecycle, spec);
+        order.verify(spec).withNamedVolume(volume, "/floci-config", false);
+        order.verify(lifecycle).copyToContainer(eq("created-id"), any(), eq("/"));
+        order.verify(lifecycle).removeIfExists(volume + "-seed");
+        order.verify(spec).withNamedVolume(volume, "/etc/app", false);
+        order.verify(lifecycle).startCreated(eq("created-id"), any());
+    }
+
+    @Test
+    void aMemoryVolumeIsOneTmpfsVolumeSharedByEveryContainerThatMountsIt() {
+        StoredContainerInstance instance = instance(List.of(Map.of("name", "shm", "volumeType", "EMPTYDIR",
+                "backingStore", "MEMORY")));
+        StoredContainer writer = container(Map.of(
+                "volumeMounts", List.of(Map.of("volumeName", "shm", "mountPath", "/out"))));
+        StoredContainer reader = container(Map.of(
+                "volumeMounts", List.of(Map.of("volumeName", "shm", "mountPath", "/in"))));
+        reader.setId("ocid1.computecontainer.oc1.iad.reader");
+
+        manager.startPod(instance, List.of(writer, reader), image -> image);
+
+        String volume = manager.volumeName(instance, "shm");
+        verify(lifecycle, times(2)).ensureVolume(volume, Map.of("type", "tmpfs", "device", "tmpfs"));
+        verify(spec).withNamedVolume(volume, "/out", false);
+        verify(spec).withNamedVolume(volume, "/in", false);
+        verify(spec, never()).withMount(any());
+    }
+
+    @Test
+    void isReadOnlyMountsEveryVolumeTypeReadOnly() {
+        String data = Base64.getEncoder().encodeToString("x".getBytes(StandardCharsets.UTF_8));
+        StoredContainerInstance instance = instance(List.of(
+                Map.of("name", "shm", "volumeType", "EMPTYDIR", "backingStore", "MEMORY"),
+                Map.of("name", "disk", "volumeType", "EMPTYDIR", "backingStore", "EPHEMERAL_STORAGE"),
+                Map.of("name", "conf", "volumeType", "CONFIGFILE",
+                        "configs", List.of(Map.of("fileName", "a", "data", data)))));
+        StoredContainer container = container(Map.of("volumeMounts", List.of(
+                Map.of("volumeName", "shm", "mountPath", "/shm", "isReadOnly", true),
+                Map.of("volumeName", "disk", "mountPath", "/disk", "isReadOnly", true),
+                Map.of("volumeName", "conf", "mountPath", "/conf", "isReadOnly", true))));
+
+        manager.startPod(instance, List.of(container), image -> image);
+
+        verify(spec).withNamedVolume(manager.volumeName(instance, "shm"), "/shm", true);
+        verify(spec).withNamedVolume(manager.volumeName(instance, "disk"), "/disk", true);
+        verify(spec).withNamedVolume(manager.volumeName(instance, "conf"), "/conf", true);
+    }
+
+    @Test
+    void volumesWhoseNamesDifferOnlyInCaseOrPunctuationGetTheirOwnDockerVolume() {
+        StoredContainerInstance instance = instance(List.of());
+        String upper = manager.volumeName(instance, "Cache");
+        String lower = manager.volumeName(instance, "cache");
+        String punctuated = manager.volumeName(instance, "cache!");
+        assertNotEquals(upper, lower);
+        assertNotEquals(lower, punctuated);
+        assertEquals(upper, manager.volumeName(instance, "Cache"));
     }
 
     @Test
@@ -138,8 +201,49 @@ class ContainerInstanceManagerTest {
 
         assertThrows(IllegalStateException.class, () -> manager.startPod(instance, List.of(container), i -> i));
 
-        verify(lifecycle, atLeastOnce()).removeIfExists(manager.podName(instance));
-        verify(lifecycle, atLeastOnce()).removeIfExists(manager.containerName(container));
+        verify(lifecycle).forceRemove(manager.podName(instance));
+        verify(lifecycle).forceRemove(manager.containerName(container));
+    }
+
+    @Test
+    void removeTriesEverythingAndThrowsWhatDockerCouldNotRemove() {
+        StoredContainerInstance instance = instance(List.of(Map.of("name", "shm", "volumeType", "EMPTYDIR",
+                "backingStore", "MEMORY")));
+        StoredContainer container = container(Map.of());
+        String name = manager.containerName(container);
+        doThrow(new InternalServerErrorException("device busy")).when(lifecycle).forceRemove(name);
+
+        InternalServerErrorException e = assertThrows(InternalServerErrorException.class,
+                () -> manager.removePod(instance, List.of(container)));
+
+        assertTrue(e.getMessage().contains("device busy"), e.getMessage());
+        verify(lifecycle).forceRemove(manager.podName(instance));
+        verify(lifecycle).deleteVolume(manager.volumeName(instance, "shm"));
+    }
+
+    @Test
+    void stopToleratesGoneAndStoppedContainersButNotOtherFailures() {
+        StoredContainerInstance instance = instance(List.of());
+        StoredContainer container = container(Map.of());
+        String name = manager.containerName(container);
+        String pause = manager.podName(instance);
+        doThrow(new NotModifiedException("already stopped")).when(lifecycle).stop(eq(name), anyInt());
+        doThrow(new NotFoundException("gone")).when(lifecycle).stop(eq(pause), anyInt());
+        manager.stopPod(instance, List.of(container));
+
+        doThrow(new InternalServerErrorException("daemon error")).when(lifecycle).stop(eq(pause), anyInt());
+        assertThrows(InternalServerErrorException.class, () -> manager.stopPod(instance, List.of(container)));
+    }
+
+    @Test
+    void aStartOfAStoppedPodThatDockerRejectsFails() {
+        StoredContainerInstance instance = instance(List.of());
+        StoredContainer container = container(Map.of());
+        String name = manager.containerName(container);
+        when(lifecycle.findByName(anyString())).thenReturn(Optional.of(new Container()));
+        doThrow(new InternalServerErrorException("cannot start")).when(lifecycle).start(name);
+
+        assertThrows(InternalServerErrorException.class, () -> manager.restartPod(instance, List.of(container), i -> i));
     }
 
     @Test
@@ -187,12 +291,16 @@ class ContainerInstanceManagerTest {
     }
 
     @Test
-    void stopStopsTheContainersBeforeThePauseContainer() {
+    void stopStopsTheContainersBeforeThePauseContainerWithTheGracefulShutdownTimeout() {
         StoredContainerInstance instance = instance(List.of());
+        instance.getAttributes().put("gracefulShutdownTimeoutInSeconds", 30L);
         StoredContainer container = container(Map.of());
         manager.stopPod(instance, List.of(container));
         ArgumentCaptor<String> stopped = ArgumentCaptor.forClass(String.class);
-        verify(lifecycle, times(2)).stop(stopped.capture(), eq(5));
+        verify(lifecycle, times(2)).stop(stopped.capture(), eq(30));
         assertEquals(List.of(manager.containerName(container), manager.podName(instance)), stopped.getAllValues());
+
+        manager.restartContainer(instance, container);
+        verify(lifecycle).restart(manager.containerName(container), 30);
     }
 }

@@ -4,6 +4,7 @@ import com.github.dockerjava.api.DockerClient;
 import com.github.dockerjava.api.async.ResultCallback;
 import com.github.dockerjava.api.command.CreateContainerCmd;
 import com.github.dockerjava.api.command.CreateContainerResponse;
+import com.github.dockerjava.api.command.CreateVolumeCmd;
 import com.github.dockerjava.api.command.ExecCreateCmd;
 import com.github.dockerjava.api.command.InspectContainerResponse;
 import com.github.dockerjava.api.exception.DockerException;
@@ -216,11 +217,23 @@ public class ContainerLifecycleManager {
      * {@code --filter label=floci_emulator=floci-oci} (this emulator only) work.
      */
     public void ensureVolume(String volumeName) {
+        ensureVolume(volumeName, Map.of());
+    }
+
+    /**
+     * Like {@link #ensureVolume(String)}, creating the volume with the local driver's
+     * {@code driverOpts} (for example {@code type=tmpfs, device=tmpfs} for a memory-backed volume
+     * that every container mounting it shares). An existing volume is left as it is.
+     */
+    public void ensureVolume(String volumeName, Map<String, String> driverOpts) {
         if (!volumeExists(volumeName)) {
-            dockerClient.createVolumeCmd()
+            CreateVolumeCmd create = dockerClient.createVolumeCmd()
                     .withName(volumeName)
-                    .withLabels(ContainerStorageHelper.defaultLabels(config))
-                    .exec();
+                    .withLabels(ContainerStorageHelper.defaultLabels(config));
+            if (!driverOpts.isEmpty()) {
+                create.withDriverOpts(driverOpts);
+            }
+            create.exec();
             LOG.debugv("Created volume {0}", volumeName);
         }
     }
@@ -350,6 +363,20 @@ public class ContainerLifecycleManager {
     }
 
     /**
+     * Removes a named Docker volume. Unlike {@link #removeVolume}, only a volume that is already
+     * gone is tolerated: any other failure (the volume is still in use, the daemon errors)
+     * propagates, for callers that must report whether the removal really happened.
+     */
+    public void deleteVolume(String volumeName) {
+        try {
+            dockerClient.removeVolumeCmd(volumeName).exec();
+            LOG.debugv("Removed volume {0}", volumeName);
+        } catch (NotFoundException e) {
+            LOG.debugv("Volume {0} is already gone", volumeName);
+        }
+    }
+
+    /**
      * Finds an existing container by name.
      *
      * @param name the container name to search for
@@ -449,6 +476,19 @@ public class ContainerLifecycleManager {
             // Not found - normal case
         } catch (Exception e) {
             LOG.debugv("Could not remove container {0}: {1}", name, e.getMessage());
+        }
+    }
+
+    /**
+     * Force-removes a container and its anonymous volumes. Unlike {@link #removeIfExists}, only a
+     * container that is already gone is tolerated: any other failure propagates.
+     */
+    public void forceRemove(String name) {
+        try {
+            dockerClient.removeContainerCmd(name).withForce(true).withRemoveVolumes(true).exec();
+            LOG.debugv("Removed container {0}", name);
+        } catch (NotFoundException e) {
+            LOG.debugv("Container {0} is already gone", name);
         }
     }
 

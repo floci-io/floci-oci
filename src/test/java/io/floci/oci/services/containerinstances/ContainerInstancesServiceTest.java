@@ -283,7 +283,7 @@ class ContainerInstancesServiceTest {
         assertEquals(3, container.getExitCode());
         assertEquals("2026-11-22T10:00:00Z", container.getTimeTerminated());
         assertEquals("INACTIVE", real.get(id).getLifecycleState());
-        verify(manager, never()).restartContainer(any());
+        verify(manager, never()).restartContainer(any(), any());
     }
 
     @Test
@@ -297,7 +297,7 @@ class ContainerInstancesServiceTest {
         assertEquals("ACTIVE", container.getLifecycleState());
         assertEquals(1, container.getContainerRestartAttemptCount());
         assertEquals("ACTIVE", real.get(id).getLifecycleState());
-        verify(manager).restartContainer(any());
+        verify(manager).restartContainer(any(), any());
     }
 
     @Test
@@ -310,7 +310,7 @@ class ContainerInstancesServiceTest {
         real.refreshActive();
 
         assertEquals("INACTIVE", real.containersOf(real.get(id)).get(0).getLifecycleState());
-        verify(manager, never()).restartContainer(any());
+        verify(manager, never()).restartContainer(any(), any());
     }
 
     @Test
@@ -330,6 +330,47 @@ class ContainerInstancesServiceTest {
         verify(manager).removePod(any(), anyList());
         assertTrue(instances.scan(k -> true).isEmpty());
         assertTrue(containers.scan(k -> true).isEmpty());
+    }
+
+    @Test
+    void aDeleteThatDockerCannotFinishFailsTheInstanceAndKeepsItsVnic() {
+        String id = real.create(details()).instance().getId();
+        doThrow(new IllegalStateException("volume in use")).when(manager).removePod(any(), anyList());
+
+        String delete = real.delete(id, null);
+
+        assertEquals("FAILED", real.get(id).getLifecycleState());
+        assertEquals("volume in use", real.get(id).getLifecycleDetails());
+        StoredWorkRequest wr = workRequest(delete);
+        assertEquals("FAILED", wr.getStatus());
+        assertEquals("volume in use", wr.getErrors().get(0).getMessage());
+        verify(network, never()).detachVnic(any());
+
+        doNothing().when(manager).removePod(any(), anyList());
+        assertEquals("SUCCEEDED", workRequest(real.delete(id, null)).getStatus());
+        assertEquals("DELETED", real.get(id).getLifecycleState());
+    }
+
+    @Test
+    void aStopThatDockerCannotFinishFailsItsWorkRequest() {
+        String id = real.create(details()).instance().getId();
+        doThrow(new IllegalStateException("daemon error")).when(manager).stopPod(any(), anyList());
+
+        StoredWorkRequest wr = workRequest(real.stop(id, null));
+
+        assertEquals("FAILED", wr.getStatus());
+        assertEquals("daemon error", real.get(id).getLifecycleDetails());
+    }
+
+    @Test
+    void theRestartPolicyAndRestartActionPassTheInstanceForItsShutdownTimeout() {
+        Map<String, Object> d = details();
+        d.put("gracefulShutdownTimeoutInSeconds", 42);
+        String id = real.create(d).instance().getId();
+        real.restart(id, null);
+        ArgumentCaptor<StoredContainerInstance> instance = ArgumentCaptor.forClass(StoredContainerInstance.class);
+        verify(manager).restartContainer(instance.capture(), any());
+        assertEquals(42L, instance.getValue().getAttributes().get("gracefulShutdownTimeoutInSeconds"));
     }
 
     @Test

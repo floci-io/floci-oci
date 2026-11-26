@@ -40,13 +40,22 @@ back for `oci_container_instances_container_instance`.
 - **Containers.** `command` replaces the image's entrypoint and `arguments` its command, as the
   SDK describes them; `environmentVariables` and `workingDirectory` pass through.
   `resourceConfig.vcpusLimit` and `memoryLimitInGBs` become Docker CPU and memory limits.
-- **Volumes.** `EMPTYDIR` volumes are named Docker volumes (tmpfs for `backingStore: MEMORY`)
-  shared by the containers that mount them, and removed with the instance. `CONFIGFILE` files are
-  written into each mounting container at `<mountPath>/<path>/<fileName>` before it starts.
+- **Volumes.** Each volume of the instance is one named Docker volume, shared by every container
+  that mounts it and removed with the instance: `EMPTYDIR` on disk, or on tmpfs for
+  `backingStore: MEMORY`; `CONFIGFILE` filled with its files before any container starts, so they
+  appear at `<mountPath>/<path>/<fileName>`. A mount with `isReadOnly: true` is a read-only
+  mount for every volume type. Volume names are case-sensitive: `Cache` and `cache` are two
+  volumes. `subPath` is stored and returned but not applied.
 - **Work requests.** Create, delete, start, stop and restart return a work request that finishes
   when Docker has done the work; the instance is `CREATING` (or `UPDATING`, `DELETING`) until
   then. A pull or start failure leaves the instance `FAILED` with the error in
-  `lifecycleDetails` and on `ListWorkRequestErrors`. Update and change compartment finish at once.
+  `lifecycleDetails` and on `ListWorkRequestErrors`; so does a delete that Docker cannot finish
+  (the instance keeps its VNIC and can be deleted again), and a stop or restart Docker rejects
+  fails its work request the same way. A container or volume that is already gone does not
+  count as a failure. Update and change compartment finish at once.
+- **Graceful shutdown.** Stop, restart, the restart policy and a shutdown of floci-oci give each
+  container `gracefulShutdownTimeoutInSeconds` to exit before Docker kills it. Left out, it is
+  `0` and the containers are killed at once (inferred: the SDK documents no default).
 - **Restart policy.** floci-oci checks the containers every five seconds. A container that
   exited is restarted under `ALWAYS`, and under `ON_FAILURE` when its exit code is not zero, and
   `containerRestartAttemptCount` counts it; otherwise it becomes `INACTIVE` with its `exitCode`

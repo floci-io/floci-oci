@@ -80,15 +80,21 @@ class ContainerInstancesDockerTest {
         details.put("volumes", List.of(
                 Map.of("name", "conf", "volumeType", "CONFIGFILE",
                         "configs", List.of(Map.of("fileName", "index.html", "data", config))),
-                Map.of("name", "scratch", "volumeType", "EMPTYDIR")));
+                Map.of("name", "scratch", "volumeType", "EMPTYDIR"),
+                Map.of("name", "shm", "volumeType", "EMPTYDIR", "backingStore", "MEMORY")));
         details.put("containers", List.of(Map.of(
                 "imageUrl", "busybox:1.36",
                 "command", List.of("sh", "-c"),
                 "arguments", List.of("echo started-$MODE; exec httpd -f -p 8080 -h /www"),
                 "environmentVariables", Map.of("MODE", "docker"),
                 "resourceConfig", Map.of("vcpusLimit", 0.5, "memoryLimitInGBs", 0.25),
-                "volumeMounts", List.of(Map.of("volumeName", "conf", "mountPath", "/www"),
-                        Map.of("volumeName", "scratch", "mountPath", "/scratch")))));
+                "volumeMounts", List.of(Map.of("volumeName", "conf", "mountPath", "/www", "isReadOnly", true),
+                        Map.of("volumeName", "scratch", "mountPath", "/scratch"),
+                        Map.of("volumeName", "shm", "mountPath", "/shm", "isReadOnly", true))),
+                Map.of("imageUrl", "busybox:1.36",
+                        "command", List.of("sh", "-c"),
+                        "arguments", List.of("echo shared-in-memory > /shm/hello; exec sleep 3600"),
+                        "volumeMounts", List.of(Map.of("volumeName", "shm", "mountPath", "/shm")))));
         details.put("vnics", List.of(Map.of("subnetId", network.subnetId())));
 
         Response created = given().contentType("application/json").body(details)
@@ -139,6 +145,16 @@ class ContainerInstancesDockerTest {
         String limits = docker("inspect", "-f", "{{.HostConfig.NanoCpus}} {{.HostConfig.Memory}}",
                 docker("ps", "-q", "--filter", "label=" + LABEL + "=" + containerId).trim()).trim();
         assertEquals("500000000 268435456", limits);
+
+        String web = docker("ps", "-q", "--filter", "label=" + LABEL + "=" + containerId).trim();
+        String shared = "";
+        for (int i = 0; i < 20 && !shared.contains("shared-in-memory"); i++) {
+            shared = docker("exec", web, "cat", "/shm/hello");
+            Thread.sleep(500);
+        }
+        assertTrue(shared.contains("shared-in-memory"), "a MEMORY volume is shared by the containers: " + shared);
+        assertTrue(docker("exec", web, "sh", "-c", "echo x > /www/new 2>&1 || echo refused").contains("Read-only"),
+                "an isReadOnly CONFIGFILE mount is read-only");
     }
 
     @Test

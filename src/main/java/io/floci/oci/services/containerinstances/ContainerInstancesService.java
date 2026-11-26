@@ -668,7 +668,7 @@ public class ContainerInstancesService implements Resettable, CompartmentUsage {
             if (current != null) {
                 try {
                     for (StoredContainer container : containersOf(current)) {
-                        manager.restartContainer(container);
+                        manager.restartContainer(current, container);
                     }
                 } catch (RuntimeException e) {
                     failure = e;
@@ -747,19 +747,29 @@ public class ContainerInstancesService implements Resettable, CompartmentUsage {
                         Objects.toString(error.getMessage(), error.getClass().getSimpleName()))));
     }
 
+    /**
+     * Removes the pod; the instance becomes DELETED. When Docker cannot remove part of it the
+     * instance is FAILED with the error instead, keeps its VNIC, and can be deleted again.
+     */
     private void runDelete(String id, String workRequestId) {
         StoredContainerInstance current = snapshot(id);
         if (current == null) {
             return;
         }
+        RuntimeException failure = null;
         try {
             manager.removePod(current, containersOf(current));
         } catch (RuntimeException e) {
             LOG.warnv("Could not remove the containers of container instance {0}: {1}", id, e.getMessage());
+            failure = e;
         }
         synchronized (this) {
             StoredContainerInstance instance = instances.get(id).orElse(null);
             if (instance == null || !workRequestId.equals(instance.getWorkRequestId())) {
+                return;
+            }
+            if (failure != null) {
+                settle(id, workRequestId, failure, "DELETED", "FAILED", null);
                 return;
             }
             instance.setWorkRequestId(null);
@@ -843,9 +853,9 @@ public class ContainerInstancesService implements Resettable, CompartmentUsage {
                 boolean restart = "ALWAYS".equals(policy) || ("ON_FAILURE".equals(policy) && !Integer.valueOf(0).equals(exitCode));
                 if (restart) {
                     try {
-                        manager.restartContainer(container);
+                        manager.restartContainer(instance, container);
                     } catch (RuntimeException e) {
-                        LOG.debugv("Could not restart container {0}: {1}", container.getId(), e.getMessage());
+                        LOG.warnv("Could not restart container {0}: {1}", container.getId(), e.getMessage());
                     }
                 }
                 synchronized (this) {

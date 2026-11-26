@@ -2,9 +2,8 @@ package io.floci.oci.services.containerinstances;
 
 import com.github.dockerjava.api.command.InspectContainerResponse;
 import com.github.dockerjava.api.exception.NotFoundException;
+import com.github.dockerjava.api.exception.NotModifiedException;
 import com.github.dockerjava.api.model.ContainerNetwork;
-import com.github.dockerjava.api.model.Mount;
-import com.github.dockerjava.api.model.MountType;
 import io.floci.oci.config.EmulatorConfig;
 import io.floci.oci.core.common.docker.ContainerBuilder;
 import io.floci.oci.core.common.docker.ContainerLifecycleManager;
@@ -22,10 +21,13 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -37,9 +39,10 @@ import java.util.function.UnaryOperator;
  * Runs a container instance as a pod on Docker: one pause container holds the network namespace
  * on the shared Docker network (so the instance has one IP, like its one VNIC), and each container
  * joins it with {@code --network container:<pause>}, the way containers of one OCI container
- * instance share localhost. EMPTYDIR volumes are named volumes (tmpfs for MEMORY) shared by the
- * containers that mount them; CONFIGFILE files are copied into each mounting container before it
- * starts. Flag-free mechanics only: the service decides when any of this runs.
+ * instance share localhost. Every volume of the instance is one named volume shared by the
+ * containers that mount it: EMPTYDIR on disk, or on tmpfs for MEMORY, and CONFIGFILE seeded with
+ * its files before any container starts, so {@code isReadOnly} is a read-only mount for each of
+ * them. Flag-free mechanics only: the service decides when any of this runs.
  */
 @ApplicationScoped
 public class ContainerInstanceManager {
@@ -48,6 +51,8 @@ public class ContainerInstanceManager {
     private static final String SERVICE = "containerinstances";
     private static final long BYTES_PER_GB = 1024L * 1024L * 1024L;
     private static final int LOG_LIMIT_BYTES = 20 * 1024 * 1024;
+    private static final Map<String, String> TMPFS = Map.of("type", "tmpfs", "device", "tmpfs");
+    private static final String SEED_MOUNT = "/floci-config";
 
     /** What Docker reports for one container. */
     record ContainerState(boolean running, Integer exitCode, Instant finishedAt) {
@@ -75,9 +80,31 @@ public class ContainerInstanceManager {
         return ContainerStorageHelper.dockerName(config, "ci-" + container.getId());
     }
 
+    /**
+     * The Docker volume of one instance volume. OCI volume names are case-sensitive and may hold
+     * characters Docker rejects, so the readable part is followed by a hash of the exact name:
+     * {@code Cache} and {@code cache} are two volumes.
+     */
     String volumeName(StoredContainerInstance instance, String volume) {
         String safe = volume.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9_.-]", "-");
-        return ContainerStorageHelper.dockerName(config, "ci-" + instance.getId() + "-" + safe);
+        return ContainerStorageHelper.dockerName(config, "ci-" + instance.getId() + "-" + safe + "-" + shortHash(volume));
+    }
+
+    private static String shortHash(String text) {
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256").digest(text.getBytes(StandardCharsets.UTF_8));
+            return HexFormat.of().formatHex(digest, 0, 4);
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 is always available", e);
+        }
+    }
+
+    /** The configured gracefulShutdownTimeoutInSeconds, as the Docker stop timeout. */
+    static int shutdownTimeout(StoredContainerInstance instance) {
+        if (instance.getAttributes().get("gracefulShutdownTimeoutInSeconds") instanceof Number seconds) {
+            return (int) Math.clamp(seconds.longValue(), 0, Integer.MAX_VALUE);
+        }
+        return 0;
     }
 
     /**
@@ -101,13 +128,55 @@ public class ContainerInstanceManager {
                     .withLabels(labels(instance, instance.getId()))
                     .build();
             lifecycle.createAndStart(pauseSpec);
+            seedConfigVolumes(instance);
             for (StoredContainer container : containers) {
                 createAndStart(instance, container, pullable);
             }
             return podIp(pause, pauseSpec.networkMode());
         } catch (RuntimeException e) {
-            removePod(instance, containers);
+            try {
+                removePod(instance, containers);
+            } catch (RuntimeException cleanup) {
+                e.addSuppressed(cleanup);
+            }
             throw e;
+        }
+    }
+
+    /**
+     * Writes the files of every CONFIGFILE volume into its named volume, through a container that
+     * is created (never started) with the volume mounted writable and removed again.
+     */
+    private void seedConfigVolumes(StoredContainerInstance instance) {
+        for (Map<String, Object> volume : mapList(instance.getAttributes().get("volumes"))) {
+            if (!"CONFIGFILE".equals(volume.get("volumeType"))) {
+                continue;
+            }
+            String volumeName = volumeName(instance, String.valueOf(volume.get("name")));
+            lifecycle.ensureVolume(volumeName);
+            Map<String, byte[]> files = new LinkedHashMap<>();
+            for (Map<String, Object> file : mapList(volume.get("configs"))) {
+                String directory = file.get("path") instanceof String path ? SEED_MOUNT + "/" + path : SEED_MOUNT;
+                files.put(directory + "/" + file.get("fileName"),
+                        Base64.getDecoder().decode(String.valueOf(file.get("data"))));
+            }
+            if (files.isEmpty()) {
+                continue;
+            }
+            String seed = volumeName + "-seed";
+            lifecycle.removeIfExists(seed);
+            ContainerSpec spec = containerBuilder.newContainer(config.services().containerinstances().pauseImage())
+                    .withName(seed)
+                    .withNetworkMode("none")
+                    .withNamedVolume(volumeName, SEED_MOUNT, false)
+                    .withLabels(labels(instance, instance.getId()))
+                    .build();
+            String id = lifecycle.create(spec);
+            try {
+                copyFiles(id, files);
+            } finally {
+                lifecycle.removeIfExists(seed);
+            }
         }
     }
 
@@ -163,37 +232,21 @@ public class ContainerInstanceManager {
                 builder.withNanoCpus((long) (vcpus.doubleValue() * 1_000_000_000L));
             }
         }
-        Map<String, byte[]> files = new LinkedHashMap<>();
         for (Map<String, Object> mount : mapList(a.get("volumeMounts"))) {
             String mountPath = String.valueOf(mount.get("mountPath"));
             Map<String, Object> volume = volume(instance, String.valueOf(mount.get("volumeName")));
             boolean readOnly = Boolean.TRUE.equals(mount.get("isReadOnly"));
+            String volumeName = volumeName(instance, String.valueOf(volume.get("name")));
             switch (String.valueOf(volume.get("volumeType"))) {
-                case "EMPTYDIR" -> {
-                    if ("MEMORY".equals(volume.get("backingStore"))) {
-                        builder.withMount(new Mount().withType(MountType.TMPFS).withTarget(mountPath));
-                    } else {
-                        String volumeName = volumeName(instance, String.valueOf(volume.get("name")));
-                        lifecycle.ensureVolume(volumeName);
-                        builder.withNamedVolume(volumeName, mountPath, readOnly);
-                    }
-                }
-                case "CONFIGFILE" -> {
-                    for (Map<String, Object> config : mapList(volume.get("configs"))) {
-                        String directory = config.get("path") instanceof String path
-                                ? mountPath + "/" + path : mountPath;
-                        files.put(directory + "/" + config.get("fileName"),
-                                Base64.getDecoder().decode(String.valueOf(config.get("data"))));
-                    }
-                }
+                case "EMPTYDIR" -> lifecycle.ensureVolume(volumeName,
+                        "MEMORY".equals(volume.get("backingStore")) ? TMPFS : Map.of());
+                case "CONFIGFILE" -> lifecycle.ensureVolume(volumeName);
                 default -> throw new IllegalStateException("unhandled volume type " + volume.get("volumeType"));
             }
+            builder.withNamedVolume(volumeName, mountPath, readOnly);
         }
         ContainerSpec spec = builder.build();
         String id = lifecycle.create(spec);
-        if (!files.isEmpty()) {
-            copyFiles(id, files);
-        }
         lifecycle.startCreated(id, spec);
         container.setDockerName(name);
         LOG.infov("Started container {0} of container instance {1}", container.getId(), instance.getId());
@@ -306,21 +359,28 @@ public class ContainerInstanceManager {
                 .orElse(null);
     }
 
-    /** Stops the containers, then the pause container; nothing is removed. */
+    /**
+     * Stops the containers, each with the instance's gracefulShutdownTimeoutInSeconds, then the
+     * pause container; nothing is removed. A container that is gone or already stopped is fine;
+     * any other failure is thrown once every container has been tried.
+     */
     void stopPod(StoredContainerInstance instance, List<StoredContainer> containers) {
+        int timeout = shutdownTimeout(instance);
+        Failures failures = new Failures();
         for (StoredContainer container : containers) {
-            stopQuietly(containerName(container));
+            failures.attempt(() -> stop(containerName(container), timeout));
         }
-        stopQuietly(podName(instance));
+        failures.attempt(() -> stop(podName(instance), timeout));
+        failures.throwIfAny();
     }
 
-    private void stopQuietly(String name) {
+    private void stop(String name, int timeout) {
         try {
-            lifecycle.stop(name, 5);
+            lifecycle.stop(name, timeout);
         } catch (NotFoundException e) {
             LOG.debugv("Container {0} is already gone", name);
-        } catch (RuntimeException e) {
-            LOG.debugv("Could not stop container {0}: {1}", name, e.getMessage());
+        } catch (NotModifiedException e) {
+            LOG.debugv("Container {0} is already stopped", name);
         }
     }
 
@@ -336,40 +396,65 @@ public class ContainerInstanceManager {
         if (!intact) {
             return startPod(instance, containers, pullable);
         }
-        startQuietly(pause);
+        start(pause);
         for (StoredContainer container : containers) {
-            startQuietly(containerName(container));
+            start(containerName(container));
         }
         return podIp(pause, null);
     }
 
-    private void startQuietly(String name) {
+    /** Starts a stopped container; one that already runs is fine, any other failure propagates. */
+    private void start(String name) {
         try {
             lifecycle.start(name);
-        } catch (RuntimeException e) {
-            LOG.debugv("Could not start container {0}: {1}", name, e.getMessage());
+        } catch (NotModifiedException e) {
+            LOG.debugv("Container {0} is already running", name);
         }
     }
 
-    /** Restarts one container (RestartContainerInstance, and the restart policy). */
-    void restartContainer(StoredContainer container) {
-        lifecycle.restart(containerName(container), 5);
+    /**
+     * Restarts one container (RestartContainerInstance, and the restart policy), giving it the
+     * instance's gracefulShutdownTimeoutInSeconds to stop.
+     */
+    void restartContainer(StoredContainerInstance instance, StoredContainer container) {
+        lifecycle.restart(containerName(container), shutdownTimeout(instance));
     }
 
-    /** Removes the containers, the pause container and the instance's volumes. */
+    /**
+     * Removes the containers, the pause container and the instance's volumes. What is already
+     * gone is fine; any other failure is thrown once everything has been tried.
+     */
     void removePod(StoredContainerInstance instance, List<StoredContainer> containers) {
+        Failures failures = new Failures();
         for (StoredContainer container : containers) {
-            lifecycle.removeIfExists(containerName(container));
+            failures.attempt(() -> lifecycle.forceRemove(containerName(container)));
         }
-        lifecycle.removeIfExists(podName(instance));
+        failures.attempt(() -> lifecycle.forceRemove(podName(instance)));
         for (Map<String, Object> volume : mapList(instance.getAttributes().get("volumes"))) {
-            if ("EMPTYDIR".equals(volume.get("volumeType")) && !"MEMORY".equals(volume.get("backingStore"))) {
-                try {
-                    lifecycle.removeVolume(volumeName(instance, String.valueOf(volume.get("name"))));
-                } catch (RuntimeException e) {
-                    LOG.warnv("Could not remove volume {0} of container instance {1}: {2}",
-                            volume.get("name"), instance.getId(), e.getMessage());
+            failures.attempt(() -> lifecycle.deleteVolume(volumeName(instance, String.valueOf(volume.get("name")))));
+        }
+        failures.throwIfAny();
+    }
+
+    /** Runs every step and keeps the first failure, with the later ones suppressed on it. */
+    private static final class Failures {
+        private RuntimeException first;
+
+        void attempt(Runnable step) {
+            try {
+                step.run();
+            } catch (RuntimeException e) {
+                if (first == null) {
+                    first = e;
+                } else {
+                    first.addSuppressed(e);
                 }
+            }
+        }
+
+        void throwIfAny() {
+            if (first != null) {
+                throw first;
             }
         }
     }
