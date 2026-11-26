@@ -13,6 +13,7 @@ import java.util.Map;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -70,6 +71,23 @@ class ArtifactsRegistryManagerTest {
                 .thenReturn(new ContainerLifecycleManager.EndpointInfo("172.17.0.5", 5000));
         manager.ensureStarted();
         assertEquals("172.17.0.5:5000", manager.endpoint());
+    }
+
+    @Test
+    void otherSidecarsReachTheRegistryThroughTheDaemonHostFromTheHost() {
+        assertNull(manager.sidecarEndpoint());
+        manager.ensureStarted();
+        assertEquals("host.docker.internal:5201", manager.sidecarEndpoint());
+    }
+
+    @Test
+    void otherSidecarsReachTheRegistryByItsIpWhenFlociRunsInAContainer() {
+        when(detector.isRunningInContainer()).thenReturn(true);
+        when(networkResolver.resolveNetworkName()).thenReturn(Optional.of("floci_oci_default"));
+        when(lifecycle.resolveEndpoint("c1", 5000, "floci_oci_default"))
+                .thenReturn(new ContainerLifecycleManager.EndpointInfo("172.18.0.4", 5000));
+        manager.ensureStarted();
+        assertEquals("172.18.0.4:5000", manager.sidecarEndpoint());
     }
 
     @Test

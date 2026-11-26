@@ -35,6 +35,7 @@ When real mode is enabled (`FLOCI_OCI_SERVICES_OKE_MOCK=false`), OKE provisions 
 - **Token lifetime**: floci-oci accepts a token whose date is within 5 minutes of now. No Oracle source states OKE's server-side lifetime. `generate-token` itself tells kubectl to refresh after 4 minutes ("before the token is actually expired", oci-cli `containerengine_cli_extended.py`), so the 5 minutes is floci-oci's choice, just above that.
 - **Prerequisites for kubectl**: the `oci` CLI on `PATH` with a config whose key can sign (any key works, since signatures are not verified). Session auth works too: with `--auth security_token`, `generate-token` signs with a `ST$<token>` keyId, and floci-oci reads the caller from the token's `tenant` and `sub` claims without verifying it, as the OCI SDKs read them. The same applies to every floci-oci API, not only OKE.
 - **Static token alternative**: Each cluster also gets a random API token, stored with the cluster and never returned by `CreateCluster`, `GetCluster` or `ListClusters`. Set `FLOCI_OCI_SERVICES_OKE_KUBECONFIG_AUTH=token` to receive it in the kubeconfig instead of the `exec` user, for clients without the oci CLI. It is cluster-admin on that cluster.
+- **Pulling from the local OCIR**: with Artifacts in real mode too (`FLOCI_OCI_SERVICES_ARTIFACTS_MOCK=false`, the default), a pod can use an image pushed to this emulator's OCIR by its OCIR reference, for example `iad.ocir.localhost.floci.io:4599/<namespace>/project/app:v1`. k3s runs its own containerd, where that host name resolves to the sidecar itself, so floci-oci writes a k3s `registries.yaml` ([k3s private registry configuration](https://docs.k3s.io/installation/private-registry)) that mirrors the cluster region's OCIR host names (`<key>.ocir.localhost.floci.io`, `<region>.ocir.localhost.floci.io` and `ocir.<region>.oci.localhost.floci.io`, with and without floci-oci's port, and the same under `FLOCI_OCI_HOSTNAME` when set) to the registry sidecar over plain HTTP, rewriting `<namespace>/<repo>` to the `<key>/<namespace>/<repo>` path the registry stores it under. The sidecar is reached at `host.docker.internal:<registry port>` when floci-oci runs on the host, and at its IP on the shared network when floci-oci runs in a container. Only the cluster's own region is mirrored. Creating a cluster starts the registry sidecar if it is not running yet; if the registry cannot start, the cluster runs without the mirror. k3s reads the file when it starts, so a cluster created while Artifacts was mocked, or whose registry moved to another port, gets the mirror when floci-oci next recreates its sidecar (on restart, its configuration no longer matching).
 - **Storage Persistence**: Cluster state is stored in a Docker named volume (`/var/lib/rancher/k3s`) obeying the global storage persistence and `prune-volumes-on-delete` policies.
 - **Mock Mode**: Setting `FLOCI_OCI_SERVICES_OKE_MOCK=true` (default in test profiles) bypasses Docker execution and returns synthetic control plane state instantly.
 - **Teardown**: `DELETE` and application shutdown remove the sidecar container and keep or drop the named volume by the policy above, so a persistent cluster comes back after a restart. `POST /_floci-oci/state/reset` forgets every cluster and so always removes its volume too, whatever `prune-volumes-on-delete` says. The anonymous volumes the k3s image declares always go with the container.
@@ -70,4 +71,13 @@ oci ce cluster create-kubeconfig $E --cluster-id "ocid1.cluster.oc1.iad.demo" --
 
 # kubectl runs `oci ce cluster generate-token` for each request; real mode only
 KUBECONFIG=./kubeconfig kubectl get namespaces
+
+# Push an image to the local OCIR, then run it in the cluster by its OCIR reference
+NS=$(oci artifacts container configuration get $E --compartment-id "$TENANCY" --query data.namespace --raw-output)
+oci artifacts container repository create $E --compartment-id "$TENANCY" --display-name demo/busybox
+docker login iad.ocir.localhost.floci.io:4599 -u "$NS/user" -p anything
+docker tag busybox:1.36 iad.ocir.localhost.floci.io:4599/$NS/demo/busybox:1
+docker push iad.ocir.localhost.floci.io:4599/$NS/demo/busybox:1
+KUBECONFIG=./kubeconfig kubectl run hello --restart=Never \
+  --image=iad.ocir.localhost.floci.io:4599/$NS/demo/busybox:1 -- echo hello from OCIR
 ```

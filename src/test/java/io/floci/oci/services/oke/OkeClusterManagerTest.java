@@ -1,6 +1,7 @@
 package io.floci.oci.services.oke;
 
 import io.floci.oci.config.EmulatorConfig;
+import io.floci.oci.core.common.ContainerImageResolver.RegistryMirror;
 import io.floci.oci.core.common.docker.ContainerBuilder;
 import io.floci.oci.core.common.docker.ContainerDetector;
 import io.floci.oci.core.common.docker.ContainerLifecycleManager;
@@ -20,9 +21,11 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.io.IOException;
 import java.net.URI;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.function.Function;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -703,5 +706,142 @@ class OkeClusterManagerTest {
         ArgumentCaptor<ContainerSpec> spec = ArgumentCaptor.forClass(ContainerSpec.class);
         verify(lifecycleManager).createAndStart(spec.capture());
         assertEquals("us-phoenix-1", spec.getValue().labels().get("io.floci.region"));
+    }
+
+    private static final RegistryMirror IAD_MIRROR = new RegistryMirror(
+            List.of("iad.ocir.localhost.floci.io", "iad.ocir.localhost.floci.io:4599"),
+            "http://host.docker.internal:5200", "iad/");
+
+    private OkeClusterManager managerWithMirror(Function<String, Optional<RegistryMirror>> mirrors) {
+        return new OkeClusterManager(containerBuilder, lifecycleManager, portAllocator,
+                dockerHostResolver, containerDetector, networkResolver, config, mirrors);
+    }
+
+    @Test
+    void k3sEntrypointWritesRegistriesYamlOnlyWhenTheEnvironmentCarriesOne() {
+        String script = OkeClusterManager.K3S_ENTRYPOINT.get(2);
+        assertTrue(script.contains("if [ -n \"$" + OkeClusterManager.REGISTRIES_ENV + "\" ]; then"));
+        assertTrue(script.contains("\"$" + OkeClusterManager.REGISTRIES_ENV + "\" > "
+                + OkeClusterManager.REGISTRIES_FILE + "; fi"));
+        assertTrue(script.indexOf(OkeClusterManager.REGISTRIES_FILE) < script.indexOf("exec /bin/k3s"));
+    }
+
+    @Test
+    void registriesYamlMirrorsEachOcirHostToTheRegistryWithTheRegionPrefix() {
+        String yaml = managerWithMirror(region -> Optional.of(IAD_MIRROR)).registriesYaml("us-ashburn-1");
+
+        assertEquals("""
+                mirrors:
+                  "iad.ocir.localhost.floci.io":
+                    endpoint:
+                      - "http://host.docker.internal:5200"
+                    rewrite:
+                      "^(.*)$": "iad/$1"
+                  "iad.ocir.localhost.floci.io:4599":
+                    endpoint:
+                      - "http://host.docker.internal:5200"
+                    rewrite:
+                      "^(.*)$": "iad/$1"
+                """, yaml);
+    }
+
+    @Test
+    void registriesYamlIsAbsentWithoutARegistryOrWhenItCannotStart() {
+        assertNull(manager.registriesYaml("us-ashburn-1"));
+        assertNull(managerWithMirror(region -> {
+            throw new IllegalStateException("registry down");
+        }).registriesYaml("us-ashburn-1"));
+    }
+
+    @Test
+    void startClusterPassesTheRegistryMirrorForTheClusterRegion() {
+        List<String> regions = new ArrayList<>();
+        OkeClusterManager mirrored = managerWithMirror(region -> {
+            regions.add(region);
+            return Optional.of(IAD_MIRROR);
+        });
+        when(portAllocator.allocate(6443, 6543)).thenReturn(6443);
+        when(lifecycleManager.createAndStart(any())).thenReturn(new ContainerLifecycleManager.ContainerInfo("c-1", Map.of()));
+        StoredOkeCluster cluster = adoptableCluster("ocid1.cluster.oc1.iad.mirror001");
+        cluster.setHostPort(0);
+
+        mirrored.startCluster(cluster);
+
+        assertEquals(List.of("us-ashburn-1"), regions);
+        verify(specBuilder).withEnv(OkeClusterManager.REGISTRIES_ENV, mirrored.registriesYaml("us-ashburn-1"));
+    }
+
+    @Test
+    void startClusterSetsNoRegistriesWithoutAMirror() {
+        when(portAllocator.allocate(6443, 6543)).thenReturn(6443);
+        when(lifecycleManager.createAndStart(any())).thenReturn(new ContainerLifecycleManager.ContainerInfo("c-1", Map.of()));
+        StoredOkeCluster cluster = adoptableCluster("ocid1.cluster.oc1.iad.mirror002");
+        cluster.setHostPort(0);
+
+        manager.startCluster(cluster);
+
+        verify(specBuilder, never()).withEnv(eq(OkeClusterManager.REGISTRIES_ENV), anyString());
+    }
+
+    @Test
+    void startClusterRecreatesARunningSidecarWhoseRegistryMirrorChanged() {
+        OkeClusterManager mirrored = managerWithMirror(region -> Optional.of(IAD_MIRROR));
+        StoredOkeCluster cluster = adoptableCluster("ocid1.cluster.oc1.iad.mirror003");
+        String tlsSan = containerName(cluster);
+        String webhookKubeconfig = mirrored.webhookKubeconfig(cluster);
+        when(lifecycleManager.isContainerRunning(anyString())).thenReturn(true);
+        when(lifecycleManager.containerEnv(anyString())).thenReturn(List.of(
+                OkeClusterManager.API_TOKEN_ENV + "=" + cluster.getApiToken(),
+                OkeClusterManager.WEBHOOK_KUBECONFIG_ENV + "=" + webhookKubeconfig,
+                OkeClusterManager.TLS_SAN_ENV + "=" + tlsSan,
+                OkeClusterManager.REGISTRIES_ENV + "=mirrors: {}"));
+        lenient().when(lifecycleManager.containerLabels(anyString())).thenReturn(
+                Map.of(ContainerStorageHelper.REGION_LABEL, "us-ashburn-1"));
+        when(lifecycleManager.createAndStart(any())).thenReturn(new ContainerLifecycleManager.ContainerInfo("c-new", Map.of()));
+
+        mirrored.startCluster(cluster);
+
+        verify(lifecycleManager).createAndStart(any());
+    }
+
+    @Test
+    void startClusterAdoptsARunningSidecarWithTheCurrentRegistryMirror() {
+        OkeClusterManager mirrored = managerWithMirror(region -> Optional.of(IAD_MIRROR));
+        StoredOkeCluster cluster = adoptableCluster("ocid1.cluster.oc1.iad.mirror004");
+        String tlsSan = containerName(cluster);
+        String webhookKubeconfig = mirrored.webhookKubeconfig(cluster);
+        String registries = mirrored.registriesYaml("us-ashburn-1");
+        when(lifecycleManager.isContainerRunning(anyString())).thenReturn(true);
+        when(lifecycleManager.containerEnv(anyString())).thenReturn(List.of(
+                OkeClusterManager.API_TOKEN_ENV + "=" + cluster.getApiToken(),
+                OkeClusterManager.WEBHOOK_KUBECONFIG_ENV + "=" + webhookKubeconfig,
+                OkeClusterManager.TLS_SAN_ENV + "=" + tlsSan,
+                OkeClusterManager.REGISTRIES_ENV + "=" + registries));
+        when(lifecycleManager.containerLabels(anyString())).thenReturn(
+                Map.of(ContainerStorageHelper.REGION_LABEL, "us-ashburn-1"));
+
+        mirrored.startCluster(cluster);
+
+        verify(lifecycleManager, never()).createAndStart(any());
+    }
+
+    @Test
+    void startClusterRecreatesASidecarWithAMirrorThatIsNoLongerServed() {
+        StoredOkeCluster cluster = adoptableCluster("ocid1.cluster.oc1.iad.mirror005");
+        String tlsSan = containerName(cluster);
+        String webhookKubeconfig = manager.webhookKubeconfig(cluster);
+        when(lifecycleManager.isContainerRunning(anyString())).thenReturn(true);
+        when(lifecycleManager.containerEnv(anyString())).thenReturn(List.of(
+                OkeClusterManager.API_TOKEN_ENV + "=" + cluster.getApiToken(),
+                OkeClusterManager.WEBHOOK_KUBECONFIG_ENV + "=" + webhookKubeconfig,
+                OkeClusterManager.TLS_SAN_ENV + "=" + tlsSan,
+                OkeClusterManager.REGISTRIES_ENV + "=mirrors: {}"));
+        lenient().when(lifecycleManager.containerLabels(anyString())).thenReturn(
+                Map.of(ContainerStorageHelper.REGION_LABEL, "us-ashburn-1"));
+        when(lifecycleManager.createAndStart(any())).thenReturn(new ContainerLifecycleManager.ContainerInfo("c-new", Map.of()));
+
+        manager.startCluster(cluster);
+
+        verify(lifecycleManager).createAndStart(any());
     }
 }

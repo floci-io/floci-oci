@@ -94,7 +94,11 @@ An image is rewritten only when its namespace belongs to a tenancy this emulator
 reference to real OCIR (`iad.ocir.io/<real namespace>/...`) is passed through unchanged. With
 `FLOCI_OCI_SERVICES_ARTIFACTS_MOCK=true` nothing is rewritten.
 
+A pod in an OKE cluster runs an image from this registry by the same OCIR reference: the k3s
+sidecar gets a registry mirror for its region's OCIR host names. See
+[Container Engine for Kubernetes](containerengine.md) for how it is wired.
+
 ## Notes and limitations
 
-OKE does not yet pull from the local registry. Pull-through cache and multi-region
+Pull-through cache and multi-region
 repositories, image signatures, and `_catalog` are not implemented.

@@ -1,6 +1,8 @@
 package io.floci.oci.services.oke;
 
 import io.floci.oci.config.EmulatorConfig;
+import io.floci.oci.core.common.ContainerImageResolver;
+import io.floci.oci.core.common.ContainerImageResolver.RegistryMirror;
 import io.floci.oci.core.common.Resettable;
 import io.floci.oci.core.common.docker.ContainerBuilder;
 import io.floci.oci.core.common.docker.ContainerDetector;
@@ -13,6 +15,7 @@ import io.floci.oci.core.common.docker.PortAllocator;
 import io.floci.oci.services.oke.model.StoredOkeCluster;
 import jakarta.annotation.PreDestroy;
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.enterprise.inject.Instance;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
@@ -45,6 +48,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Function;
 
 /**
  * Driver for real-mode rancher/k3s Docker sidecar containers managing local Kubernetes clusters.
@@ -57,6 +61,8 @@ public class OkeClusterManager implements Resettable {
     static final String API_TOKEN_ENV = "FLOCI_OKE_API_TOKEN";
     static final String WEBHOOK_KUBECONFIG_ENV = "FLOCI_OKE_WEBHOOK_KUBECONFIG";
     static final String TLS_SAN_ENV = "FLOCI_OKE_TLS_SAN";
+    static final String REGISTRIES_ENV = "FLOCI_OKE_REGISTRIES";
+    static final String REGISTRIES_FILE = "/etc/rancher/k3s/registries.yaml";
     static final String ENDPOINT_MODE_HOST = "host";
     static final String ENDPOINT_MODE_NETWORK = "network";
     /** Docker's built-in networks, which have no container-name lookup. */
@@ -76,7 +82,9 @@ public class OkeClusterManager implements Resettable {
      * Both files are rewritten from the container's env on every start; the webhook address in
      * that env is fixed when the container is created. The image's own CMD is {@code agent}, which needs a server to join
      * and exits at once, so {@link #buildCmd} always supplies {@code server}. Values travel as env
-     * vars so nothing from the cluster record is ever interpolated into the script.
+     * vars so nothing from the cluster record is ever interpolated into the script. When
+     * {@link #REGISTRIES_ENV} is set, its value becomes k3s's {@code registries.yaml}, which k3s
+     * reads at startup and which routes the local OCIR hosts to the registry sidecar.
      */
     static final List<String> K3S_ENTRYPOINT = List.of("sh", "-c",
             "umask 077 && mkdir -p " + TOKEN_DIR
@@ -84,6 +92,8 @@ public class OkeClusterManager implements Resettable {
                     + " > " + TOKEN_FILE
                     + " && printf '%s\\n' \"$" + WEBHOOK_KUBECONFIG_ENV + "\""
                     + " > " + WEBHOOK_FILE
+                    + " && if [ -n \"$" + REGISTRIES_ENV + "\" ]; then mkdir -p /etc/rancher/k3s"
+                    + " && printf '%s\\n' \"$" + REGISTRIES_ENV + "\" > " + REGISTRIES_FILE + "; fi"
                     + " && exec /bin/k3s \"$@\" --tls-san=\"$" + TLS_SAN_ENV + "\"");
 
     public record ActiveClusterRef(String containerName, String volumeName, int hostPort) {}
@@ -95,6 +105,7 @@ public class OkeClusterManager implements Resettable {
     private final ContainerDetector containerDetector;
     private final CurrentContainerNetworkResolver networkResolver;
     private final EmulatorConfig config;
+    private final Function<String, Optional<RegistryMirror>> registryMirrors;
 
     private final Map<String, ActiveClusterRef> activeClusters = new ConcurrentHashMap<>();
 
@@ -105,7 +116,32 @@ public class OkeClusterManager implements Resettable {
                              DockerHostResolver dockerHostResolver,
                              ContainerDetector containerDetector,
                              CurrentContainerNetworkResolver networkResolver,
-                             EmulatorConfig config) {
+                             EmulatorConfig config,
+                             Instance<ContainerImageResolver> imageResolvers) {
+        this(containerBuilder, lifecycleManager, portAllocator, dockerHostResolver, containerDetector,
+                networkResolver, config, region -> imageResolvers.isResolvable()
+                        ? imageResolvers.get().registryMirror(region) : Optional.empty());
+    }
+
+    OkeClusterManager(ContainerBuilder containerBuilder,
+                      ContainerLifecycleManager lifecycleManager,
+                      PortAllocator portAllocator,
+                      DockerHostResolver dockerHostResolver,
+                      ContainerDetector containerDetector,
+                      CurrentContainerNetworkResolver networkResolver,
+                      EmulatorConfig config) {
+        this(containerBuilder, lifecycleManager, portAllocator, dockerHostResolver, containerDetector,
+                networkResolver, config, region -> Optional.empty());
+    }
+
+    OkeClusterManager(ContainerBuilder containerBuilder,
+                      ContainerLifecycleManager lifecycleManager,
+                      PortAllocator portAllocator,
+                      DockerHostResolver dockerHostResolver,
+                      ContainerDetector containerDetector,
+                      CurrentContainerNetworkResolver networkResolver,
+                      EmulatorConfig config,
+                      Function<String, Optional<RegistryMirror>> registryMirrors) {
         this.containerBuilder = containerBuilder;
         this.lifecycleManager = lifecycleManager;
         this.portAllocator = portAllocator;
@@ -113,6 +149,7 @@ public class OkeClusterManager implements Resettable {
         this.containerDetector = containerDetector;
         this.networkResolver = networkResolver;
         this.config = config;
+        this.registryMirrors = registryMirrors;
     }
 
     /**
@@ -148,13 +185,15 @@ public class OkeClusterManager implements Resettable {
         // volume only when it was confirmed absent before this start created it.
         boolean createdVolume = false;
         try {
-            if (!lifecycleManager.isContainerRunning(containerName) || !createdForThisCluster(containerName, cluster)) {
+            String registries = registriesYaml(clusterRegion(cluster));
+            if (!lifecycleManager.isContainerRunning(containerName)
+                    || !createdForThisCluster(containerName, cluster, registries)) {
                 createdVolume = lifecycleManager.volumeConfirmedAbsent(volumeName);
                 lifecycleManager.removeIfExists(containerName);
                 // Created up front so it carries the floci labels; a mount alone creates it bare.
                 lifecycleManager.ensureVolume(volumeName);
 
-                ContainerSpec spec = containerBuilder.newContainer(config.services().oke().defaultImage())
+                ContainerBuilder.Builder builder = containerBuilder.newContainer(config.services().oke().defaultImage())
                         .withName(containerName)
                         .withEntrypoint(K3S_ENTRYPOINT)
                         .withCmd(buildCmd())
@@ -168,8 +207,11 @@ public class OkeClusterManager implements Resettable {
                         .withHostDockerInternalOnLinux()
                         .withPrivileged(true)
                         .withLabels(ContainerStorageHelper.resourceIdentityLabels(
-                                "oke", cluster.getId(), cluster.getCompartmentId(), clusterRegion(cluster)))
-                        .build();
+                                "oke", cluster.getId(), cluster.getCompartmentId(), clusterRegion(cluster)));
+                if (registries != null) {
+                    builder.withEnv(REGISTRIES_ENV, registries);
+                }
+                ContainerSpec spec = builder.build();
 
                 lifecycleManager.createAndStart(spec);
             }
@@ -259,9 +301,13 @@ public class OkeClusterManager implements Resettable {
      * without the network-mode name, or stay labelled with the wrong region, so it is recreated on
      * the same volume, keeping its CA.
      */
-    private boolean createdForThisCluster(String containerName, StoredOkeCluster cluster) {
+    private boolean createdForThisCluster(String containerName, StoredOkeCluster cluster, String registries) {
         List<String> env = lifecycleManager.containerEnv(containerName);
-        return env.contains(API_TOKEN_ENV + "=" + cluster.getApiToken())
+        boolean registriesMatch = registries != null
+                ? env.contains(REGISTRIES_ENV + "=" + registries)
+                : env.stream().noneMatch(e -> e.startsWith(REGISTRIES_ENV + "="));
+        return registriesMatch
+                && env.contains(API_TOKEN_ENV + "=" + cluster.getApiToken())
                 && env.contains(WEBHOOK_KUBECONFIG_ENV + "=" + webhookKubeconfig(cluster))
                 && env.contains(TLS_SAN_ENV + "=" + containerName)
                 && clusterRegion(cluster).equals(
@@ -292,6 +338,36 @@ public class OkeClusterManager implements Resettable {
                     user: floci-oci-token-webhook
                 current-context: floci-oci-token-webhook
                 """.formatted(url);
+    }
+
+    /**
+     * The k3s {@code registries.yaml} that sends pulls of the local OCIR hosts for {@code region} to
+     * the registry sidecar over plain HTTP, rewriting {@code <namespace>/<repo>} to the
+     * {@code <region code>/<namespace>/<repo>} path the registry stores it under (k3s private
+     * registry configuration: mirrors with an endpoint list and a rewrite map). {@code null} when
+     * there is no local registry, or when it could not be started: the cluster then runs without the
+     * mirror rather than failing.
+     */
+    String registriesYaml(String region) {
+        Optional<RegistryMirror> mirror;
+        try {
+            mirror = registryMirrors.apply(region);
+        } catch (RuntimeException e) {
+            LOG.warnv(e, "Could not start the OCIR registry for OKE pulls in {0}; the cluster runs without it", region);
+            return null;
+        }
+        if (mirror.isEmpty() || mirror.get().hosts().isEmpty()) {
+            return null;
+        }
+        StringBuilder yaml = new StringBuilder("mirrors:\n");
+        for (String host : mirror.get().hosts()) {
+            yaml.append("  \"").append(host).append("\":\n")
+                    .append("    endpoint:\n")
+                    .append("      - \"").append(mirror.get().endpoint()).append("\"\n")
+                    .append("    rewrite:\n")
+                    .append("      \"^(.*)$\": \"").append(mirror.get().pathPrefix()).append("$1\"\n");
+        }
+        return yaml.toString();
     }
 
     static String webhookPath(StoredOkeCluster cluster) {

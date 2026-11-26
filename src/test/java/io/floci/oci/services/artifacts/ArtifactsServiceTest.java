@@ -1,6 +1,7 @@
 package io.floci.oci.services.artifacts;
 
 import io.floci.oci.config.EmulatorConfig;
+import io.floci.oci.core.common.ContainerImageResolver.RegistryMirror;
 import io.floci.oci.core.common.OciException;
 import io.floci.oci.core.storage.InMemoryStorage;
 import io.floci.oci.services.artifacts.model.StoredContainerRepository;
@@ -10,6 +11,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -183,6 +185,56 @@ class ArtifactsServiceTest {
         ArtifactsService real = withRegistry(mock(ArtifactsRegistryManager.class));
         when(config.services().artifacts().enabled()).thenReturn(false);
         assertEquals("iad.ocir.io/testns/app:1", real.pullable("iad.ocir.io/testns/app:1"));
+    }
+
+    @Test
+    void registryMirrorRoutesEveryLocalOcirHostOfTheRegionToTheSidecar() {
+        ArtifactsRegistryManager registry = mock(ArtifactsRegistryManager.class);
+        when(registry.sidecarEndpoint()).thenReturn("host.docker.internal:5201");
+        when(config.port()).thenReturn(4599);
+        ArtifactsService real = withRegistry(registry);
+
+        RegistryMirror mirror = real.registryMirror("us-ashburn-1").orElseThrow();
+
+        assertEquals(List.of(
+                "iad.ocir.localhost.floci.io", "iad.ocir.localhost.floci.io:4599",
+                "us-ashburn-1.ocir.localhost.floci.io", "us-ashburn-1.ocir.localhost.floci.io:4599",
+                "ocir.us-ashburn-1.oci.localhost.floci.io", "ocir.us-ashburn-1.oci.localhost.floci.io:4599"),
+                mirror.hosts());
+        assertEquals("http://host.docker.internal:5201", mirror.endpoint());
+        assertEquals("iad/", mirror.pathPrefix());
+        for (String host : mirror.hosts()) {
+            assertEquals("us-ashburn-1", OcirHosts.regionOf(host).orElseThrow(), host);
+        }
+        verify(registry).ensureStarted();
+        verify(registry, never()).ensureReady();
+    }
+
+    @Test
+    void registryMirrorAlsoCoversTheConfiguredHostname() {
+        ArtifactsRegistryManager registry = mock(ArtifactsRegistryManager.class);
+        when(registry.sidecarEndpoint()).thenReturn("172.18.0.4:5000");
+        when(config.port()).thenReturn(4599);
+        when(config.hostname()).thenReturn(Optional.of("floci-oci"));
+        ArtifactsService real = withRegistry(registry);
+
+        RegistryMirror mirror = real.registryMirror("us-phoenix-1").orElseThrow();
+
+        assertTrue(mirror.hosts().contains("phx.ocir.floci-oci:4599"));
+        assertTrue(mirror.hosts().contains("phx.ocir.localhost.floci.io"));
+        assertEquals(12, mirror.hosts().size());
+        assertEquals("http://172.18.0.4:5000", mirror.endpoint());
+        assertEquals("phx/", mirror.pathPrefix());
+    }
+
+    @Test
+    void mockOrDisabledArtifactsOfferNoRegistryMirror() {
+        assertTrue(service.registryMirror("us-ashburn-1").isEmpty());
+        ArtifactsRegistryManager registry = mock(ArtifactsRegistryManager.class);
+        ArtifactsService real = withRegistry(registry);
+        when(config.services().artifacts().enabled()).thenReturn(false);
+        assertTrue(real.registryMirror("us-ashburn-1").isEmpty());
+        verify(registry, never()).ensureStarted();
     }
 
     @Test
