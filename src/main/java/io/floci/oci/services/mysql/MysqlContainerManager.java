@@ -184,10 +184,12 @@ public class MysqlContainerManager {
         lifecycleManager.removeVolume(system.getVolumeName());
     }
 
-    /** The port the system had before, when it is still free, so its endpoint survives a restart. */
+    /**
+     * The port the system had before, when nothing else holds it (this process, a container
+     * Docker publishes it for, or a local listener), so its endpoint survives a restart.
+     */
     private int claimPort(int previous) {
-        if (previous > 0 && portAllocator.isPortFree(previous)) {
-            portAllocator.markReserved(previous);
+        if (previous > 0 && portAllocator.reclaim(previous)) {
             return previous;
         }
         return portAllocator.allocate(config.services().mysql().basePort(), config.services().mysql().maxPort());

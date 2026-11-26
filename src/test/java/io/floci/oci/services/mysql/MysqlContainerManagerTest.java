@@ -110,6 +110,30 @@ class MysqlContainerManagerTest {
     }
 
     @Test
+    void aRestartKeepsThePreviousPortWhenItCanBeReclaimed() {
+        StoredMysqlDbSystem system = system("adminUser");
+        system.setHostPort(13320);
+        when(portAllocator.reclaim(13320)).thenReturn(true);
+
+        manager.start(system, null);
+
+        assertEquals(13320, system.getHostPort());
+        verify(portAllocator, never()).allocate(13306, 13405);
+    }
+
+    @Test
+    void aRestartTakesANewPortWhenThePreviousOneIsTaken() {
+        StoredMysqlDbSystem system = system("adminUser");
+        system.setHostPort(13320);
+        when(portAllocator.reclaim(13320)).thenReturn(false);
+
+        manager.start(system, null);
+
+        assertEquals(13310, system.getHostPort());
+        verify(portAllocator, never()).markReserved(13320);
+    }
+
+    @Test
     void anAdminNamedRootIsRootItself() {
         manager.start(system("root"), PASSWORD);
 
