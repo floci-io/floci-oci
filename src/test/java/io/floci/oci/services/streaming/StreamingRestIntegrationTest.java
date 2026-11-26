@@ -12,6 +12,8 @@ import java.util.Map;
 
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.*;
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
 @QuarkusTest
 class StreamingRestIntegrationTest {
@@ -203,5 +205,196 @@ class StreamingRestIntegrationTest {
             .when().get("/20180418/streams/" + streamId + "/messages")
             .then().statusCode(400)
                 .body("code", equalTo("InvalidParameter"));
+    }
+
+    // ── Stream pools ───────────────────────────────────────────────────────────
+
+    private ValidatableResponse createPool(String name, String retryToken) {
+        return given()
+                .contentType("application/json")
+                .header("opc-retry-token", retryToken)
+                .body(Map.of("name", name, "compartmentId", compartment,
+                        "kafkaSettings", Map.of("numPartitions", 2)))
+            .when().post("/20180418/streampools")
+            .then().statusCode(200)
+                .header("opc-request-id", notNullValue())
+                .header("etag", notNullValue())
+                .header("opc-work-request-id", startsWith("ocid1."));
+    }
+
+    @Test
+    void streamPoolCreateCarriesTheMandatorySubObjectsAndAStreamPoolWorkRequest() {
+        String name = "it-pool-" + System.nanoTime();
+        ValidatableResponse created = createPool(name, "it-pool-token-" + System.nanoTime())
+                .body("id", startsWith("ocid1.streampool."))
+                .body("compartmentId", equalTo(compartment))
+                .body("name", equalTo(name))
+                .body("lifecycleState", equalTo("ACTIVE"))
+                .body("timeCreated", notNullValue())
+                .body("kafkaSettings.autoCreateTopicsEnable", equalTo(false))
+                .body("kafkaSettings.logRetentionHours", equalTo(24))
+                .body("kafkaSettings.numPartitions", equalTo(2))
+                .body("customEncryptionKey.keyState", equalTo("NONE"))
+                .body("isPrivate", equalTo(false));
+        String poolId = created.extract().path("id");
+        String workRequestId = created.extract().header("opc-work-request-id");
+
+        given()
+            .when().get("/20180418/workRequests/" + workRequestId)
+            .then().statusCode(200)
+                .body("status", equalTo("SUCCEEDED"))
+                .body("operationType", equalTo("CREATE_STREAM_POOL"))
+                .body("resources[0].entityType", equalTo("stream_pool"))
+                .body("resources[0].actionType", equalTo("CREATED"))
+                .body("resources[0].identifier", equalTo(poolId));
+
+        given()
+            .when().get("/20180418/streampools/" + poolId)
+            .then().statusCode(200)
+                .header("etag", notNullValue())
+                .body("kafkaSettings.numPartitions", equalTo(2))
+                .body("customEncryptionKey.keyState", equalTo("NONE"));
+    }
+
+    @Test
+    void streamPoolListIsABareArrayAndNeedsACompartment() {
+        String poolId = createPool("it-list-pool-" + System.nanoTime(), "it-list-" + System.nanoTime())
+                .extract().path("id");
+
+        given()
+            .queryParam("compartmentId", compartment)
+            .when().get("/20180418/streampools")
+            .then().statusCode(200)
+                .body("$", instanceOf(List.class))
+                .body("find { it.id == '" + poolId + "' }.isPrivate", equalTo(false))
+                .body("find { it.id == '" + poolId + "' }.kafkaSettings", nullValue());
+
+        given()
+            .when().get("/20180418/streampools")
+            .then().statusCode(400)
+                .header("opc-request-id", notNullValue())
+                .body("code", equalTo("MissingParameter"));
+    }
+
+    @Test
+    void streamPoolRetryTokenReplaysTheCreate() {
+        String token = "it-replay-" + System.nanoTime();
+        String name = "it-replay-pool-" + System.nanoTime();
+        String first = createPool(name, token).extract().path("id");
+        String retry = createPool(name, token).extract().path("id");
+        assertEquals(first, retry);
+    }
+
+    @Test
+    void streamPoolUpdateChangeCompartmentAndDelete() {
+        ValidatableResponse created = createPool("it-upd-pool-" + System.nanoTime(), "it-upd-" + System.nanoTime());
+        String poolId = created.extract().path("id");
+        String etag = created.extract().header("etag");
+
+        String newEtag = given()
+                .contentType("application/json")
+                .header("if-match", etag)
+                .body(Map.of("name", "renamed", "kafkaSettings", Map.of("logRetentionHours", 48)))
+            .when().put("/20180418/streampools/" + poolId)
+            .then().statusCode(200)
+                .header("opc-work-request-id", notNullValue())
+                .body("name", equalTo("renamed"))
+                .body("kafkaSettings.logRetentionHours", equalTo(48))
+                .extract().header("etag");
+
+        given()
+            .contentType("application/json")
+            .header("if-match", etag)
+            .body(Map.of("name", "stale"))
+            .when().put("/20180418/streampools/" + poolId)
+            .then().statusCode(412).body("code", equalTo("NoEtagMatch"));
+
+        given()
+            .contentType("application/json")
+            .body(Map.of("compartmentId", compartment))
+            .when().post("/20180418/streampools/" + poolId + "/actions/changeCompartment")
+            .then().statusCode(200)
+                .header("opc-work-request-id", notNullValue());
+
+        String streamId = given()
+                .contentType("application/json")
+                .body(Map.of("name", "in-pool-" + System.nanoTime(), "partitions", 1, "streamPoolId", poolId))
+            .when().post("/20180418/streams")
+            .then().statusCode(200)
+                .body("streamPoolId", equalTo(poolId))
+                .body("compartmentId", equalTo(compartment))
+                .extract().path("id");
+
+        given()
+            .when().delete("/20180418/streampools/" + poolId)
+            .then().statusCode(409).body("code", equalTo("IncorrectState"));
+
+        given().when().delete("/20180418/streams/" + streamId).then().statusCode(202);
+        String movedEtag = given().when().get("/20180418/streampools/" + poolId)
+            .then().statusCode(200).extract().header("etag");
+        assertThat(movedEtag, not(equalTo(newEtag)));
+        given()
+            .header("if-match", movedEtag)
+            .when().delete("/20180418/streampools/" + poolId)
+            .then().statusCode(202)
+                .header("opc-work-request-id", notNullValue());
+        given()
+            .when().get("/20180418/streampools/" + poolId)
+            .then().statusCode(404).body("code", equalTo("NotAuthorizedOrNotFound"));
+    }
+
+    @Test
+    void streamInAnUnknownPoolIsARelatedResourceError() {
+        given()
+            .contentType("application/json")
+            .body(Map.of("name", "orphan", "partitions", 1, "streamPoolId", "ocid1.streampool.oc1.iad.missing"))
+            .when().post("/20180418/streams")
+            .then().statusCode(400)
+                .body("code", equalTo("RelatedResourceNotAuthorizedOrNotFound"));
+    }
+
+    @Test
+    void streamWithOnlyACompartmentLandsInItsDefaultPool() {
+        String poolId = given()
+                .contentType("application/json")
+                .body(Map.of("name", "default-" + System.nanoTime(), "partitions", 1, "compartmentId", compartment))
+            .when().post("/20180418/streams")
+            .then().statusCode(200).extract().path("streamPoolId");
+
+        given()
+            .when().get("/20180418/streampools/" + poolId)
+            .then().statusCode(200)
+                .body("name", equalTo("DefaultPool"))
+                .body("compartmentId", equalTo(compartment));
+    }
+
+    @Test
+    void streamThroughAPoolWhoseCompartmentWasDeletedIsARelatedResourceError() {
+        String doomed = TestCompartments.create("itstreamdoomed");
+        ValidatableResponse first = given()
+                .contentType("application/json")
+                .body(Map.of("name", "first-" + System.nanoTime(), "partitions", 1, "compartmentId", doomed))
+            .when().post("/20180418/streams")
+            .then().statusCode(200);
+        String poolId = first.extract().path("streamPoolId");
+        given().when().delete("/20180418/streams/" + first.extract().<String>path("id")).then().statusCode(202);
+
+        String deleted = given().when().delete("/20160918/compartments/" + doomed)
+            .then().statusCode(202).extract().header("opc-work-request-id");
+        given().when().get("/20160918/workRequests/" + deleted)
+            .then().statusCode(200).body("status", equalTo("SUCCEEDED"));
+
+        given()
+            .contentType("application/json")
+            .body(Map.of("name", "second-" + System.nanoTime(), "partitions", 1, "streamPoolId", poolId))
+            .when().post("/20180418/streams")
+            .then().statusCode(400)
+                .header("opc-request-id", notNullValue())
+                .body("code", equalTo("RelatedResourceNotAuthorizedOrNotFound"))
+                .body("message", equalTo("Authorization failed or requested resource not found: compartment "
+                        + doomed));
+        given().queryParam("streamPoolId", poolId)
+            .when().get("/20180418/streams")
+            .then().statusCode(200).body("size()", equalTo(0));
     }
 }

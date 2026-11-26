@@ -8,7 +8,7 @@
 | [Networking (VCN)](networking.md) | `/20160918/…` | VCNs with default route table, security list and DHCP options, subnets, internet, NAT and service gateways, route tables, security lists, network security groups and rules, DHCP options, CIDR validation |
 | [Queue](queue.md) | `/20210201/…` | Queues (work-request driven), messages with visibility timeouts and DLQ, stats, channels |
 | [Vault, KMS & Secrets](kms-vault.md) | `/20180608/…`, `/20190301/…` | Vaults, keys and versions, **real** AES-GCM/RSA/ECDSA crypto, secrets and bundles |
-| [Streaming](streaming.md) | `/20180418/…` | Streams, partitioned log, cursors (incl. group cursors), commit/heartbeat |
+| [Streaming](streaming.md) | `/20180418/…` | Stream pools (DefaultPool per compartment, a Kafka endpoint on Redpanda), streams, partitioned log, cursors (incl. group cursors), commit/heartbeat |
 | [Functions](functions.md) | `/20260325/…`, `/20181201/…` | Applications, functions, real invocation via an `fnproject/fnserver` sidecar |
 | [Events](events.md) | `/20181201/rules` | Rules with Oracle's condition matching (nesting, arrays, wildcards, child compartments); Object Storage bucket and object events delivered to Functions, Streaming and Notifications |
 | [Logging](logging.md) | `/20200531/…`, `/20200831/…`, `/20190909/search` | Log groups and logs (work-request driven), saved searches, PutLogs ingestion in Oracle's log format, SearchLogs with the Logging query language (search, where, sort, top, dedup, select, count, summarize) |

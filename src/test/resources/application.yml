@@ -19,6 +19,8 @@ floci-oci:
       mock: true
     psql:
       mock: true
+    streaming:
+      mock: true
   init-hooks:
     shell-executable: /bin/sh
     timeout-seconds: 5

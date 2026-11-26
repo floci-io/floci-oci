@@ -30,6 +30,11 @@ All configuration lives under the `floci-oci.*` prefix; every property maps to a
 | `FLOCI_OCI_SERVICES_KMS_ENABLED` | `true` | Enable/disable KMS (vaults, keys, crypto) |
 | `FLOCI_OCI_SERVICES_VAULT_ENABLED` | `true` | Enable/disable Vault secrets + bundles |
 | `FLOCI_OCI_SERVICES_STREAMING_ENABLED` | `true` | Enable/disable Streaming |
+| `FLOCI_OCI_SERVICES_STREAMING_MOCK` | `false` | Skip the Redpanda sidecars: streams keep their messages in floci-oci and pools have no Kafka endpoint. Set it when no Docker daemon is available |
+| `FLOCI_OCI_SERVICES_STREAMING_KAFKA_IMAGE` | `redpandadata/redpanda:v24.2.7` | Redpanda image for stream pool brokers |
+| `FLOCI_OCI_SERVICES_STREAMING_KAFKA_BASE_PORT` | `19092` | First host port for stream pool Kafka endpoints |
+| `FLOCI_OCI_SERVICES_STREAMING_KAFKA_MAX_PORT` | `19191` | Last host port for stream pool Kafka endpoints |
+| `FLOCI_OCI_SERVICES_STREAMING_READY_TIMEOUT_SECONDS` | `60` | How long a stream pool's broker may take to start before the pool goes `FAILED` |
 | `FLOCI_OCI_SERVICES_ORGANIZATIONS_ENABLED` | `true` | Enable/disable Organizations (child tenancies, organizations, links) |
 | `FLOCI_OCI_SERVICES_GOVERNANCERULES_ENABLED` | `true` | Enable/disable Governance Rules (rules, inclusion criteria, tenancy attachments) |
 | `FLOCI_OCI_SERVICES_FUNCTIONS_ENABLED` | `true` | Enable/disable Functions |

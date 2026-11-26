@@ -189,6 +189,21 @@ resource "oci_streaming_stream" "tf_stream" {
   retention_in_hours = 24
 }
 
+resource "oci_streaming_stream_pool" "tf_stream_pool" {
+  compartment_id = var.tenancy_ocid
+  name           = "tf-compat-stream-pool"
+
+  kafka_settings {
+    num_partitions = 2
+  }
+}
+
+resource "oci_streaming_stream" "tf_pool_stream" {
+  name           = "tf-compat-pool-stream"
+  partitions     = 1
+  stream_pool_id = oci_streaming_stream_pool.tf_stream_pool.id
+}
+
 # ── Events ──────────────────────────────────────────────────────────────────
 
 resource "oci_events_rule" "tf_rule" {
@@ -384,6 +399,14 @@ output "key_state" {
 
 output "stream_messages_endpoint" {
   value = oci_streaming_stream.tf_stream.messages_endpoint
+}
+
+output "stream_pool_state" {
+  value = oci_streaming_stream_pool.tf_stream_pool.state
+}
+
+output "pool_stream_compartment" {
+  value = oci_streaming_stream.tf_pool_stream.compartment_id == var.tenancy_ocid
 }
 
 # ── Networking (VCN) ───────────────────────────────────────────────────────

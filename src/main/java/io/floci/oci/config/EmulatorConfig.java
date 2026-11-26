@@ -379,6 +379,31 @@ public interface EmulatorConfig {
         interface StreamingServiceConfig {
             @WithDefault("true")
             boolean enabled();
+
+            /**
+             * When true, no Docker containers are started: streams keep their messages in
+             * floci-oci's own storage and pools have no Kafka endpoint. When false, each stream
+             * pool runs a Redpanda broker that is its streams' log and serves Kafka clients.
+             * Env: FLOCI_OCI_SERVICES_STREAMING_MOCK.
+             */
+            @WithDefault("false")
+            boolean mock();
+
+            /** The Redpanda image each stream pool's broker runs. */
+            @WithDefault("redpandadata/redpanda:v24.2.7")
+            String kafkaImage();
+
+            /** First host port published for a stream pool's Kafka endpoint. */
+            @WithDefault("19092")
+            int kafkaBasePort();
+
+            /** Last host port published for a stream pool's Kafka endpoint. */
+            @WithDefault("19191")
+            int kafkaMaxPort();
+
+            /** How long a stream pool's broker may take to start before the pool is marked FAILED. */
+            @WithDefault("60")
+            int readyTimeoutSeconds();
         }
 
         interface FunctionsServiceConfig {

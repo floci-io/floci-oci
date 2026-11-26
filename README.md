@@ -190,7 +190,7 @@ flowchart LR
 |---|---|
 | Identity | Compartments, users, groups, user-group memberships, policies, availability domains, regions, region subscriptions, tenancies |
 | Storage | Object Storage: namespaces, buckets, objects, versioning, listing, rename, copy, batch delete, multipart uploads, pre-authenticated requests |
-| Messaging | Queue (visibility timeouts, dead-letter queues, channels), Streaming (partitioned log, cursors, consumer groups), Notifications (topics, subscriptions, HTTPS and Functions delivery) |
+| Messaging | Queue (visibility timeouts, dead-letter queues, channels), Streaming (stream pools, partitioned log, cursors, consumer groups), Notifications (topics, subscriptions, HTTPS and Functions delivery) |
 | Security | Vault + KMS (vaults, keys, key versions, **real** AES-GCM / RSA / ECDSA crypto), Secrets and secret bundles |
 | Serverless | Functions on API versions `20260325` and `20181201` (applications, functions, work requests, runtime catalog, real invocation through an Fn Project sidecar) |
 | Kubernetes | Container Engine for Kubernetes (OKE): clusters with their settings read back as sent, endpoint config updates, node pools, options, kubeconfig generation, work requests, real-mode k3s sidecar |
@@ -212,7 +212,7 @@ For operation-level compatibility, see the [Services Overview](https://floci.io/
 | Networking (VCN) | In-process | VCNs with the default route table, security list and DHCP options real OCI creates; subnets with CIDR containment and overlap checks; internet, NAT and service gateways; route tables, security lists, network security groups with rule actions, DHCP options; dependency checks on delete; state only, no Docker networks |
 | DNS | In-process | Zones (`/20180115`) addressed by name or OCID, `GLOBAL` and `PRIVATE` scopes, protected apex SOA and NS records, zone, domain and RRSet reads, PUT and PATCH (`ADD`, `REMOVE`, `REQUIRE`, `PROHIBIT`, atomic, `412` on a failed precondition), RDATA normalized the way Terraform expects, serials and RRSet versions, private views, VCN-dedicated resolvers with attached views and forward rules (`dnsResolverAssociation`); zone records resolved for the sidecar containers through the embedded DNS server |
 | Queue | In-process | Work-request-driven control plane (mutations return no body); data plane with visibility timeouts, `0`-visibility peeks, long polling, dead-letter queues, per-channel filtering, stats; wrapped `{"items":[…]}` list shape |
-| Streaming | In-process | Partitioned append-only log with key-hash placement; opaque cursors (`TRIM_HORIZON`/`LATEST`/`AT_OFFSET`/`AFTER_OFFSET`/`AT_TIME`), group cursors with commit + resume, `opc-next-cursor` paging; CreateStream returns body *and* work request |
+| Streaming | Real Docker (Redpanda) / In-process | Stream pools, each with a Redpanda broker that holds its streams (topic = stream name) and serves Kafka clients at the pool's `bootstrapServers`; a `DefaultPool` per compartment; partitioned append-only log with key-hash placement; opaque cursors (`TRIM_HORIZON`/`LATEST`/`AT_OFFSET`/`AFTER_OFFSET`/`AT_TIME`), group cursors with commit + resume, `opc-next-cursor` paging; CreateStream returns body *and* work request. `mock: true` keeps the log in-process with no Kafka endpoint |
 | Vault + KMS | In-process, real crypto | Vaults and keys with schedule/cancel deletion (no DELETE verb), key rotation, AES and RSA key import via `GetWrappingKey`/`ImportKey`/`ImportKeyVersion`; AES-GCM encrypt/decrypt whose envelope survives rotation, RSA/ECDSA sign/verify via JCA, CRC32 `plaintextChecksum` |
 | Secrets | In-process | Secret versions with CURRENT/PREVIOUS/LATEST stages; the `Secret` shape never echoes content: retrieval is through `/20190301/secretbundles`, including the bodyless POST `getByName` |
 | Functions | Real Docker (Fn Project) | Applications and functions with deterministic image digests; invocation proxied to a shared `fnproject/fnserver` sidecar that runs your real FDK image. `mock: true` disables Docker entirely |
@@ -228,7 +228,7 @@ For operation-level compatibility, see the [Services Overview](https://floci.io/
 | Governance Rules | In-process | Governance rules (`/20220504`) of type `QUOTA`, `TAG` and `ALLOWED_REGIONS`, inclusion criteria, tenancy attachments for children opted in to governance, enforced rules as the child sees them; `ALLOWED_REGIONS` refuses a governed child's region subscription outside the list |
 | Work Requests | In-process | `202` + `opc-work-request-id` responses, pollable per service (`/20160918`, `/20210201`, `/20180418`, `/20180222` and unversioned `/workRequests`) with errors/logs endpoints |
 
-Not implemented yet: identity domains, API keys/auth tokens, dynamic groups, tag namespaces, retention rules (stubbed empty for Terraform compatibility), lifecycle policies, queue consumer groups, stream pools' Kafka settings and connect harnesses, KMS key backup and replication, secret rotation, and pre-built functions (PBF).
+Not implemented yet: identity domains, API keys/auth tokens, dynamic groups, tag namespaces, retention rules (stubbed empty for Terraform compatibility), lifecycle policies, queue consumer groups, Streaming connect harnesses and Kafka SASL authentication, KMS key backup and replication, secret rotation, and pre-built functions (PBF).
 
 </details>
 
@@ -240,6 +240,7 @@ floci-oci runs a real container where in-process emulation would not be faithful
 |---|---|---|
 | Functions | `fnproject/fnserver:latest` | The open-source engine OCI Functions is built on. Your function image runs for real: fnserver spawns it as a sibling container and speaks the FDK http-stream contract |
 | OKE | `rancher/k3s:v1.30.1-k3s1` | Real local Kubernetes cluster execution via a k3s sidecar container with dynamic host port mapping (`6443..6543`) and named data volume `/var/lib/rancher/k3s` |
+| Streaming | `redpandadata/redpanda:v24.2.7` | A Kafka broker per stream pool, holding its streams as topics, with the Kafka port on a host port from `19092..19191` and a named data volume. Kafka clients and the OCI API see the same messages at the same offsets |
 | Database with PostgreSQL | `postgres:{major}-alpine` | A real PostgreSQL server per DB system, of the major the DB system asks for, with TLS, a host port from `15432..15531` and a named data volume; backup dumps are kept by the emulator, outside the containers |
 
 Docker-backed services need the Docker socket:
@@ -251,8 +252,10 @@ docker run -d --name floci-oci \
   floci/floci-oci:latest
 ```
 
-Set `FLOCI_OCI_SERVICES_FUNCTIONS_MOCK=true`, `FLOCI_OCI_SERVICES_OKE_MOCK=true` or `FLOCI_OCI_SERVICES_PSQL_MOCK=true` to skip Docker entirely. The management
-plane stays fully usable and invocations, cluster records and DB systems return synthetic data. That is the default in
+Set `FLOCI_OCI_SERVICES_FUNCTIONS_MOCK=true`, `FLOCI_OCI_SERVICES_OKE_MOCK=true`, `FLOCI_OCI_SERVICES_PSQL_MOCK=true` or
+`FLOCI_OCI_SERVICES_STREAMING_MOCK=true` to skip Docker entirely. The management
+plane stays fully usable and invocations, cluster records and DB systems return synthetic data; streams keep their
+messages in-process. Streaming needs Docker by default: without a daemon, set `FLOCI_OCI_SERVICES_STREAMING_MOCK=true`. That is the default in
 the test suite, so `./mvnw test` never needs a Docker daemon.
 
 `services/functions/` is also the **reference implementation** for contributing a
