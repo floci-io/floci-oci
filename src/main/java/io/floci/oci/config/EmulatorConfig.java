@@ -228,6 +228,8 @@ public interface EmulatorConfig {
 
         PsqlServiceConfig psql();
 
+        MysqlServiceConfig mysql();
+
         EventsServiceConfig events();
 
         NotificationsServiceConfig notifications();
@@ -353,6 +355,34 @@ public interface EmulatorConfig {
 
             /** How long a DB system may take to accept connections before it is marked FAILED. */
             @WithDefault("120")
+            int readyTimeoutSeconds();
+        }
+
+        interface MysqlServiceConfig {
+            @WithDefault("true")
+            boolean enabled();
+
+            /**
+             * When true, no Docker containers are started: DB systems are management-plane only
+             * and become ACTIVE at once. Env: FLOCI_OCI_SERVICES_MYSQL_MOCK.
+             */
+            @WithDefault("false")
+            boolean mock();
+
+            /** MySQL image; {@code {version}} is replaced with the DB system's mysqlVersion, e.g. 8.4.4. */
+            @WithDefault("mysql:{version}")
+            String image();
+
+            /** First host port published for a DB system's MySQL endpoint. */
+            @WithDefault("13306")
+            int basePort();
+
+            /** Last host port published for a DB system's MySQL endpoint. */
+            @WithDefault("13405")
+            int maxPort();
+
+            /** How long a DB system may take to accept connections before it is marked FAILED. */
+            @WithDefault("180")
             int readyTimeoutSeconds();
         }
 

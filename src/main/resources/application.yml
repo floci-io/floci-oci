@@ -164,4 +164,11 @@ floci-oci:
       base-port: 15432       # host ports published for PostgreSQL endpoints, one per DB system
       max-port: 15531
       ready-timeout-seconds: 120
+    mysql:
+      enabled: true
+      mock: false            # true = no Docker; DB systems are management-plane only
+      image: "mysql:{version}"  # {version} is the DB system's mysqlVersion, e.g. 8.4.4
+      base-port: 13306       # host ports published for MySQL endpoints, one per DB system
+      max-port: 13405
+      ready-timeout-seconds: 180
 

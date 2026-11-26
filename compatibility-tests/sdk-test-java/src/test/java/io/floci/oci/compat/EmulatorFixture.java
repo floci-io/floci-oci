@@ -15,6 +15,9 @@ import com.oracle.bmc.logging.LoggingManagementClient;
 import com.oracle.bmc.loggingingestion.LoggingClient;
 import com.oracle.bmc.loggingsearch.LogSearchClient;
 import com.oracle.bmc.monitoring.MonitoringClient;
+import com.oracle.bmc.mysql.DbSystemClient;
+import com.oracle.bmc.mysql.MysqlaasClient;
+import com.oracle.bmc.mysql.WorkRequestsClient;
 import com.oracle.bmc.nosql.NosqlClient;
 import com.oracle.bmc.objectstorage.ObjectStorageClient;
 import com.oracle.bmc.ons.NotificationControlPlaneClient;
@@ -218,6 +221,27 @@ public final class EmulatorFixture {
 
     public static KmsVaultClient kmsVault() {
         KmsVaultClient client = KmsVaultClient.builder()
+                .region(Region.US_ASHBURN_1).build(AUTH);
+        client.setEndpoint(ENDPOINT);
+        return client;
+    }
+
+    public static DbSystemClient mysqlDbSystems() {
+        DbSystemClient client = DbSystemClient.builder()
+                .region(Region.US_ASHBURN_1).build(AUTH);
+        client.setEndpoint(ENDPOINT);
+        return client;
+    }
+
+    public static MysqlaasClient mysqlCatalog() {
+        MysqlaasClient client = MysqlaasClient.builder()
+                .region(Region.US_ASHBURN_1).build(AUTH);
+        client.setEndpoint(ENDPOINT);
+        return client;
+    }
+
+    public static WorkRequestsClient mysqlWorkRequests() {
+        WorkRequestsClient client = WorkRequestsClient.builder()
                 .region(Region.US_ASHBURN_1).build(AUTH);
         client.setEndpoint(ENDPOINT);
         return client;

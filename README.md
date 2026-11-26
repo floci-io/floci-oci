@@ -196,6 +196,7 @@ flowchart LR
 | Kubernetes | Container Engine for Kubernetes (OKE): clusters with their settings read back as sent, endpoint config updates, node pools, options, kubeconfig generation, work requests, real-mode k3s sidecar |
 | NoSQL | NoSQL Database: tables created from DDL, indexes, row put/get/delete with conditional writes, identity and UUID columns and TTL, SQL SELECT queries, work requests |
 | Database | Database with PostgreSQL: DB systems, start/stop/restart, master password reset, connection details with a CA certificate, shapes, default and custom configurations, backups, restore and point-in-time recovery, instance patches, failover and replicas, Kerberos and insight settings, work requests, real PostgreSQL sidecar |
+| Database | MySQL HeatWave: DB systems, start/stop/restart, shapes, versions, default and custom configurations, work requests, real MySQL sidecar |
 | Organizations | Child tenancies (each with its own home region and isolated storage), organizations, organization tenancies, links, invitations, domains, subscriptions and mappings, orders; Governance Rules (allowed regions enforced) |
 | Observability | Logging: log groups, logs, PutLogs ingestion and SearchLogs with the query language; Monitoring: custom metrics, MQL queries (SummarizeMetricsData), alarms evaluated every minute that notify Notifications topics and streams, alarm suppressions |
 | Async operations | Work requests, partitioned per service (Identity/Queue/Streaming use `SUCCEEDED`, Object Storage/OKE use `COMPLETED`) |
@@ -224,6 +225,7 @@ For operation-level compatibility, see the [Services Overview](https://floci.io/
 | OKE (Container Engine) | Real Docker (k3s) / In-process | Control plane CRUD (`/20180222`), options, kubeconfig YAML generator, work requests tracking; real-mode k3s sidecar driver (`rancher/k3s:v1.30.1-k3s1`) binding dynamic host ports (`6443..6543`) and persistent volumes (`/var/lib/rancher/k3s`). `mock: true` disables sidecar |
 | Container Registry (OCIR) | Real Docker (registry:2) / In-process | Container repositories and configuration (`/20160918/container`); `docker login`/`push`/`pull` at `<region-key>.ocir.localhost.floci.io:4599/<namespace>/<repo>` proxied to a shared `registry:2` sidecar; images listed live from the registry; create-on-first-push. `mock: true` disables the sidecar |
 | Database with PostgreSQL | Real Docker (PostgreSQL) / In-process | DB system CRUD (`/20220915`) driven by work requests, with a `DELETED` tombstone clients can poll; one `postgres:<major>-alpine` container per DB system, started in the background; connection details with a per-system CA certificate (`sslmode=verify-full` works); master password from the request or a Vault secret, never stored, reset in the running database; start/stop/restart keep the data volume; shapes and default configurations catalog. `mock: true` disables Docker |
+| MySQL HeatWave | Real Docker (MySQL) / In-process | DB system CRUD (`/20190415`) with work requests and a `DELETED` tombstone clients can poll; one `mysql:<version>` container per DB system, started in the background, with the admin user from the request (its password never stored); start/stop/restart keep the data volume; shapes, versions and default and custom configurations. `mock: true` disables Docker |
 | Organizations | In-process | `CreateChildTenancy` registers a child tenancy with its own home region; requests signed with it see only its own resources; organizations, organization tenancies and links live with the parent tenancy; invitations bring an existing tenancy in; domains, domain governance, subscriptions (one V2 subscription per tenancy), subscription mappings and order activation complete the Tenant Manager control plane; wrapped `{"items":[…]}` lists |
 | Governance Rules | In-process | Governance rules (`/20220504`) of type `QUOTA`, `TAG` and `ALLOWED_REGIONS`, inclusion criteria, tenancy attachments for children opted in to governance, enforced rules as the child sees them; `ALLOWED_REGIONS` refuses a governed child's region subscription outside the list |
 | Work Requests | In-process | `202` + `opc-work-request-id` responses, pollable per service (`/20160918`, `/20210201`, `/20180418`, `/20180222` and unversioned `/workRequests`) with errors/logs endpoints |
@@ -242,6 +244,7 @@ floci-oci runs a real container where in-process emulation would not be faithful
 | OKE | `rancher/k3s:v1.30.1-k3s1` | Real local Kubernetes cluster execution via a k3s sidecar container with dynamic host port mapping (`6443..6543`) and named data volume `/var/lib/rancher/k3s` |
 | Streaming | `redpandadata/redpanda:v24.2.7` | A Kafka broker per stream pool, holding its streams as topics, with the Kafka port on a host port from `19092..19191` and a named data volume. Kafka clients and the OCI API see the same messages at the same offsets |
 | Database with PostgreSQL | `postgres:{major}-alpine` | A real PostgreSQL server per DB system, of the major the DB system asks for, with TLS, a host port from `15432..15531` and a named data volume; backup dumps are kept by the emulator, outside the containers |
+| MySQL HeatWave | `mysql:{version}` | A real MySQL server per DB system, of the version the DB system asks for, with a host port from `13306..13405` and a named data volume |
 
 Docker-backed services need the Docker socket:
 
@@ -252,8 +255,8 @@ docker run -d --name floci-oci \
   floci/floci-oci:latest
 ```
 
-Set `FLOCI_OCI_SERVICES_FUNCTIONS_MOCK=true`, `FLOCI_OCI_SERVICES_OKE_MOCK=true`, `FLOCI_OCI_SERVICES_PSQL_MOCK=true` or
-`FLOCI_OCI_SERVICES_STREAMING_MOCK=true` to skip Docker entirely. The management
+Set `FLOCI_OCI_SERVICES_FUNCTIONS_MOCK=true`, `FLOCI_OCI_SERVICES_OKE_MOCK=true`, `FLOCI_OCI_SERVICES_PSQL_MOCK=true`,
+`FLOCI_OCI_SERVICES_MYSQL_MOCK=true` or `FLOCI_OCI_SERVICES_STREAMING_MOCK=true` to skip Docker entirely. The management
 plane stays fully usable and invocations, cluster records and DB systems return synthetic data; streams keep their
 messages in-process. Streaming needs Docker by default: without a daemon, set `FLOCI_OCI_SERVICES_STREAMING_MOCK=true`. That is the default in
 the test suite, so `./mvnw test` never needs a Docker daemon.

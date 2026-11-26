@@ -784,3 +784,58 @@ output "nosql_index_state" {
 output "nosql_tables_listed" {
   value = length(data.oci_nosql_tables.tf_tables.table_collection)
 }
+
+# ── MySQL HeatWave ──────────────────────────────────────────────────────────
+
+data "oci_identity_availability_domains" "tf_mysql_ads" {
+  compartment_id = var.tenancy_ocid
+}
+
+data "oci_mysql_shapes" "tf_mysql_shapes" {
+  compartment_id = var.tenancy_ocid
+  name           = "MySQL.2"
+}
+
+data "oci_mysql_mysql_versions" "tf_mysql_versions" {
+  compartment_id = var.tenancy_ocid
+}
+
+data "oci_mysql_mysql_configurations" "tf_mysql_configurations" {
+  compartment_id = var.tenancy_ocid
+  shape_name     = "MySQL.2"
+  type           = ["DEFAULT"]
+  display_name   = "MySQL.2.Standalone"
+}
+
+resource "oci_mysql_mysql_db_system" "tf_mysql_db_system" {
+  compartment_id          = var.tenancy_ocid
+  availability_domain     = data.oci_identity_availability_domains.tf_mysql_ads.availability_domains[0].name
+  display_name            = "tf-compat-mysql"
+  shape_name              = "MySQL.2"
+  subnet_id               = oci_core_subnet.tf_private_subnet.id
+  configuration_id        = data.oci_mysql_mysql_configurations.tf_mysql_configurations.configurations[0].id
+  mysql_version           = "8.4"
+  admin_username          = "admin_user"
+  admin_password          = "BEstrO0ng_#11"
+  data_storage_size_in_gb = 50
+
+  maintenance {
+    window_start_time = "sun 01:00"
+  }
+}
+
+output "mysql_db_system_state" {
+  value = oci_mysql_mysql_db_system.tf_mysql_db_system.state
+}
+
+output "mysql_db_system_port" {
+  value = oci_mysql_mysql_db_system.tf_mysql_db_system.endpoints[0].port
+}
+
+output "mysql_shape_cpu_core_count" {
+  value = data.oci_mysql_shapes.tf_mysql_shapes.shapes[0].cpu_core_count
+}
+
+output "mysql_version_families" {
+  value = length(data.oci_mysql_mysql_versions.tf_mysql_versions.versions)
+}

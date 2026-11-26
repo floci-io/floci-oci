@@ -65,6 +65,12 @@ All configuration lives under the `floci-oci.*` prefix; every property maps to a
 | `FLOCI_OCI_SERVICES_PSQL_BASE_PORT` | `15432` | First host port for DB system endpoints |
 | `FLOCI_OCI_SERVICES_PSQL_MAX_PORT` | `15531` | Last host port for DB system endpoints |
 | `FLOCI_OCI_SERVICES_PSQL_READY_TIMEOUT_SECONDS` | `120` | How long a DB system may take to accept connections before it goes `FAILED` |
+| `FLOCI_OCI_SERVICES_MYSQL_ENABLED` | `true` | Enable/disable MySQL HeatWave |
+| `FLOCI_OCI_SERVICES_MYSQL_MOCK` | `false` | Skip the MySQL sidecar; DB systems become `ACTIVE` at once with nothing listening on their endpoint |
+| `FLOCI_OCI_SERVICES_MYSQL_IMAGE` | `mysql:{version}` | MySQL image for DB system sidecars; `{version}` is replaced with the DB system's `mysqlVersion` |
+| `FLOCI_OCI_SERVICES_MYSQL_BASE_PORT` | `13306` | First host port for MySQL DB system endpoints |
+| `FLOCI_OCI_SERVICES_MYSQL_MAX_PORT` | `13405` | Last host port for MySQL DB system endpoints |
+| `FLOCI_OCI_SERVICES_MYSQL_READY_TIMEOUT_SECONDS` | `180` | How long a MySQL DB system may take to accept connections before it goes `FAILED` |
 | `FLOCI_OCI_SERVICES_DOCKER_NETWORK` | – | Shared Docker network for sidecar containers |
 | `FLOCI_OCI_DOCKER_RESOURCE_NAMESPACE` | – | Namespace inserted into sidecar container/volume names (`floci-oci-<ns>-…`) so parallel emulator instances on one Docker host don't collide |
 | `FLOCI_OCI_DOCKER_ENDPOINT_MODE` | `auto` | How a sidecar's published port is addressed in the endpoints returned to clients: `auto` (`localhost` when floci-oci runs on the host, the sidecar's container name when it runs in a container) or `published` (always the Docker daemon's host and the published port; for a remote daemon, or host-side clients of a containerised floci-oci). Only services that build their client endpoint from this setting follow it: OKE cluster endpoints do not, and are always `127.0.0.1` |
