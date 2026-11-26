@@ -30,6 +30,10 @@ import java.util.Map;
  * @param workingDir Working directory inside the container (overrides image WORKDIR)
  * @param user User the container process runs as, formatted "uid[:gid]" (null = image USER)
  * @param groupAdd Supplementary group IDs added to the container process
+ * @param capAdd Linux capabilities added to the container (Docker {@code --cap-add}), by Docker's
+ *               name without the {@code CAP_} prefix, such as {@code SYS_ADMIN}
+ * @param devices Host device paths made available in the container at the same path (Docker
+ *                {@code --device}), with read, write and mknod permission
  * @param labels Docker labels applied to the container, merged over the emulator defaults
  * @param nanoCpus CPU limit in billionths of a CPU (null = no limit)
  */
@@ -53,6 +57,8 @@ public record ContainerSpec(
         String workingDir,
         String user,
         List<String> groupAdd,
+        List<String> capAdd,
+        List<String> devices,
         Map<String, String> labels,
         Long nanoCpus
 ) {
@@ -61,7 +67,7 @@ public record ContainerSpec(
      * All other fields will be null or empty lists.
      */
     public ContainerSpec(String image) {
-        this(image, null, List.of(), null, null, null, Map.of(), List.of(), null, List.of(), List.of(), List.of(), null, false, null, List.of(), null, null, List.of(), Map.of(), null);
+        this(image, null, List.of(), null, null, null, Map.of(), List.of(), null, List.of(), List.of(), List.of(), null, false, null, List.of(), null, null, List.of(), List.of(), List.of(), Map.of(), null);
     }
 
     /**

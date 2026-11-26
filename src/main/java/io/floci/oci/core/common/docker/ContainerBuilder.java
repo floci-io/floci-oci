@@ -2,6 +2,7 @@ package io.floci.oci.core.common.docker;
 
 import com.github.dockerjava.api.model.AccessMode;
 import com.github.dockerjava.api.model.Bind;
+import com.github.dockerjava.api.model.Capability;
 import com.github.dockerjava.api.model.LogConfig;
 import com.github.dockerjava.api.model.Mount;
 import com.github.dockerjava.api.model.MountType;
@@ -131,6 +132,8 @@ public class ContainerBuilder {
         private String cgroupnsMode;
         private String user;
         private final List<String> groupAdd = new ArrayList<>();
+        private final List<String> capAdd = new ArrayList<>();
+        private final List<String> devices = new ArrayList<>();
         private final List<String> dnsServers = new ArrayList<>();
         private final Map<String, String> labels = new LinkedHashMap<>();
 
@@ -402,6 +405,35 @@ public class ContainerBuilder {
         }
 
         /**
+         * Adds Linux capabilities to the container (Docker {@code --cap-add}), a narrower grant
+         * than {@link #withPrivileged}. Names are Docker's, without the {@code CAP_} prefix
+         * ({@code SYS_ADMIN}); an unknown name is rejected here rather than by the daemon.
+         */
+        public Builder withCapAdd(String... capabilities) {
+            for (String capability : capabilities) {
+                Capability.valueOf(capability);
+                if (!this.capAdd.contains(capability)) {
+                    this.capAdd.add(capability);
+                }
+            }
+            return this;
+        }
+
+        /**
+         * Makes a host device available in the container at the same path, with read, write and
+         * mknod permission (Docker {@code --device <path>}).
+         */
+        public Builder withDevice(String path) {
+            if (path == null || !path.startsWith("/")) {
+                throw new IllegalArgumentException("A device path must be absolute: " + path);
+            }
+            if (!this.devices.contains(path)) {
+                this.devices.add(path);
+            }
+            return this;
+        }
+
+        /**
          * Adds a single Docker label. Merged over the emulator default labels at create time.
          */
         public Builder withLabel(String key, String value) {
@@ -468,6 +500,8 @@ public class ContainerBuilder {
                     workingDir,
                     user,
                     List.copyOf(groupAdd),
+                    List.copyOf(capAdd),
+                    List.copyOf(devices),
                     Map.copyOf(labels),
                     nanoCpus
             );
