@@ -1,6 +1,7 @@
 package io.floci.oci.services.identity;
 
 import com.fasterxml.jackson.core.type.TypeReference;
+import io.floci.oci.core.auth.PublicKeys;
 import io.floci.oci.core.common.Etags;
 import io.floci.oci.core.common.OciContext;
 import io.floci.oci.core.common.OciException;
@@ -17,15 +18,11 @@ import org.bouncycastle.openssl.PEMParser;
 
 import java.io.IOException;
 import java.io.StringReader;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
 import java.util.Comparator;
-import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.StringJoiner;
 
 /**
  * Identity API signing keys ({@code /20160918/users/{userId}/apiKeys}). Kept beside
@@ -106,7 +103,7 @@ public class ApiKeyService {
         keys.keys().stream().filter(k -> k.startsWith(prefix)).toList().forEach(keys::delete);
     }
 
-    /** The key a request's {@code keyId} names, in the tenancy it names; for signature verification later. */
+    /** The key a request's {@code keyId} names, in the tenancy it names, for signature verification. */
     public Optional<StoredApiKey> find(String tenancyId, String userId, String fingerprint) {
         return TenancyAwareStorageBackend.getIn(keys, tenancyId, storageKey(userId, fingerprint));
     }
@@ -134,18 +131,11 @@ public class ApiKeyService {
      * {@code oci setup} computes (oci-cli/src/oci_cli/cli_setup.py, public_key_to_fingerprint).
      */
     static String fingerprint(SubjectPublicKeyInfo info) {
-        byte[] digest;
         try {
-            digest = MessageDigest.getInstance("MD5").digest(info.getEncoded(ASN1Encoding.DER));
-        } catch (IOException | NoSuchAlgorithmException e) {
+            return PublicKeys.fingerprint(info.getEncoded(ASN1Encoding.DER));
+        } catch (IOException e) {
             throw OciException.internalServerError("Could not compute the key fingerprint: " + e.getMessage());
         }
-        String hex = HexFormat.of().formatHex(digest);
-        StringJoiner joined = new StringJoiner(":");
-        for (int i = 0; i < hex.length(); i += 2) {
-            joined.add(hex.substring(i, i + 2));
-        }
-        return joined.toString();
     }
 
     static String fingerprint(String pem) {

@@ -288,7 +288,7 @@ Unsigned requests fall back to `FLOCI_OCI_DEFAULT_TENANCY_ID`. Compartments are 
 
 ## SDK Integration
 
-Point your existing OCI SDK at `http://localhost:4599`. Any locally generated RSA key works: the signature is parsed for tenancy/user context, never verified.
+Point your existing OCI SDK at `http://localhost:4599`. Any locally generated RSA key works: by default the signature is parsed for tenancy/user context, never verified. `FLOCI_OCI_AUTH_SIGNATURE_VERIFICATION=known-keys` or `strict` verifies it against uploaded API keys ([Request signing](docs/services/identity.md#request-signing)).
 
 <details>
 <summary><strong>Java, oci-java-sdk</strong></summary>

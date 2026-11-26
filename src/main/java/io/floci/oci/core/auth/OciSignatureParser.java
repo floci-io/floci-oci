@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.jboss.logging.Logger;
 
 import java.io.IOException;
+import java.security.PublicKey;
 import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.Locale;
@@ -28,7 +29,9 @@ import java.util.regex.Pattern;
  * ({@code cli_session.py}) and oci-go-sdk returns as {@code TenancyOCID()} and
  * {@code UserOCID()}.
  *
- * Only the structure is validated: neither the signature nor the JWT is verified.
+ * Only the structure is validated here. {@link RequestAuthenticator} verifies the signature when
+ * {@code floci-oci.auth.signature-verification} is not {@code off}; the JWT's own signature is never
+ * verified, because Oracle's token issuer key is not available.
  */
 public final class OciSignatureParser {
 
@@ -58,7 +61,7 @@ public final class OciSignatureParser {
         if (parts.length != 3 || parts[0].isBlank() || parts[1].isBlank() || parts[2].isBlank()) {
             return Optional.empty();
         }
-        return Optional.of(new AuthContext(parts[0], parts[1], parts[2]));
+        return Optional.of(AuthContext.apiKey(parts[0], parts[1], parts[2]));
     }
 
     /**
@@ -67,23 +70,53 @@ public final class OciSignatureParser {
      * instead, so they stay unidentified, as before. A security token has no key fingerprint.
      */
     private static Optional<AuthContext> fromSecurityToken(String token) {
+        Optional<JsonNode> claims = claims(token);
+        if (claims.isEmpty()) {
+            return Optional.empty();
+        }
+        String tenant = textClaim(claims.get(), "tenant");
+        String subject = textClaim(claims.get(), "sub");
+        if (tenant == null || subject == null) {
+            return Optional.empty();
+        }
+        return Optional.of(AuthContext.securityToken(tenant, subject));
+    }
+
+    /**
+     * The session public key a {@code keyId="ST$<jwt>"} signature is made with: the JWT's {@code jwk}
+     * claim (oci-java-sdk {@code SecurityTokenAdapter}, {@code JWK = "jwk"}). oci-java-sdk reads the claim
+     * as a JSON string; a JSON object is accepted too. Empty for an API-key keyId, or when the claim is
+     * absent or not an RSA JWK.
+     */
+    public static Optional<PublicKey> securityTokenPublicKey(String authorizationHeader) {
+        String keyId = parameters(authorizationHeader).get("keyid");
+        if (keyId == null || !keyId.startsWith(SECURITY_TOKEN_PREFIX)) {
+            return Optional.empty();
+        }
+        Optional<JsonNode> claims = claims(keyId.substring(SECURITY_TOKEN_PREFIX.length()));
+        JsonNode jwk = claims.map(found -> found.get("jwk")).orElse(null);
+        if (jwk != null && jwk.isTextual()) {
+            try {
+                jwk = JSON.readTree(jwk.asText());
+            } catch (IOException e) {
+                LOG.debugv("Security token jwk claim is not JSON: {0}", e.getMessage());
+                return Optional.empty();
+            }
+        }
+        return PublicKeys.fromJwk(jwk);
+    }
+
+    private static Optional<JsonNode> claims(String token) {
         String[] segments = token.split("\\.", -1);
         if (segments.length != 3) {
             return Optional.empty();
         }
-        JsonNode claims;
         try {
-            claims = JSON.readTree(Base64.getUrlDecoder().decode(segments[1]));
+            return Optional.ofNullable(JSON.readTree(Base64.getUrlDecoder().decode(segments[1])));
         } catch (IllegalArgumentException | IOException e) {
             LOG.debugv("Security token keyId has an unreadable JWT payload: {0}", e.getMessage());
             return Optional.empty();
         }
-        String tenant = textClaim(claims, "tenant");
-        String subject = textClaim(claims, "sub");
-        if (tenant == null || subject == null) {
-            return Optional.empty();
-        }
-        return Optional.of(new AuthContext(tenant, subject, null));
     }
 
     private static String textClaim(JsonNode claims, String name) {

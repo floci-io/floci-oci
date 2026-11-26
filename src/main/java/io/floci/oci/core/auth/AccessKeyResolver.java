@@ -7,7 +7,8 @@ import java.util.regex.Pattern;
 /**
  * Resolves an Amazon S3 Compatibility API access key (the {@code id} of an Identity Customer Secret
  * Key) to the tenancy and user that own it, so S3 requests partition like OCI-signed ones. The
- * SigV4 signature itself is never verified, as OCI request signatures are never verified.
+ * SigV4 signature itself is never verified: a Customer Secret Key's secret is not stored, so there is
+ * nothing to verify it with.
  */
 public interface AccessKeyResolver {
 

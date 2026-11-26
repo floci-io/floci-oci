@@ -68,8 +68,13 @@ floci-oci:
     # host-port: 5354  # FLOCI_OCI_DNS_HOST_PORT: on the host, also answer on 127.0.0.1:<port>
   auth:
     # When true, requests without a structurally valid OCI Signature Authorization
-    # header are rejected with 401. The RSA signature itself is never verified.
+    # header are rejected with 401. Whether the signature is checked is signature-verification.
     require-signature: false
+    # off = parse the keyId only; known-keys = uploaded or trusted API keys and security
+    # tokens must verify, unknown API keys pass; strict = every API key must be known and verify.
+    signature-verification: "off"  # quoted: YAML 1.1 reads a bare off as false
+    # trusted-public-keys:   # PEM files that verify any keyId with their fingerprint (bootstraps strict)
+    #   - /keys/oci_api_key_public.pem
   security:
     disable-cors-headers: false
     cors-allow-private-network: false

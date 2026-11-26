@@ -2,8 +2,11 @@ package io.floci.oci.services.oke;
 
 import io.floci.oci.core.auth.AuthContext;
 import io.floci.oci.core.auth.OciSignatureParser;
+import io.floci.oci.core.auth.RequestAuthenticator;
+import io.floci.oci.core.auth.SignatureVerifier;
 import io.floci.oci.services.oke.model.StoredOkeCluster;
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
 import java.net.URI;
@@ -11,11 +14,6 @@ import java.net.URISyntaxException;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
-import java.time.Duration;
-import java.time.Instant;
-import java.time.ZonedDateTime;
-import java.time.format.DateTimeFormatter;
-import java.time.format.DateTimeParseException;
 import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -28,31 +26,35 @@ import java.util.Set;
  * {@code https://containerengine.<region>.oraclecloud.com/cluster_request/<cluster-ocid>?authorization=<Signature ...>&date=<RFC 1123>}
  * (oci-cli {@code containerengine_cli_extended.py}).
  *
- * <p>Following floci-oci's rule that request signatures are parsed but never verified, this
- * checks the token's shape and binds it to the cluster: the URL must name this cluster and its
- * region, the Signature must cover {@code date (request-target) host}, its keyId tenancy (or, for
+ * <p>This checks the token's shape and binds it to the cluster: the URL must name this cluster and
+ * its region, the Signature must cover {@code date (request-target) host}, its keyId tenancy (or, for
  * {@code --auth security_token}, the security token's {@code tenant} claim) must own the cluster,
- * and the date must be recent. A well-formed forged token therefore passes, which is
- * the same trust floci-oci gives every other signed request.
+ * and the date must be recent. The signature itself is then verified as any other signed request is,
+ * by {@link RequestAuthenticator}: over {@code date} (the URL's {@code date}), {@code (request-target)}
+ * ({@code get /cluster_request/<cluster-ocid>}, the URL before the CLI adds its query) and {@code host}.
+ * With {@code floci-oci.auth.signature-verification=off}, a well-formed forged token passes, the same
+ * trust floci-oci then gives every other signed request.
  */
 @ApplicationScoped
 public class OkeTokenValidator {
 
     private static final Logger LOG = Logger.getLogger(OkeTokenValidator.class);
     static final int MAX_TOKEN_LENGTH = 4096;
-    static final Duration MAX_CLOCK_SKEW = Duration.ofMinutes(5);
     private static final String REQUIRED_SIGNED_HEADERS = "date (request-target) host";
     private static final String CLUSTER_REQUEST_PATH = "/cluster_request/";
     private static final Set<String> ALLOWED_QUERY_PARAMS = Set.of("authorization", "date", "opc-obo-token");
 
-    private final Clock clock;
+    private final SignatureVerifier dates;
+    private final RequestAuthenticator authenticator;
 
-    public OkeTokenValidator() {
-        this(Clock.systemUTC());
+    @Inject
+    public OkeTokenValidator(RequestAuthenticator authenticator) {
+        this(Clock.systemUTC(), authenticator);
     }
 
-    OkeTokenValidator(Clock clock) {
-        this.clock = clock;
+    OkeTokenValidator(Clock clock, RequestAuthenticator authenticator) {
+        this.dates = new SignatureVerifier(clock);
+        this.authenticator = authenticator;
     }
 
     /** The caller identity the token was signed with, when the token is valid for {@code cluster}. */
@@ -87,10 +89,21 @@ public class OkeTokenValidator {
         if (caller.isEmpty() || !caller.get().tenancyId().equals(cluster.getTenancyId())) {
             return reject(cluster, "keyId tenancy does not own the cluster");
         }
-        if (!isCurrent(query.get().get("date"))) {
-            return reject(cluster, "date is not within " + MAX_CLOCK_SKEW.toMinutes() + " minutes of now");
+        String date = query.get().get("date");
+        if (!dates.isCurrent(date)) {
+            return reject(cluster, "date is not within " + SignatureVerifier.MAX_CLOCK_SKEW.toMinutes()
+                    + " minutes of now");
         }
-        return caller;
+        RequestAuthenticator.Authentication outcome = authenticator.authenticate(caller.get(),
+                query.get().get("authorization"), "GET", uri.getRawPath(), name -> switch (name) {
+                    case "date" -> date;
+                    case "host" -> uri.getRawAuthority();
+                    default -> null;
+                });
+        if (outcome.isRejected()) {
+            return reject(cluster, outcome.rejection());
+        }
+        return Optional.of(outcome.caller());
     }
 
     private Optional<URI> decode(String token) {
@@ -126,17 +139,6 @@ public class OkeTokenValidator {
             }
         }
         return Optional.of(params);
-    }
-
-    private boolean isCurrent(String date) {
-        Instant signedAt;
-        try {
-            signedAt = ZonedDateTime.parse(date, DateTimeFormatter.RFC_1123_DATE_TIME).toInstant();
-        } catch (DateTimeParseException e) {
-            return false;
-        }
-        Duration age = Duration.between(signedAt, clock.instant()).abs();
-        return age.compareTo(MAX_CLOCK_SKEW) <= 0;
     }
 
     private static Optional<AuthContext> reject(StoredOkeCluster cluster, String reason) {

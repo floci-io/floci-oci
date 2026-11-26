@@ -16,7 +16,9 @@ import jakarta.ws.rs.core.HttpHeaders;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 import jakarta.ws.rs.ext.Provider;
+import org.jboss.logging.Logger;
 
+import java.net.URI;
 import java.util.Optional;
 import java.util.regex.Pattern;
 
@@ -29,6 +31,10 @@ import java.util.regex.Pattern;
  *
  * <p>When {@code floci-oci.auth.require-signature=true}, requests whose Authorization
  * header is missing or structurally malformed are rejected with 401 NotAuthenticated.
+ * When {@code floci-oci.auth.signature-verification} is not {@code off}, an OCI-signed request is
+ * verified by {@link RequestAuthenticator} over the URI the client signed (this filter runs before
+ * any URI rewrite), and a failure is 401 NotAuthenticated. A signature over {@code x-content-sha256}
+ * has its body checked later, by {@link SignedBodyFilter}, on the worker thread.
  * Emulator-internal endpoints ({@code /health}, {@code /_floci/…}, {@code /_floci-oci/…}) and Object Storage
  * pre-authenticated requests ({@code /p/…}) are always exempt.
  */
@@ -36,6 +42,8 @@ import java.util.regex.Pattern;
 @PreMatching
 @Priority(Priorities.AUTHENTICATION)
 public class SignatureAuthFilter implements ContainerRequestFilter {
+
+    private static final Logger LOG = Logger.getLogger(SignatureAuthFilter.class);
 
     /** The token endpoint the OCIR data plane advertises in its Bearer challenge. */
     public static final String OCIR_TOKEN_PATH = "20180419/docker/token";
@@ -61,6 +69,9 @@ public class SignatureAuthFilter implements ContainerRequestFilter {
     @Inject
     RequestContext requestContext;
 
+    @Inject
+    jakarta.inject.Provider<RequestAuthenticator> authenticator;
+
     /** Resolves S3 Compatibility API access keys; unresolvable when Identity serves none. */
     @Inject
     Instance<AccessKeyResolver> accessKeys;
@@ -79,11 +90,27 @@ public class SignatureAuthFilter implements ContainerRequestFilter {
                         .or(() -> AccessKeyResolver.presignedAccessKey(
                                 ctx.getUriInfo().getQueryParameters().getFirst("X-Amz-Credential")))
                 : Optional.empty();
+        if (auth.isPresent() && !exempt) {
+            RequestAuthenticator.Authentication outcome = authenticate(ctx, auth.get(), authorization);
+            if (outcome.isRejected()) {
+                LOG.debugv("Rejected the signature of {0} {1}: {2}", ctx.getMethod(),
+                        ctx.getUriInfo().getPath(), outcome.rejection());
+                ctx.abortWith(notVerified(outcome.rejection()));
+                return;
+            }
+            auth = Optional.of(outcome.caller());
+            if (outcome.caller().verified()
+                    && SignatureVerifier.coversBody(OciSignatureParser.parameters(authorization))) {
+                ctx.setProperty(SignedBodyFilter.EXPECTED_BODY_HASH,
+                        ctx.getHeaderString(SignatureVerifier.BODY_HASH_HEADER));
+            }
+        }
         if (auth.isEmpty() && s3AccessKey.isPresent() && accessKeys.isResolvable()) {
             auth = accessKeys.get().resolve(s3AccessKey.get());
         }
 
         if (auth.isPresent()) {
+            requestContext.setCaller(auth.get());
             requestContext.setTenancyId(auth.get().tenancyId());
             requestContext.setUserId(auth.get().userId());
             // Pins the home region on first sight, so a tenancy that only reads keeps it across
@@ -93,11 +120,7 @@ public class SignatureAuthFilter implements ContainerRequestFilter {
             // An S3 Compatibility API request is signed with SigV4; an access key no Customer
             // Secret Key owns still reaches the default tenancy, since signatures are never checked.
             if (!exempt && s3AccessKey.isEmpty() && config.auth().requireSignature()) {
-                ctx.abortWith(Response.status(401)
-                        .type(MediaType.APPLICATION_JSON)
-                        .entity(new OciErrorResponse("NotAuthenticated",
-                                "The required authorization signature is missing or invalid."))
-                        .build());
+                ctx.abortWith(notAuthenticated("The required authorization signature is missing or invalid."));
                 return;
             }
             requestContext.setTenancyId(config.defaultTenancyId());
@@ -110,6 +133,33 @@ public class SignatureAuthFilter implements ContainerRequestFilter {
         if (hostRegion.isPresent()) {
             requestContext.setBaseUrl(ctx.getUriInfo().getBaseUri().getScheme() + "://" + host);
         }
+    }
+
+    /** Verifies the signature over the raw request target and headers the client sent. */
+    private RequestAuthenticator.Authentication authenticate(ContainerRequestContext ctx, AuthContext caller,
+                                                             String authorization) {
+        URI uri = ctx.getUriInfo().getRequestUri();
+        String rawQuery = uri.getRawQuery();
+        String requestTarget = uri.getRawPath() + (rawQuery == null || rawQuery.isEmpty() ? "" : "?" + rawQuery);
+        return authenticator.get().authenticate(caller, authorization, ctx.getMethod(), requestTarget,
+                ctx::getHeaderString);
+    }
+
+    /**
+     * 401 NotAuthenticated for a signature that does not verify: the catalog's description followed by
+     * the reason, which never repeats the signature.
+     */
+    static Response notVerified(String reason) {
+        return notAuthenticated("The required authentication information was not provided or was incorrect: "
+                + reason + ".");
+    }
+
+    /** 401 NotAuthenticated, the catalog's code for missing or incorrect authentication information. */
+    static Response notAuthenticated(String message) {
+        return Response.status(401)
+                .type(MediaType.APPLICATION_JSON)
+                .entity(new OciErrorResponse("NotAuthenticated", message))
+                .build();
     }
 
     /**
