@@ -249,7 +249,7 @@ def test_stream_lifecycle_and_cursor_consumption(sdk_config, stream_admin):
 # ── Functions (management plane; invocation lives in FunctionsDockerTest) ─────
 
 
-def test_functions_management_plane(sdk_config):
+def test_functions_management_plane(sdk_config, network):
     client = oci.functions.FunctionsManagementClient(
         sdk_config, service_endpoint=ENDPOINT
     )
@@ -257,7 +257,7 @@ def test_functions_management_plane(sdk_config):
         oci.functions.models.CreateApplicationDetails(
             compartment_id=TENANCY,
             display_name=unique("py-app"),
-            subnet_ids=["ocid1.subnet.oc1.iad.pysubnet"],
+            subnet_ids=[network["subnet_id"]],
         )
     ).data
     assert app.lifecycle_state == "ACTIVE"

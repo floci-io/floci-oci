@@ -50,3 +50,22 @@ def identity(sdk_config):
 @pytest.fixture(scope="session")
 def object_storage(sdk_config):
     return oci.object_storage.ObjectStorageClient(sdk_config, service_endpoint=ENDPOINT)
+
+
+@pytest.fixture(scope="session")
+def network(sdk_config):
+    """A VCN and subnet: OKE, Functions and PostgreSQL reject network OCIDs that do not exist."""
+    client = oci.core.VirtualNetworkClient(sdk_config, service_endpoint=ENDPOINT)
+    vcn = client.create_vcn(
+        oci.core.models.CreateVcnDetails(
+            compartment_id=TENANCY, display_name="py-compat-vcn", cidr_blocks=["10.0.0.0/16"]
+        )
+    ).data
+    subnet = client.create_subnet(
+        oci.core.models.CreateSubnetDetails(
+            compartment_id=TENANCY, vcn_id=vcn.id, display_name="py-compat-subnet", cidr_block="10.0.0.0/24"
+        )
+    ).data
+    yield {"vcn_id": vcn.id, "subnet_id": subnet.id}
+    client.delete_subnet(subnet.id)
+    client.delete_vcn(vcn.id)

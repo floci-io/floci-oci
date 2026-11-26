@@ -76,6 +76,7 @@ class PsqlCompatibilityTest {
     @AfterAll
     static void tearDown() {
         postgresql.close();
+        CompatNetworks.deleteAll();
     }
 
     @Test
@@ -105,7 +106,7 @@ class PsqlCompatibilityTest {
                         .dbVersion("16")
                         .shape("PostgreSQL.VM.Standard.E4.Flex.2.32GB")
                         .storageDetails(OciOptimizedStorageDetails.builder().isRegionallyDurable(true).build())
-                        .networkDetails(NetworkDetails.builder().subnetId("ocid1.subnet.oc1.iad.javasdk").build())
+                        .networkDetails(NetworkDetails.builder().subnetId(CompatNetworks.create(TENANCY, "java-psql").subnetId()).build())
                         .credentials(Credentials.builder()
                                 .username(USER)
                                 .passwordDetails(PlainTextPasswordDetails.builder().password(PASSWORD).build())

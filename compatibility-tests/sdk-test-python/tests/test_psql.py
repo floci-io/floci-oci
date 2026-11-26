@@ -36,7 +36,7 @@ def test_catalog_lists_shapes_and_default_configurations(postgresql):
     assert [capability.insight_type for capability in capabilities] == ["QUERY_INSIGHT"]
 
 
-def test_db_system_lifecycle(postgresql):
+def test_db_system_lifecycle(postgresql, network):
     created = postgresql.create_db_system(
         oci.psql.models.CreateDbSystemDetails(
             compartment_id=TENANCY,
@@ -44,7 +44,7 @@ def test_db_system_lifecycle(postgresql):
             db_version="15",
             shape="PostgreSQL.VM.Standard.E4.Flex.2.32GB",
             storage_details=oci.psql.models.OciOptimizedStorageDetails(is_regionally_durable=True),
-            network_details=oci.psql.models.NetworkDetails(subnet_id="ocid1.subnet.oc1.iad.pysdk"),
+            network_details=oci.psql.models.NetworkDetails(subnet_id=network["subnet_id"]),
             credentials=oci.psql.models.Credentials(
                 username="admin_user",
                 password_details=oci.psql.models.PlainTextPasswordDetails(password="BEstrO0ng_#11"),

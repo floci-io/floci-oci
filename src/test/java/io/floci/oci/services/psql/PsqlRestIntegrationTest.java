@@ -1,6 +1,7 @@
 package io.floci.oci.services.psql;
 
 import io.floci.oci.testing.TestCompartments;
+import io.floci.oci.testing.TestNetworks;
 import io.quarkus.test.junit.QuarkusTest;
 import io.restassured.response.Response;
 import org.junit.jupiter.api.AfterEach;
@@ -26,11 +27,13 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 class PsqlRestIntegrationTest {
 
     private static String compartment;
+    private static TestNetworks.Network network;
 
     @BeforeEach
     void createTestCompartment() {
         if (compartment == null) {
             compartment = TestCompartments.create("itpsqlcompartment");
+            network = TestNetworks.create(compartment);
         }
     }
 
@@ -46,7 +49,7 @@ class PsqlRestIntegrationTest {
         details.put("dbVersion", "15");
         details.put("shape", "PostgreSQL.VM.Standard.E4.Flex.2.32GB");
         details.put("storageDetails", Map.of("systemType", "OCI_OPTIMIZED_STORAGE", "isRegionallyDurable", true));
-        details.put("networkDetails", Map.of("subnetId", "ocid1.subnet.oc1.iad.itpsqlsubnet"));
+        details.put("networkDetails", Map.of("subnetId", network.subnetId()));
         details.put("credentials", Map.of("username", "adminUser",
                 "passwordDetails", Map.of("passwordType", "PLAIN_TEXT", "password", "BEstrO0ng_#11")));
         return details;
@@ -81,7 +84,7 @@ class PsqlRestIntegrationTest {
                 .body("adminUsername", equalTo("adminUser"))
                 .body("credentials", nullValue())
                 .body("storageDetails.isRegionallyDurable", equalTo(true))
-                .body("networkDetails.subnetId", equalTo("ocid1.subnet.oc1.iad.itpsqlsubnet"))
+                .body("networkDetails.subnetId", equalTo(network.subnetId()))
                 .body("managementPolicy.backupPolicy.kind", equalTo("NONE"))
                 .body("source.sourceType", equalTo("NONE"))
                 .body("instances[0].lifecycleState", equalTo("ACTIVE"))

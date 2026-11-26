@@ -43,7 +43,7 @@ func TestOkeClusterLifecycle(t *testing.T) {
 	// The tenancy is its own root compartment; any other compartment has to be created first.
 	compartmentId := tenancy()
 	name := "go-sdk-cluster"
-	vcnId := "ocid1.vcn.oc1.iad.testvcn"
+	vcnId, _ := testNetwork(t, "go-oke")
 	version := "v1.30.1"
 
 	// 1. Create Cluster

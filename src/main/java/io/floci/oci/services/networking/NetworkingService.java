@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import io.floci.oci.config.EmulatorConfig;
 import io.floci.oci.core.common.CompartmentUsage;
 import io.floci.oci.core.common.Etags;
+import io.floci.oci.core.common.NetworkReferences;
 import io.floci.oci.core.common.OciContext;
 import io.floci.oci.core.common.OciException;
 import io.floci.oci.core.common.Ocids;
@@ -27,6 +28,7 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
@@ -48,7 +50,7 @@ import java.util.regex.Pattern;
  * cannot land in a VCN being deleted, two subnets cannot claim overlapping CIDRs).
  */
 @ApplicationScoped
-public class NetworkingService implements CompartmentUsage {
+public class NetworkingService implements CompartmentUsage, NetworkReferences {
 
     private static final Logger LOG = Logger.getLogger(NetworkingService.class);
 
@@ -873,6 +875,51 @@ public class NetworkingService implements CompartmentUsage {
     }
 
     // ── References between resources ───────────────────────────────────────────
+
+    @Override
+    public void requireVcn(String vcnId) {
+        if (vcnId != null && checksReferences()) {
+            requireVcnInBody(vcnId);
+        }
+    }
+
+    @Override
+    public void requireSubnets(Collection<String> subnetIds) {
+        requireAll(subnetIds, NetworkKind.SUBNET);
+    }
+
+    @Override
+    public void requireNsgs(Collection<String> nsgIds) {
+        requireAll(nsgIds, NetworkKind.NETWORK_SECURITY_GROUP);
+    }
+
+    @Override
+    public void requireSubnetsInVcn(Collection<String> subnetIds, String vcnId, String field) {
+        requireSubnets(subnetIds);
+        if (subnetIds == null || vcnId == null || !checksReferences()) {
+            return;
+        }
+        StoredNetworkResource vcn = requireVcnInBody(vcnId);
+        for (String id : subnetIds) {
+            requireOwned(id, NetworkKind.SUBNET, vcn, field);
+        }
+    }
+
+    private boolean checksReferences() {
+        return config.services().networking().enabled();
+    }
+
+    private void requireAll(Collection<String> ids, NetworkKind kind) {
+        if (ids == null || !checksReferences()) {
+            return;
+        }
+        for (String id : ids) {
+            if (resources.get(id).filter(r -> r.getKind() == kind).isEmpty()) {
+                throw OciException.relatedResourceNotAuthorizedOrNotFound(
+                        "Authorization failed or requested resource not found: " + kind.ocidType() + " " + id);
+            }
+        }
+    }
 
     private StoredNetworkResource requireVcnInBody(String vcnId) {
         return resources.get(vcnId)

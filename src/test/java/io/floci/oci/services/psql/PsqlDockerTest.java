@@ -1,6 +1,7 @@
 package io.floci.oci.services.psql;
 
 import io.floci.oci.testing.TestCompartments;
+import io.floci.oci.testing.TestNetworks;
 import io.quarkus.test.junit.QuarkusTest;
 import io.quarkus.test.junit.QuarkusTestProfile;
 import io.quarkus.test.junit.TestProfile;
@@ -54,6 +55,7 @@ class PsqlDockerTest {
     private static final String NEW_PASSWORD = "N3w'pass \"w0rd\"; --";
 
     private static String compartment;
+    private static TestNetworks.Network network;
 
     private String dbSystemId;
     private String workRequestId;
@@ -75,6 +77,7 @@ class PsqlDockerTest {
     void createTestCompartment() {
         if (compartment == null) {
             compartment = TestCompartments.create("psqldockercompartment");
+            network = TestNetworks.create(compartment);
         }
     }
 
@@ -87,7 +90,7 @@ class PsqlDockerTest {
         details.put("dbVersion", "16");
         details.put("shape", "PostgreSQL.VM.Standard.E4.Flex.2.32GB");
         details.put("storageDetails", Map.of("systemType", "OCI_OPTIMIZED_STORAGE", "isRegionallyDurable", true));
-        details.put("networkDetails", Map.of("subnetId", "ocid1.subnet.oc1.iad.psqldockersubnet"));
+        details.put("networkDetails", Map.of("subnetId", network.subnetId()));
         details.put("credentials", Map.of("username", USER,
                 "passwordDetails", Map.of("passwordType", "PLAIN_TEXT", "password", PASSWORD)));
 
@@ -244,7 +247,7 @@ class PsqlDockerTest {
         details.put("dbVersion", "16");
         details.put("shape", "PostgreSQL.VM.Standard.E4.Flex.2.32GB");
         details.put("storageDetails", Map.of("systemType", "OCI_OPTIMIZED_STORAGE", "isRegionallyDurable", true));
-        details.put("networkDetails", Map.of("subnetId", "ocid1.subnet.oc1.iad.psqldockersubnet"));
+        details.put("networkDetails", Map.of("subnetId", network.subnetId()));
         details.put("credentials", Map.of("username", USER,
                 "passwordDetails", Map.of("passwordType", "PLAIN_TEXT", "password", PASSWORD)));
         details.put("source", Map.of("sourceType", "BACKUP", "backupId", backupId));

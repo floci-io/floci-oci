@@ -72,5 +72,9 @@ provider block.
 ## Notes and limitations
 
 VCN and subnet CIDR changes (add, modify and remove CIDR, IPv6), VLANs, DRGs, local peering
-gateways, private and public IPs, and VNICs are not implemented. OKE, Functions and Database
-with PostgreSQL do not yet check that the VCN and subnet OCIDs they receive exist.
+gateways, private and public IPs, and VNICs are not implemented.
+
+OKE, Functions and Database with PostgreSQL check every VCN, subnet and network security group
+OCID they receive against this service: one that does not exist in the caller's tenancy and region
+is rejected with `400 RelatedResourceNotAuthorizedOrNotFound`. With Networking disabled
+(`FLOCI_OCI_SERVICES_NETWORKING_ENABLED=false`) they accept any OCID.

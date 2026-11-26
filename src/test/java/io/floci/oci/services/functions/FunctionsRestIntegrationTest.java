@@ -1,6 +1,7 @@
 package io.floci.oci.services.functions;
 
 import io.floci.oci.testing.TestCompartments;
+import io.floci.oci.testing.TestNetworks;
 import io.quarkus.test.junit.QuarkusTest;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -17,13 +18,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class FunctionsRestIntegrationTest {
 
     private static String compartment;
-    private static final String SUBNET = "ocid1.subnet.oc1.iad.itsubnet";
+    private static TestNetworks.Network network;
 
     private String createApplication(String name) {
         return given()
                 .contentType("application/json")
                 .body(Map.of("compartmentId", compartment, "displayName", name,
-                        "subnetIds", List.of(SUBNET)))
+                        "subnetIds", List.of(network.subnetId())))
             .when().post("/20181201/applications")
             .then().statusCode(200)
                 .header("etag", notNullValue())
@@ -53,6 +54,7 @@ class FunctionsRestIntegrationTest {
     void createTestCompartment() {
         if (compartment == null) {
             compartment = TestCompartments.create("itfncompartment");
+            network = TestNetworks.create(compartment);
         }
     }
 

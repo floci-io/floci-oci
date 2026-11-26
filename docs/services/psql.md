@@ -100,8 +100,8 @@ OCI's SDKs leave these open, so floci-oci picks:
   records, all served by the one container (see Instances and replicas).
 - **Defaults.** When omitted: 2 OCPUs and 32 GB, 75000 IOPS, maintenance window `SUN 00:00`,
   backup policy `NONE`, and the default configuration for the version.
-- **Network.** `subnetId` and `nsgIds` are stored unchecked, since there is no networking
-  service.
+- **Network.** `subnetId` and `nsgIds` must exist in Networking (create and update), otherwise
+  `400 RelatedResourceNotAuthorizedOrNotFound`. Nothing is wired to a real network.
 - **Update is metadata only, except the configuration.** Shape, sizes, IOPS and management policy
   change what the API reports, not the running container. A new `configId` does reach PostgreSQL
   (see Custom configurations).
@@ -234,6 +234,8 @@ and 20 configurations, counting each that is not `DELETED`. The one past the lim
 
 ## Quickstart
 
+The subnet has to exist first: create one as in the [Networking quickstart](networking.md#quickstart).
+
 ```bash
 E="--endpoint http://localhost:4599"
 TENANCY=ocid1.tenancy.oc1..flocilocaltenancy0000000000000000000000000000000000000000
@@ -241,7 +243,7 @@ TENANCY=ocid1.tenancy.oc1..flocilocaltenancy000000000000000000000000000000000000
 # Create a DB system and wait for it
 ID=$(oci psql db-system create $E --compartment-id "$TENANCY" --display-name demo-db \
   --db-version 16 --shape PostgreSQL.VM.Standard.E4.Flex.2.32GB \
-  --network-details '{"subnetId":"ocid1.subnet.oc1.iad.demo"}' \
+  --network-details '{"subnetId":"<subnetId>"}' \
   --storage-details '{"systemType":"OCI_OPTIMIZED_STORAGE","isRegionallyDurable":true}' \
   --credentials '{"username":"admin_user","passwordDetails":{"passwordType":"PLAIN_TEXT","password":"BEstrO0ng_#11"}}' \
   --wait-for-state SUCCEEDED --query 'data.resources[0].identifier' --raw-output)

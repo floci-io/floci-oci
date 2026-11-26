@@ -56,3 +56,29 @@ wait_for_state() {
     echo "timed out after ${timeout}s waiting for $expected (last state: $state)" >&2
     return 1
 }
+
+# create_test_network <dir>: creates a VCN and a subnet and writes their OCIDs to <dir>/vcn_id
+# and <dir>/subnet_id. OKE, Functions and PostgreSQL reject network OCIDs that do not exist.
+create_test_network() {
+    local dir="$1" vcn_id
+    vcn_id="$(oci_json network vcn create --compartment-id "$TENANCY" \
+        --display-name "$(unique_name cli-vcn)" --cidr-blocks '["10.0.0.0/16"]' | jq -r '.data.id')"
+    [ -n "$vcn_id" ] && [ "$vcn_id" != "null" ] || return 1
+    echo "$vcn_id" > "$dir/vcn_id"
+    oci_json network subnet create --compartment-id "$TENANCY" --vcn-id "$vcn_id" \
+        --display-name "$(unique_name cli-subnet)" --cidr-block "10.0.0.0/24" \
+        | jq -r '.data.id' > "$dir/subnet_id"
+    [ -s "$dir/subnet_id" ] && [ "$(cat "$dir/subnet_id")" != "null" ]
+}
+
+# delete_test_network <dir>: deletes the subnet, then the VCN, that create_test_network wrote to
+# <dir>. Call it last in teardown_file, after the resources that use them are deleted.
+delete_test_network() {
+    local dir="$1"
+    if [ -f "$dir/subnet_id" ]; then
+        oci_json network subnet delete --subnet-id "$(cat "$dir/subnet_id")" --force > /dev/null 2>&1 || true
+    fi
+    if [ -f "$dir/vcn_id" ]; then
+        oci_json network vcn delete --vcn-id "$(cat "$dir/vcn_id")" --force > /dev/null 2>&1 || true
+    fi
+}
