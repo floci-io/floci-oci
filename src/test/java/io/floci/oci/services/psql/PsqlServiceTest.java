@@ -423,10 +423,10 @@ class PsqlServiceTest {
 
         OciException startActive = assertThrows(OciException.class, () -> real.startDbSystem(system.getId(), null));
         assertEquals(409, startActive.getHttpStatus());
-        assertEquals("IncorrectState", startActive.getCode());
+        assertEquals("Conflict", startActive.getCode());
 
         real.stopDbSystem(system.getId(), null);
-        assertEquals("IncorrectState",
+        assertEquals("Conflict",
                 assertThrows(OciException.class, () -> real.stopDbSystem(system.getId(), null)).getCode());
     }
 
@@ -487,7 +487,7 @@ class PsqlServiceTest {
         StoredWorkRequest wr = workRequest(delete);
         assertEquals("DELETE_POSTGRESQL_DB_SYSTEM", wr.getOperationType());
         assertEquals("SUCCEEDED", wr.getStatus());
-        assertEquals("IncorrectState",
+        assertEquals("Conflict",
                 assertThrows(OciException.class, () -> real.deleteDbSystem(system.getId(), null)).getCode());
         assertEquals("NotAuthorizedOrNotFound", assertThrows(OciException.class,
                 () -> real.updateDbSystem(system.getId(), Map.of("displayName", "x"), null)).getCode());

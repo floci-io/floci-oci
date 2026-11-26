@@ -217,7 +217,7 @@ class PsqlRestIntegrationTest {
         given().when().get("/20220915/dbSystems/" + id)
             .then().body("lifecycleState", equalTo("INACTIVE"));
         given().when().post("/20220915/dbSystems/" + id + "/actions/stop")
-            .then().statusCode(409).body("code", equalTo("IncorrectState"));
+            .then().statusCode(409).body("code", equalTo("Conflict"));
         given().contentType("application/json").body(Map.of())
             .when().post("/20220915/dbSystems/" + id + "/actions/start")
             .then().statusCode(202);

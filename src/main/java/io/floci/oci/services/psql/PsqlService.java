@@ -92,6 +92,7 @@ public class PsqlService implements Resettable, CompartmentUsage {
     private static final Set<String> SORT_ORDERS = Set.of("ASC", "DESC");
     private static final Set<String> SORT_FIELDS = Set.of("timeCreated", "displayName");
     private static final Set<String> RESTART_TYPES = Set.of("NORMAL", "NODE_REBOOT");
+    private static final Set<String> TRANSIENT_STATES = Set.of("CREATING", "UPDATING", "DELETING");
     private static final Set<String> LIFECYCLE_STATES = Set.of("CREATING", "UPDATING", "ACTIVE",
             "INACTIVE", "DELETING", "DELETED", "FAILED", "NEEDS_ATTENTION");
     private static final long DEFAULT_IOPS = 75000L;
@@ -1730,9 +1731,16 @@ public class PsqlService implements Resettable, CompartmentUsage {
                 "Authorization failed or requested resource not found: DB system " + dbSystemId);
     }
 
+    /**
+     * A request the system's lifecycle state refuses. While the state is one an operation passes
+     * through, the refusal is {@code 409 IncorrectState}, which OCI SDKs retry; in a settled state
+     * a retry cannot succeed, so it is {@code 409 Conflict}, which they do not.
+     */
     private static OciException incorrectState(StoredDbSystem system, String action) {
-        return new OciException("IncorrectState", "DB system " + system.getId() + " is "
-                + system.getLifecycleState() + " and cannot be " + action, 409);
+        String message = "DB system " + system.getId() + " is " + system.getLifecycleState()
+                + " and cannot be " + action;
+        return TRANSIENT_STATES.contains(system.getLifecycleState())
+                ? new OciException("IncorrectState", message, 409) : OciException.conflict(message);
     }
 
     private static ThreadFactory daemon(String name) {

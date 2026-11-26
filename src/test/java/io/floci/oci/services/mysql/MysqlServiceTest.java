@@ -323,7 +323,7 @@ class MysqlServiceTest {
         OciException refused = assertThrows(OciException.class,
                 () -> real.updateDbSystem(id, Map.of("dataStorageSizeInGBs", 100), null));
         assertEquals(409, refused.getHttpStatus());
-        assertEquals("IncorrectState", refused.getCode());
+        assertEquals("Conflict", refused.getCode());
 
         real.updateDbSystem(id, Map.of("deletionPolicy", Map.of("isDeleteProtected", false)), null);
         assertEquals("FAILED", real.getDbSystem(id).getLifecycleState());
@@ -361,7 +361,7 @@ class MysqlServiceTest {
 
         OciException error = assertThrows(OciException.class,
                 () -> real.restartDbSystem(system.getId(), Map.of("shutdownType", "FAST"), null));
-        assertEquals("IncorrectState", error.getCode());
+        assertEquals("Conflict", error.getCode());
         assertEquals(409, error.getHttpStatus());
     }
 
@@ -467,7 +467,7 @@ class MysqlServiceTest {
         assertEquals("DELETED", real.getDbSystem(system.getId()).getLifecycleState());
         assertEquals("SUCCEEDED", workRequest(workRequestId).getStatus());
         verify(containers).remove(any());
-        assertEquals("IncorrectState", assertThrows(OciException.class,
+        assertEquals("Conflict", assertThrows(OciException.class,
                 () -> real.deleteDbSystem(system.getId(), null)).getCode());
     }
 

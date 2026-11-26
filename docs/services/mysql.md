@@ -73,12 +73,15 @@ These defaults are floci-oci's own; no Oracle source in the reference corpus sta
 - The maintenance window comes back exactly as sent (`sun 01:00` stays lowercase), since Terraform
   compares it as a string.
 - A DB system with `deletionPolicy.isDeleteProtected` true answers `DeleteDbSystem` with
-  `409 IncorrectState` until the protection is turned off.
+  `409 Conflict` until the protection is turned off.
 - A `FAILED` DB system still takes an `UpdateDbSystem` that changes only `deletionPolicy`,
   `displayName`, `description` or tags, so a protected system whose container never started can be
-  unprotected and deleted. Any other field answers `409 IncorrectState`. OCI does not document
+  unprotected and deleted. Any other field answers `409 Conflict`. OCI does not document
   updates in `FAILED`; this rule is inferred.
-- `CancelWorkRequest` answers `409 IncorrectState`: operations are not cancellable.
+- `CancelWorkRequest` answers `409 Conflict`: operations are not cancellable.
+- An operation the DB system's state does not allow is refused with `409`. A refusal while the system is `CREATING`, `UPDATING` or `DELETING` is
+  `409 IncorrectState`, which OCI SDKs retry until the operation finishes; in any other state a retry
+  cannot succeed, so it is `409 Conflict`, which they do not retry.
 - `dataStorageSizeInGBs` may grow, never shrink (`400 InvalidParameter`). Storage limits, backup
   policies and maintenance windows are recorded, not acted on.
 
