@@ -4,6 +4,7 @@ import io.floci.oci.config.EmulatorConfig;
 import io.floci.oci.core.common.docker.ContainerStorageHelper;
 import io.floci.oci.services.artifacts.ArtifactsRegistryManager;
 import io.floci.oci.testing.TestCompartments;
+import io.floci.oci.testing.TestNetworks;
 import io.quarkus.test.junit.QuarkusTest;
 import io.quarkus.test.junit.QuarkusTestProfile;
 import io.quarkus.test.junit.TestProfile;
@@ -59,6 +60,7 @@ class OkeOcirDockerTest {
     EmulatorConfig config;
 
     private String compartment;
+    private String vcnId;
     private String namespace;
     private String pushed;
     private String clusterId;
@@ -80,6 +82,7 @@ class OkeOcirDockerTest {
     void createTestCompartment() {
         if (compartment == null) {
             compartment = TestCompartments.create("okeocirdocker");
+            vcnId = TestNetworks.create(compartment).vcnId();
         }
     }
 
@@ -104,7 +107,7 @@ class OkeOcirDockerTest {
     void clusterBecomesActive() throws Exception {
         String workRequestId = given().contentType(ContentType.JSON)
                 .body(Map.of("compartmentId", compartment, "name", "ocir-pull-cluster",
-                        "vcnId", "ocid1.vcn.oc1.iad.okeocirvcn", "kubernetesVersion", "v1.30.1"))
+                        "vcnId", vcnId, "kubernetesVersion", "v1.30.1"))
             .when().post("/20180222/clusters")
             .then().statusCode(202).extract().header("opc-work-request-id");
         clusterId = OkeWorkRequests.createdId(workRequestId);
