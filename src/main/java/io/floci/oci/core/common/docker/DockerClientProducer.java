@@ -108,9 +108,17 @@ public class DockerClientProducer {
                 .dockerHost(clientConfig.getDockerHost())
                 .maxConnections(100)
                 .connectionTimeout(Duration.ofSeconds(30))
-                .responseTimeout(Duration.ofMinutes(5))
+                .responseTimeout(responseTimeout(config.docker().imagePullTimeoutSeconds()))
                 .build();
 
         return DockerClientImpl.getInstance(clientConfig, httpClient);
+    }
+
+    /**
+     * Five minutes, or the image pull timeout when that is longer: a pull streams over one
+     * response, so the client must not give up on it before the pull timeout does.
+     */
+    static Duration responseTimeout(int imagePullTimeoutSeconds) {
+        return Duration.ofSeconds(Math.max(Duration.ofMinutes(5).toSeconds(), imagePullTimeoutSeconds));
     }
 }

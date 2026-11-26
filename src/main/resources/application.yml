@@ -92,6 +92,8 @@ floci-oci:
     endpoint-mode: auto
     resource-namespace: ""
     docker-config-path: ""
+    # FLOCI_OCI_DOCKER_IMAGE_PULL_TIMEOUT_SECONDS: how long one image pull may take before it fails.
+    image-pull-timeout-seconds: 300
   init-hooks:
     shell-executable: /bin/sh
     shutdown-grace-period-seconds: 2

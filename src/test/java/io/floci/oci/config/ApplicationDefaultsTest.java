@@ -55,6 +55,8 @@ class ApplicationDefaultsTest {
                 "readyTimeoutSeconds"), String.valueOf(config.services().streaming().readyTimeoutSeconds()));
         assertEquals(annotationDefault(EmulatorConfig.DockerConfig.class, "endpointMode"),
                 config.docker().endpointMode().name().toLowerCase(Locale.ROOT));
+        assertEquals(annotationDefault(EmulatorConfig.DockerConfig.class, "imagePullTimeoutSeconds"),
+                String.valueOf(config.docker().imagePullTimeoutSeconds()));
     }
 
     @Test

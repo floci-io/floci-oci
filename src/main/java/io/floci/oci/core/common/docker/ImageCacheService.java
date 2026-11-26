@@ -11,6 +11,7 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
+import java.io.IOException;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -30,6 +31,7 @@ public class ImageCacheService {
 
     private final DockerClient dockerClient;
     private final List<EmulatorConfig.DockerConfig.RegistryCredential> registryCredentials;
+    private final int pullTimeoutSeconds;
     private final Set<String> pulledImages = ConcurrentHashMap.newKeySet();
     private final ConcurrentHashMap<String, Object> locks = new ConcurrentHashMap<>();
 
@@ -37,6 +39,7 @@ public class ImageCacheService {
     public ImageCacheService(DockerClient dockerClient, EmulatorConfig config) {
         this.dockerClient = dockerClient;
         this.registryCredentials = config.docker().registryCredentials();
+        this.pullTimeoutSeconds = config.docker().imagePullTimeoutSeconds();
     }
 
     public void ensureImageExists(String imageUri) {
@@ -72,16 +75,34 @@ public class ImageCacheService {
             LOG.infov("Pulling image: {0}", imageUri);
             try {
                 runWithRetry(imageUri, MAX_PULL_ATTEMPTS, INITIAL_BACKOFF_MS,
-                        () -> dockerClient.pullImageCmd(imageUri)
-                                .withAuthConfig(auth != null ? auth : resolveAuth(imageUri))
-                                .exec(new PullImageResultCallback())
-                                .awaitCompletion(5, TimeUnit.MINUTES));
+                        () -> pull(imageUri, auth != null ? auth : resolveAuth(imageUri)));
                 pulledImages.add(imageUri);
                 LOG.infov("Image pulled successfully: {0}", imageUri);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 throw new RuntimeException("Interrupted while pulling image: " + imageUri, e);
             }
+        }
+    }
+
+    /**
+     * One pull, bounded by {@code floci-oci.docker.image-pull-timeout-seconds}. A pull still running
+     * then fails instead of being taken as finished, and is not retried: the next attempt would
+     * time out the same way.
+     */
+    private void pull(String imageUri, AuthConfig auth) throws InterruptedException {
+        PullImageResultCallback callback = dockerClient.pullImageCmd(imageUri)
+                .withAuthConfig(auth)
+                .exec(new PullImageResultCallback());
+        if (!callback.awaitCompletion(pullTimeoutSeconds, TimeUnit.SECONDS)) {
+            try {
+                callback.close();
+            } catch (IOException e) {
+                LOG.debugv("Could not close the pull of {0}: {1}", imageUri, e.getMessage());
+            }
+            throw new IllegalStateException("Pulling image " + imageUri + " did not finish within "
+                    + pullTimeoutSeconds + " seconds; raise FLOCI_OCI_DOCKER_IMAGE_PULL_TIMEOUT_SECONDS"
+                    + " or pull the image beforehand");
         }
     }
 
