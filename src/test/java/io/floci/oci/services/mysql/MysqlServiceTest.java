@@ -298,6 +298,25 @@ class MysqlServiceTest {
     }
 
     @Test
+    void aFailedDeleteProtectedSystemCanBeUnprotectedAndDeleted() {
+        doThrow(new IllegalStateException("no such image")).when(containers).start(any(), any());
+        Map<String, Object> details = createDetails();
+        details.put("deletionPolicy", Map.of("isDeleteProtected", true));
+        String id = real.createDbSystem(details).system().getId();
+        assertEquals("FAILED", real.getDbSystem(id).getLifecycleState());
+
+        OciException refused = assertThrows(OciException.class,
+                () -> real.updateDbSystem(id, Map.of("dataStorageSizeInGBs", 100), null));
+        assertEquals(409, refused.getHttpStatus());
+        assertEquals("IncorrectState", refused.getCode());
+
+        real.updateDbSystem(id, Map.of("deletionPolicy", Map.of("isDeleteProtected", false)), null);
+        assertEquals("FAILED", real.getDbSystem(id).getLifecycleState());
+        real.deleteDbSystem(id, null);
+        assertEquals("DELETED", real.getDbSystem(id).getLifecycleState());
+    }
+
+    @Test
     void stopAndStartKeepTheSystemAndNeedAShutdownType() {
         StoredMysqlDbSystem system = activeRealSystem();
 

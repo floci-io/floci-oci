@@ -70,6 +70,12 @@ public class MysqlService implements Resettable, CompartmentUsage {
 
     static final Set<String> LIFECYCLE_STATES = Set.of("CREATING", "ACTIVE", "INACTIVE", "UPDATING", "DELETING",
             "DELETED", "FAILED");
+    /**
+     * The fields a FAILED system still takes: none reaches the server, and turning delete
+     * protection off is the only way to delete a protected system whose container never started.
+     */
+    private static final Set<String> FAILED_UPDATABLE = Set.of("deletionPolicy", "displayName", "description",
+            "freeformTags", "definedTags");
     static final Set<String> SHUTDOWN_TYPES = Set.of("IMMEDIATE", "FAST", "SLOW");
     private static final Set<String> SORT_ORDERS = Set.of("ASC", "DESC");
     private static final Set<String> SORT_FIELDS = Set.of("displayName", "timeCreated");
@@ -341,7 +347,12 @@ public class MysqlService implements Resettable, CompartmentUsage {
     }
 
     private synchronized String update(String dbSystemId, Map<String, Object> details, String ifMatch) {
-        StoredMysqlDbSystem system = mutable(dbSystemId, ifMatch, "ACTIVE", "INACTIVE");
+        StoredMysqlDbSystem system = mutable(dbSystemId, ifMatch, "ACTIVE", "INACTIVE", "FAILED");
+        if ("FAILED".equals(system.getLifecycleState()) && !FAILED_UPDATABLE.containsAll(details.keySet())) {
+            throw new OciException("IncorrectState", "DB system " + dbSystemId
+                    + " is FAILED: only " + String.join(", ", FAILED_UPDATABLE.stream().sorted().toList())
+                    + " can be changed", 409);
+        }
         // Everything that can be rejected is checked before anything changes: the store hands out
         // the stored object itself, so a half-applied update would stick.
         String subnetId = MysqlRequests.string(details, "subnetId");

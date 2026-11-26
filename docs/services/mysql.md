@@ -74,6 +74,10 @@ These defaults are floci-oci's own; no Oracle source in the reference corpus sta
   compares it as a string.
 - A DB system with `deletionPolicy.isDeleteProtected` true answers `DeleteDbSystem` with
   `409 IncorrectState` until the protection is turned off.
+- A `FAILED` DB system still takes an `UpdateDbSystem` that changes only `deletionPolicy`,
+  `displayName`, `description` or tags, so a protected system whose container never started can be
+  unprotected and deleted. Any other field answers `409 IncorrectState`. OCI does not document
+  updates in `FAILED`; this rule is inferred.
 - `CancelWorkRequest` answers `409 IncorrectState`: operations are not cancellable.
 - `dataStorageSizeInGBs` may grow, never shrink (`400 InvalidParameter`). Storage limits, backup
   policies and maintenance windows are recorded, not acted on.
