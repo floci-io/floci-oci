@@ -27,10 +27,10 @@ back for `oci_container_instances_container_instance`.
   (`--network container:<pause>`), so the containers of one instance reach each other on
   `localhost`, as in OCI.
 - **The VNIC address is the pod's address.** `privateIp` on the VNIC is the pause container's IP
-  on its Docker network, recorded when the pod starts, so other containers on that network (the
-  compat suites, a client in `docker compose`) reach `http://<privateIp>:<port>`. A stopped and
-  started instance can come back with another address. A `privateIp` given on create is kept as
-  sent, and nothing on Docker answers on it. On macOS, the host cannot reach container IPs; use a
+  on its Docker network, recorded each time the pod starts, so other containers on that network
+  (the compat suites, a client in `docker compose`) reach `http://<privateIp>:<port>`. A stopped
+  and started instance can come back with another address, and the VNIC follows it. A
+  `privateIp` given on create is kept as sent, and nothing on Docker answers on it. On macOS, the host cannot reach container IPs; use a
   container on the same network.
 - **Images.** Each image is pulled before anything starts. An image pushed to the local
   [Container Registry](artifacts.md) (`<region-key>.ocir.localhost.floci.io/<namespace>/<repo>`)
@@ -80,7 +80,9 @@ the next free address of its subnet, and `RetrieveLogs` is empty.
   one of `FAULT-DOMAIN-1` to `3`.
 - `shape` must be offered in the region and `shapeConfig` within its range (below).
 - There is exactly one VNIC, and its `subnetId` and `nsgIds` must exist in Networking
-  (`400 RelatedResourceNotAuthorizedOrNotFound`).
+  (`400 RelatedResourceNotAuthorizedOrNotFound`). The NSGs must be in the subnet's VCN, and a
+  requested `privateIp` cannot be one of the subnet's reserved addresses (`400
+  InvalidParameter`, see [Networking](networking.md#vnics)).
 - A volume mount must name one of the instance's volumes.
 - A start of an instance that is not `INACTIVE`, a stop or restart of one that is not `ACTIVE`,
   and a delete of one already `DELETING` or `DELETED` are `409 IncorrectState`.

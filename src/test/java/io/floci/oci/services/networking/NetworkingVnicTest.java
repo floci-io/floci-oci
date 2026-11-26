@@ -73,6 +73,48 @@ class NetworkingVnicTest {
     }
 
     @Test
+    void aWorkloadAddressFollowsTheWorkloadButARequestedOrAllocatedOneIsKept() {
+        String workload = attach(null, false);
+        service.setVnicPrivateIp(workload, "172.18.0.4");
+        service.setVnicPrivateIp(workload, "172.18.0.7");
+        assertEquals("172.18.0.7", privateIp(workload));
+
+        String requested = attach("10.0.0.2", false);
+        service.setVnicPrivateIp(requested, "172.18.0.8");
+        assertEquals("10.0.0.2", privateIp(requested));
+    }
+
+    @Test
+    void theNetworkTheRouterAndTheBroadcastAddressCannotBeRequested() {
+        for (String reserved : List.of("10.0.0.0", "10.0.0.1", "10.0.0.3")) {
+            OciException e = assertThrows(OciException.class, () -> attach(reserved, true), reserved);
+            assertEquals("InvalidParameter", e.getCode());
+            assertEquals(400, e.getHttpStatus());
+        }
+        assertEquals("10.0.0.2", privateIp(attach("10.0.0.2", true)));
+    }
+
+    @Test
+    void aNetworkSecurityGroupOfAnotherVcnIsRejectedOnAttachAndUpdate() {
+        String otherVcn = service.create(NetworkKind.VCN, Map.of("compartmentId", COMPARTMENT,
+                "cidrBlocks", List.of("10.1.0.0/16"))).getId();
+        String foreignNsg = service.create(NetworkKind.NETWORK_SECURITY_GROUP, Map.of("compartmentId", COMPARTMENT,
+                "vcnId", otherVcn)).getId();
+
+        OciException onAttach = assertThrows(OciException.class, () -> service.attachVnic(
+                new NetworkReferences.VnicRequest(COMPARTMENT, null, subnetId, null, null, List.of(foreignNsg),
+                        null, null, true, false, null, null)));
+        assertEquals("InvalidParameter", onAttach.getCode());
+        assertEquals("nsgIds " + foreignNsg + " belongs to another VCN", onAttach.getMessage());
+
+        String vnicId = attach(null, true);
+        OciException onUpdate = assertThrows(OciException.class,
+                () -> service.updateVnic(vnicId, Map.of("nsgIds", List.of(nsgId, foreignNsg)), null));
+        assertEquals("InvalidParameter", onUpdate.getCode());
+        assertEquals(List.of(nsgId), service.get(NetworkKind.VNIC, vnicId).getAttributes().get("nsgIds"));
+    }
+
+    @Test
     void theVnicKeepsWhatWasAskedForAndBlocksItsSubnet() {
         String vnicId = attach(null, true);
         StoredNetworkResource vnic = service.get(NetworkKind.VNIC, vnicId);

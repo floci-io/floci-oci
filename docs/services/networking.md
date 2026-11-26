@@ -88,11 +88,16 @@ A VNIC is created by the service that places something on a subnet, today
 `macAddress`, and `publicIp` only when one was asked for. The private IP is the one requested, the
 address the workload really got (a container instance in real mode), or else the next free one in
 the subnet, skipping the first two and the last address, which OCI keeps for the network, the
-virtual router and the broadcast. A requested address outside the subnet is `400
-InvalidParameter`, one already in use `409 Conflict`. A public IP, when asked for, comes from
+virtual router and the broadcast. A requested address outside the subnet, or one of those three
+reserved addresses, is `400 InvalidParameter`, one already in use `409 Conflict`. Oracle's VCN
+overview documents the reservation; the error code for requesting a reserved address is inferred.
+A workload address changes with the workload (a restarted pod can get another); a requested or
+allocated one never does. A public IP, when asked for, comes from
 `203.0.113.0/24` (documentation addresses, RFC 5737): nothing floci-oci hands out is publicly
 routable. `UpdateVnic` changes the display name, hostname label, NSGs, `skipSourceDestCheck` and
-tags, and checks `if-match`. `ListNetworkSecurityGroupVnics` lists the VNICs in a group. A subnet
+tags, and checks `if-match`. On attach and on update every NSG must be in the subnet's VCN, or the
+request is `400 InvalidParameter` (`nsgIds <id> belongs to another VCN`, the rule subnets already
+apply to route tables and security lists; inferred, as no source states the error). `ListNetworkSecurityGroupVnics` lists the VNICs in a group. A subnet
 with VNICs cannot be deleted (`409 Conflict`).
 
 ## Notes and limitations

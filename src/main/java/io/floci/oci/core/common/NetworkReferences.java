@@ -72,7 +72,11 @@ public interface NetworkReferences {
      */
     String attachVnic(VnicRequest request);
 
-    /** Records the address a VNIC created without one really got; a VNIC that has one keeps it. */
+    /**
+     * Records the address the workload of a VNIC created without one really got, again each time
+     * it changes (a restarted pod can come back with another); a requested or allocated address
+     * is kept.
+     */
     void setVnicPrivateIp(String vnicId, String privateIp);
 
     /** Deletes a VNIC; one that is already gone is ignored. */

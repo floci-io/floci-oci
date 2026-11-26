@@ -258,6 +258,36 @@ class ContainerInstancesRestIntegrationTest {
     }
 
     @Test
+    void aReservedPrivateIpOrAnotherVcnsGroupIsRejected() {
+        Map<String, Object> router = details("it-reserved");
+        router.put("vnics", List.of(Map.of("subnetId", network.subnetId(), "privateIp", "10.0.0.1")));
+        given().contentType("application/json").body(router)
+            .when().post("/20210415/containerInstances")
+            .then().statusCode(400)
+                .header("opc-request-id", notNullValue())
+                .body("code", equalTo("InvalidParameter"))
+                .body("message", containsString("reserved"));
+
+        String otherCompartment = TestCompartments.create("itciothervcn");
+        TestNetworks.Network other = TestNetworks.create(otherCompartment);
+        Map<String, Object> foreign = details("it-foreign-nsg");
+        foreign.put("vnics", List.of(Map.of("subnetId", network.subnetId(), "nsgIds", List.of(other.nsgId()))));
+        given().contentType("application/json").body(foreign)
+            .when().post("/20210415/containerInstances")
+            .then().statusCode(400)
+                .header("opc-request-id", notNullValue())
+                .body("code", equalTo("InvalidParameter"))
+                .body("message", equalTo("nsgIds " + other.nsgId() + " belongs to another VCN"));
+
+        String vnicId = create("it-foreign-nsg-update").path("vnics[0].vnicId");
+        given().contentType("application/json").body(Map.of("nsgIds", List.of(other.nsgId())))
+            .when().put("/20160918/vnics/" + vnicId)
+            .then().statusCode(400)
+                .header("opc-request-id", notNullValue())
+                .body("code", equalTo("InvalidParameter"));
+    }
+
+    @Test
     void updateVnicChangesItsNamesAndChecksIfMatch() {
         String vnicId = create("it-vnic").path("vnics[0].vnicId");
         String etag = given().when().get("/20160918/vnics/" + vnicId).then().statusCode(200).extract().header("etag");

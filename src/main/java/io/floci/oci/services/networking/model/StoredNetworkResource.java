@@ -27,6 +27,7 @@ public class StoredNetworkResource {
     private String timeCreated;
     private String etag;
     private boolean vcnDefault;
+    private boolean addressFromWorkload;
     private Map<String, String> freeformTags = new LinkedHashMap<>();
     private Map<String, Map<String, Object>> definedTags = new LinkedHashMap<>();
     private Map<String, Object> attributes = new LinkedHashMap<>();
@@ -47,6 +48,7 @@ public class StoredNetworkResource {
         copy.timeCreated = timeCreated;
         copy.etag = etag;
         copy.vcnDefault = vcnDefault;
+        copy.addressFromWorkload = addressFromWorkload;
         copy.freeformTags = new LinkedHashMap<>(freeformTags);
         copy.definedTags = deepCopyMap(definedTags);
         copy.attributes = deepCopyMap(attributes);
@@ -152,6 +154,18 @@ public class StoredNetworkResource {
 
     public void setVcnDefault(boolean vcnDefault) {
         this.vcnDefault = vcnDefault;
+    }
+
+    /**
+     * True for a VNIC whose private IP is the one its workload reports (a container instance on
+     * Docker), which may change when the workload restarts; false for a requested or allocated one.
+     */
+    public boolean isAddressFromWorkload() {
+        return addressFromWorkload;
+    }
+
+    public void setAddressFromWorkload(boolean addressFromWorkload) {
+        this.addressFromWorkload = addressFromWorkload;
     }
 
     public Map<String, String> getFreeformTags() {

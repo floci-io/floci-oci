@@ -966,8 +966,9 @@ public class NetworkingService implements CompartmentUsage, NetworkReferences {
     /**
      * A VNIC on a subnet, the shape of oci-go-sdk/core/vnic.go. The private IP is the requested
      * one, or the next free address of the subnet (OCI keeps the first two and the last address
-     * of every subnet: network, virtual router and broadcast), or unset until the workload reports
-     * the one it got. A public IP, when asked for, comes from 203.0.113.0/24 (RFC 5737), since no
+     * of every subnet: network, virtual router and broadcast, which a requested address cannot be
+     * either), or unset until the workload reports the one it got. Each NSG must be in the subnet's
+     * VCN. A public IP, when asked for, comes from 203.0.113.0/24 (RFC 5737), since no
      * address floci-oci hands out is publicly routable.
      */
     @Override
@@ -981,6 +982,7 @@ public class NetworkingService implements CompartmentUsage, NetworkReferences {
         requireSubnets(List.of(request.subnetId()));
         requireNsgs(request.nsgIds());
         StoredNetworkResource subnet = get(NetworkKind.SUBNET, request.subnetId());
+        requireNsgsInVcn(request.nsgIds(), subnet.getVcnId());
         StoredNetworkResource vnic = newResource(NetworkKind.VNIC, request.compartmentId(), request.displayName());
         vnic.setFreeformTags(request.freeformTags() != null ? request.freeformTags() : Map.of());
         vnic.setDefinedTags(request.definedTags() != null ? request.definedTags() : Map.of());
@@ -1000,6 +1002,7 @@ public class NetworkingService implements CompartmentUsage, NetworkReferences {
         if (privateIp != null) {
             a.put("privateIp", privateIp);
         }
+        vnic.setAddressFromWorkload(request.privateIp() == null && !request.allocatePrivateIp());
         if (request.publicIpAssigned()) {
             a.put("publicIp", "203.0.113." + ThreadLocalRandom.current().nextInt(1, 255));
         }
@@ -1017,10 +1020,19 @@ public class NetworkingService implements CompartmentUsage, NetworkReferences {
             }
         }
         if (requested != null) {
-            boolean inSubnet = Cidr4.parse(requested + "/32").map(cidr::contains).orElse(false);
-            if (!inSubnet) {
+            Optional<Cidr4> address = Cidr4.parse(requested + "/32");
+            if (address.isEmpty() || !cidr.contains(address.get())) {
                 throw OciException.invalidParameter("privateIp " + requested + " is not in subnet " + subnet.getId()
                         + " (" + cidr + ")");
+            }
+            Set<String> reserved = new HashSet<>();
+            for (long offset : new long[]{0, 1, cidr.size() - 1}) {
+                cidr.addressAt(offset).ifPresent(reserved::add);
+            }
+            if (reserved.contains(address.get().addressAt(0).orElseThrow())) {
+                throw OciException.invalidParameter("privateIp " + requested + " is reserved in subnet "
+                        + subnet.getId() + ": the first two and the last address of " + cidr
+                        + " belong to the network, the virtual router and the broadcast");
             }
             if (taken.contains(requested)) {
                 throw OciException.conflict("privateIp " + requested + " is already in use in subnet " + subnet.getId());
@@ -1042,7 +1054,8 @@ public class NetworkingService implements CompartmentUsage, NetworkReferences {
     @Override
     public synchronized void setVnicPrivateIp(String vnicId, String privateIp) {
         resources.get(vnicId).filter(r -> r.getKind() == NetworkKind.VNIC).ifPresent(found -> {
-            if (found.getAttributes().get("privateIp") != null || privateIp == null) {
+            if (!found.isAddressFromWorkload() || privateIp == null
+                    || privateIp.equals(found.getAttributes().get("privateIp"))) {
                 return;
             }
             StoredNetworkResource vnic = found.copy();
@@ -1067,6 +1080,9 @@ public class NetworkingService implements CompartmentUsage, NetworkReferences {
         Map<String, Object> b = body == null ? Map.of() : body;
         if (b.get("nsgIds") instanceof List<?>) {
             requireNsgs(stringList(b.get("nsgIds")));
+            requireNsgsInVcn(stringList(b.get("nsgIds")),
+                    resources.get(String.valueOf(vnic.getAttributes().get("subnetId")))
+                            .map(StoredNetworkResource::getVcnId).orElse(null));
             vnic.getAttributes().put("nsgIds", stringList(b.get("nsgIds")));
         }
         if (str(b, "displayName") != null) {
@@ -1140,12 +1156,26 @@ public class NetworkingService implements CompartmentUsage, NetworkReferences {
     }
 
     private void requireOwned(String id, NetworkKind kind, StoredNetworkResource vcn, String field) {
+        requireOwned(id, kind, vcn.getId(), field);
+    }
+
+    private void requireOwned(String id, NetworkKind kind, String vcnId, String field) {
         StoredNetworkResource ref = resources.get(id)
                 .filter(r -> r.getKind() == kind)
                 .orElseThrow(() -> OciException.relatedResourceNotAuthorizedOrNotFound(
                         "Authorization failed or requested resource not found: " + field + " " + id));
-        if (!vcn.getId().equals(ref.getVcnId())) {
+        if (!vcnId.equals(ref.getVcnId())) {
             throw OciException.invalidParameter(field + " " + id + " belongs to another VCN");
+        }
+    }
+
+    /** A VNIC's NSGs must be in its subnet's VCN, as subnets, route tables and security lists are. */
+    private void requireNsgsInVcn(Collection<String> nsgIds, String vcnId) {
+        if (nsgIds == null || vcnId == null) {
+            return;
+        }
+        for (String nsgId : nsgIds) {
+            requireOwned(nsgId, NetworkKind.NETWORK_SECURITY_GROUP, vcnId, "nsgIds");
         }
     }
 
