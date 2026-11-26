@@ -39,7 +39,9 @@ holds its streams and serves Kafka clients.
 
 - Every stream belongs to a pool. CreateStream with only a `streamPoolId` puts the stream in
   that pool and gives it the pool's compartment. An unknown pool is
-  `400 RelatedResourceNotAuthorizedOrNotFound`.
+  `400 RelatedResourceNotAuthorizedOrNotFound`, and so is a pool whose compartment has been
+  deleted since (a `DefaultPool` does not keep its compartment alive), exactly as when that
+  compartment is named in `compartmentId`.
 - CreateStream with only a `compartmentId` puts the stream in that compartment's
   `DefaultPool`, created on first use and shared by every later pool-less stream there
   (*inferred* from the Streaming docs, which name the default pool but not its record).

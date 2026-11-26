@@ -24,6 +24,7 @@ import jakarta.ws.rs.core.Response;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * OCI Streaming control plane: {@code /20180418/streams…} and {@code /20180418/streampools…}. CreateStream is dual-mode:
@@ -52,10 +53,15 @@ public class StreamAdminController {
     @POST
     @Path("/streams")
     public Response createStream(Map<String, Object> body) {
-        try (CompartmentValidator.Use ignored = compartments.useInBody(str(body, "compartmentId"))) {
+        String streamPoolId = str(body, "streamPoolId");
+        // A stream created with only a pool takes the pool's compartment, which must still be live.
+        String compartmentId = Optional.ofNullable(str(body, "compartmentId"))
+                .or(() -> service.streamPoolCompartment(streamPoolId))
+                .orElse(null);
+        try (CompartmentValidator.Use ignored = compartments.useInBody(compartmentId)) {
             StreamingService.CreatedStream created = service.createStream(
                     str(body, "name"), integer(body, "partitions"), integer(body, "retentionInHours"),
-                    str(body, "compartmentId"), str(body, "streamPoolId"),
+                    compartmentId, streamPoolId,
                     stringMap(body, "freeformTags"), definedTags(body));
             return Response.ok(streamJson(created.stream()))
                     .header("etag", created.stream().getEtag())

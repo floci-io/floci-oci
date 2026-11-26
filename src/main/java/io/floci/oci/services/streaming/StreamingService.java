@@ -211,6 +211,14 @@ public class StreamingService implements CompartmentUsage, Resettable {
         return pools.get(streamPoolId).orElseThrow(() -> notFound("stream pool", streamPoolId));
     }
 
+    /** The compartment of a pool, for a stream created with only its OCID; empty for an unknown pool. */
+    public Optional<String> streamPoolCompartment(String streamPoolId) {
+        if (streamPoolId == null) {
+            return Optional.empty();
+        }
+        return pools.get(streamPoolId).map(StoredStreamPool::getCompartmentId);
+    }
+
     public List<StoredStreamPool> listStreamPools(String compartmentId, String id, String name,
                                                   String lifecycleState, String sortBy, String sortOrder) {
         if (compartmentId == null) {

@@ -367,4 +367,34 @@ class StreamingRestIntegrationTest {
                 .body("name", equalTo("DefaultPool"))
                 .body("compartmentId", equalTo(compartment));
     }
+
+    @Test
+    void streamThroughAPoolWhoseCompartmentWasDeletedIsARelatedResourceError() {
+        String doomed = TestCompartments.create("itstreamdoomed");
+        ValidatableResponse first = given()
+                .contentType("application/json")
+                .body(Map.of("name", "first-" + System.nanoTime(), "partitions", 1, "compartmentId", doomed))
+            .when().post("/20180418/streams")
+            .then().statusCode(200);
+        String poolId = first.extract().path("streamPoolId");
+        given().when().delete("/20180418/streams/" + first.extract().<String>path("id")).then().statusCode(202);
+
+        String deleted = given().when().delete("/20160918/compartments/" + doomed)
+            .then().statusCode(202).extract().header("opc-work-request-id");
+        given().when().get("/20160918/workRequests/" + deleted)
+            .then().statusCode(200).body("status", equalTo("SUCCEEDED"));
+
+        given()
+            .contentType("application/json")
+            .body(Map.of("name", "second-" + System.nanoTime(), "partitions", 1, "streamPoolId", poolId))
+            .when().post("/20180418/streams")
+            .then().statusCode(400)
+                .header("opc-request-id", notNullValue())
+                .body("code", equalTo("RelatedResourceNotAuthorizedOrNotFound"))
+                .body("message", equalTo("Authorization failed or requested resource not found: compartment "
+                        + doomed));
+        given().queryParam("streamPoolId", poolId)
+            .when().get("/20180418/streams")
+            .then().statusCode(200).body("size()", equalTo(0));
+    }
 }
