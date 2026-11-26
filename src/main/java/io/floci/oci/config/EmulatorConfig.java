@@ -179,11 +179,27 @@ public interface EmulatorConfig {
     interface AuthConfig {
         /**
          * When {@code true}, requests without a structurally valid OCI Signature
-         * {@code Authorization} header are rejected with 401 NotAuthenticated.
-         * The RSA signature itself is never verified — only parsed for tenancy/user context.
+         * {@code Authorization} header are rejected with 401 NotAuthenticated. Whether the signature
+         * itself is checked is {@link #signatureVerification()}.
          */
         @WithDefault("false")
         boolean requireSignature();
+
+        /**
+         * Whether OCI request signatures are verified. {@code off}: parsed for tenancy and user only.
+         * {@code known-keys}: security tokens, and API keys that were uploaded or are trusted, must
+         * verify; an unknown API key passes unverified. {@code strict}: every API key must be known and
+         * verify. A failure is 401 NotAuthenticated.
+         */
+        @WithDefault("off")
+        SignatureVerificationMode signatureVerification();
+
+        /**
+         * PEM files whose RSA key verifies any API-key keyId with its fingerprint, whatever tenancy and
+         * user it names: how the first {@code UploadApiKey} is signed in {@code strict} mode. A private key
+         * file is accepted too; only its public half is used.
+         */
+        Optional<List<String>> trustedPublicKeys();
     }
 
     interface ServicesConfig {
@@ -555,5 +571,11 @@ public interface EmulatorConfig {
     enum DockerEndpointMode {
         AUTO,
         PUBLISHED
+    }
+
+    enum SignatureVerificationMode {
+        OFF,
+        KNOWN_KEYS,
+        STRICT
     }
 }

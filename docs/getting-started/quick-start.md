@@ -52,5 +52,6 @@ Or use the bundled wrapper that injects the endpoint automatically:
 bin/ocilocal os ns get
 ```
 
-Authentication is parsed but never verified — any locally generated API key works.
+By default authentication is parsed but never verified, so any locally generated API key works.
+To verify signatures against uploaded API keys, see [Request signing](../services/identity.md#request-signing).
 See [OCI CLI & SDK Setup](oci-setup.md).

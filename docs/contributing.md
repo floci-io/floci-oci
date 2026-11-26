@@ -23,7 +23,7 @@ io.floci.oci
 ├── core/
 │   ├── common/       OciException/mapper, opc-request-id filter, Ocids, OciPage, Etags,
 │   │                 ServiceRegistry + self-registering ServiceDescriptor
-│   ├── auth/         OCI Signature parsing (never verified)
+│   ├── auth/         OCI Signature parsing and opt-in verification
 │   ├── storage/      StorageBackend (memory/persistent/hybrid/wal), tenancy isolation
 │   └── workrequest/  Shared async-operation plane
 ├── lifecycle/        Boot/shutdown, init hooks, /health + /_floci/* (alias /_floci-oci/*)

@@ -87,9 +87,78 @@ oci iam compartment list --endpoint http://localhost:4599 --compartment-id "$TEN
   format and returns it ACTIVE, with `keyId` `<tenancy OCID>/<user OCID>/<fingerprint>`. The
   fingerprint is the MD5 of the DER public key, as `oci setup` computes it. A user holds at most
   three keys (`400 LimitExceeded`), list returns a bare array, and delete takes the fingerprint.
-  Deleting a user deletes its keys. Request signatures are still never verified, so an uploaded
-  key does not change how requests are authenticated.
+  Deleting a user deletes its keys. An uploaded key verifies requests only when signature
+  verification is on: see [Request signing](#request-signing).
 - Identity domains, auth tokens, dynamic groups and tag namespaces are not implemented yet.
+
+## Request signing
+
+OCI clients sign every request with an `Authorization: Signature ...` header (draft-cavage HTTP
+Signatures). floci-oci always parses its `keyId` for the caller's tenancy and user. Whether it also
+checks the signature is `FLOCI_OCI_AUTH_SIGNATURE_VERIFICATION`:
+
+| Mode | API key (`keyId="<tenancy>/<user>/<fingerprint>"`) | Security token (`keyId="ST$<jwt>"`) |
+|---|---|---|
+| `off` (default) | parsed only | parsed only |
+| `known-keys` | an uploaded or trusted key must verify; an unknown key passes unverified | must verify against the token's `jwk` |
+| `strict` | the key must be uploaded or trusted, and verify | must verify against the token's `jwk` |
+
+A request that fails gets `401 NotAuthenticated` with the standard error body and `opc-request-id`.
+The message is the catalog's ("The required authentication information was not provided or was
+incorrect") followed by the reason, such as "the signature does not match the signing key" or
+"the signing key is not known". It never repeats the signature.
+
+`FLOCI_OCI_AUTH_REQUIRE_SIGNATURE` keeps its own meaning: it refuses requests with no Signature
+header. Verification applies to signed requests, so set both to refuse everything that is not signed
+with a known key. The exempt paths (`/health`, `/_floci/*`, `/_floci-oci/*`, pre-authenticated
+requests, the OCIR registry protocol and the Notifications subscription links) are never verified.
+
+**What is checked**, following oci-go-sdk `common/http_signer.go`, cross-checked against oci-python-sdk
+`signer.py` and oci-java-sdk `RequestSignerImpl`:
+
+- The signing string is rebuilt from the Signature's `headers=` list, in the order given, as
+  `name: value` lines joined by `\n`. The list is never inferred from the method, because oci-go-sdk's
+  PutObject and oci-python-sdk's `enforce_content_headers=False` sign a PUT or POST with
+  `date (request-target) host` only. A listed header that the request lacks fails verification.
+- `(request-target)` is the lowercase method, a space, and the raw path with `?` and the raw query,
+  exactly as the client sent them. `host` is the `Host` header.
+- The algorithm must be `rsa-sha256`. The signature is checked as RSA PKCS#1 v1.5 with SHA-256, then
+  as RSASSA-PSS with SHA-256, since oci-go-sdk writes `algorithm="rsa-sha256"` for its PSS scheme too.
+- The signed `date` must be within 5 minutes of the emulator's clock, either way. A signature that
+  does not cover `date` (or `x-date`) fails.
+- When `x-content-sha256` is signed, it must be the base64 SHA-256 of the body. Unsigned bodies are
+  never read for this. A signed body over 64 MiB is refused.
+
+**Which key verifies:**
+
+- An API key: the ACTIVE key uploaded for the keyId's user, in the keyId's tenancy, with the keyId's
+  fingerprint. While Identity is disabled, no uploaded key counts.
+- Any key listed in `FLOCI_OCI_AUTH_TRUSTED_PUBLIC_KEYS` (comma-separated PEM paths) verifies every
+  keyId with that key's fingerprint, whatever tenancy and user it names. That is how the first
+  `CreateUser` and `UploadApiKey` of a `strict` emulator are signed, the same idea as floci-aws's
+  `test` credentials, made explicit. A private key file (`oci setup keys` output, unencrypted) is
+  accepted too, and only its public half is used.
+- A security token: the RSA key in the JWT's `jwk` claim, which oci-java-sdk's `SecurityTokenAdapter`
+  reads as the session key. The JWT's own signature is **not** verified, because Oracle's token
+  issuer key is not available, so anyone can mint a token naming any tenancy. Resource principal
+  tokens, which carry `res_tenant` instead of `tenant`, name no caller and are not verified.
+
+**Not covered:** SigV4 on the Amazon S3 Compatibility API is never verified, because a Customer
+Secret Key's secret is returned once and not stored. OCIR `docker login` takes any password, since
+Identity has no auth tokens.
+
+OKE's `generate-token` bearer tokens are verified the same way when the mode is not `off`: the
+signature over `date (request-target) host`, with the URL's `date`, `get /cluster_request/<cluster-ocid>`
+and the Container Engine host.
+
+**Inferred** (no Oracle source states it):
+
+- Real OCI's exact checks and messages are not public, so the reasons in the message are floci-oci's.
+- `x-date` in place of `date`: none of the SDK signers in `local/oracle` sends it.
+- A Signature with no `headers=` parameter covers `date` alone, the draft-cavage default.
+- The 64 MiB cap on a signed body: the SDKs sign only JSON-sized bodies and stream uploads unsigned.
+- Trying both PSS salt lengths (the hash length and the maximum): oci-go-sdk's `PSSSaltLengthAuto`
+  signs with the maximum.
 
 ## Emulator choices
 

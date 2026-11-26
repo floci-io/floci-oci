@@ -1,6 +1,9 @@
 package io.floci.oci.testing;
 
+import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
+import java.security.interfaces.RSAPublicKey;
+import java.util.Arrays;
 import java.util.Base64;
 
 /**
@@ -22,6 +25,27 @@ public final class SecurityTokens {
                 + "\"iss\":\"authService.oracle.com\",\"aud\":\"oci\",\"iat\":1793000000,\"exp\":1793003600,"
                 + "\"jwk\":{\"kid\":\"" + userId + "\",\"kty\":\"RSA\",\"alg\":\"RS256\",\"use\":\"sig\","
                 + "\"e\":\"AQAB\",\"n\":\"" + filler(342) + "\"}}");
+    }
+
+    /**
+     * A session token whose {@code jwk} claim is {@code sessionKey}, as a JSON string, the form
+     * oci-java-sdk's {@code SecurityTokenAdapter} reads with {@code getStringClaim("jwk")}.
+     */
+    public static String session(String tenancyId, String userId, RSAPublicKey sessionKey) {
+        String jwk = "{\\\"kid\\\":\\\"" + userId + "\\\",\\\"kty\\\":\\\"RSA\\\",\\\"alg\\\":\\\"RS256\\\","
+                + "\\\"use\\\":\\\"sig\\\",\\\"e\\\":\\\"" + unsigned(sessionKey.getPublicExponent()) + "\\\","
+                + "\\\"n\\\":\\\"" + unsigned(sessionKey.getModulus()) + "\\\"}";
+        return jwt("{\"sub\":\"" + userId + "\",\"tenant\":\"" + tenancyId + "\",\"ttype\":\"login\","
+                + "\"iss\":\"authService.oracle.com\",\"aud\":\"oci\",\"iat\":1793000000,\"exp\":1793003600,"
+                + "\"jwk\":\"" + jwk + "\"}");
+    }
+
+    private static String unsigned(BigInteger value) {
+        byte[] bytes = value.toByteArray();
+        if (bytes.length > 1 && bytes[0] == 0) {
+            bytes = Arrays.copyOfRange(bytes, 1, bytes.length);
+        }
+        return URL.encodeToString(bytes);
     }
 
     /** A token with exactly the given claims, to exercise missing or malformed ones. */

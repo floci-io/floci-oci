@@ -3,8 +3,8 @@ package io.floci.oci.services.identity.model;
 import io.quarkus.runtime.annotations.RegisterForReflection;
 
 /**
- * An API signing key uploaded for a user (oci-go-sdk/identity/api_key.go). Signatures are never
- * verified with it yet; the key is stored so clients can manage it as they would on OCI.
+ * An API signing key uploaded for a user (oci-go-sdk/identity/api_key.go). Requests whose keyId names it
+ * are verified with it when {@code floci-oci.auth.signature-verification} is not {@code off}.
  */
 @RegisterForReflection
 public class StoredApiKey {

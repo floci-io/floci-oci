@@ -1,8 +1,11 @@
 package io.floci.oci.core.common;
 
+import io.floci.oci.core.auth.AuthContext;
 import jakarta.enterprise.context.ContextNotActiveException;
 import jakarta.enterprise.context.RequestScoped;
 import jakarta.enterprise.inject.Instance;
+
+import java.util.Optional;
 
 /**
  * Holds per-request derived values — tenancy OCID, user OCID and region — extracted
@@ -16,6 +19,7 @@ public class RequestContext {
     private String userId;
     private String region;
     private String baseUrl;
+    private AuthContext caller;
 
     public String getTenancyId() {
         return tenancyId;
@@ -48,6 +52,18 @@ public class RequestContext {
 
     public void setBaseUrl(String baseUrl) {
         this.baseUrl = baseUrl;
+    }
+
+    /**
+     * The caller the request named, with whether its signature was verified; empty for a request that
+     * names none (unsigned, or reaching the default tenancy).
+     */
+    public Optional<AuthContext> getCaller() {
+        return Optional.ofNullable(caller);
+    }
+
+    public void setCaller(AuthContext caller) {
+        this.caller = caller;
     }
 
     /**

@@ -5,6 +5,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
+import java.security.PublicKey;
 import java.security.Signature;
 import java.time.Instant;
 import java.time.ZoneOffset;
@@ -52,6 +53,11 @@ final class ClusterTokenMinter {
     static String authorization(String keyId, String signature) {
         return "Signature algorithm=\"rsa-sha256\",headers=\"date (request-target) host\",keyId=\""
                 + keyId + "\",signature=\"" + signature + "\",version=\"1\"";
+    }
+
+    /** The public half of the key every minted token is signed with. */
+    static PublicKey publicKey() {
+        return KEY_PAIR.getPublic();
     }
 
     static String encode(String url) {

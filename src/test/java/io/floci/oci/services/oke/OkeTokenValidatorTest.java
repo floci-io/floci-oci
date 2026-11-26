@@ -1,17 +1,23 @@
 package io.floci.oci.services.oke;
 
+import io.floci.oci.config.EmulatorConfig.SignatureVerificationMode;
 import io.floci.oci.core.auth.AuthContext;
+import io.floci.oci.core.auth.PublicKeys;
+import io.floci.oci.core.auth.RequestAuthenticator;
 import io.floci.oci.services.oke.model.StoredOkeCluster;
+import io.floci.oci.testing.OciRequestSigner;
 import io.floci.oci.testing.SecurityTokens;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
+import java.security.PublicKey;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.Base64;
+import java.util.List;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -30,11 +36,46 @@ class OkeTokenValidatorTest {
 
     @BeforeEach
     void setUp() {
-        validator = new OkeTokenValidator(Clock.fixed(NOW, ZoneOffset.UTC));
+        validator = validatorIn(SignatureVerificationMode.OFF, List.of());
         cluster = new StoredOkeCluster();
         cluster.setId(CLUSTER_ID);
         cluster.setRegion(REGION);
         cluster.setTenancyId(TENANCY);
+    }
+
+    private static OkeTokenValidator validatorIn(SignatureVerificationMode mode, List<PublicKey> trustedKeys) {
+        Clock clock = Clock.fixed(NOW, ZoneOffset.UTC);
+        return new OkeTokenValidator(clock,
+                new RequestAuthenticator(mode, trustedKeys, caller -> Optional.empty(), clock));
+    }
+
+    @Test
+    void strictRejectsAWellFormedTokenSignedWithAnUnknownKey() {
+        validator = validatorIn(SignatureVerificationMode.STRICT, List.of(ClusterTokenMinter.publicKey()));
+
+        assertRejected(ClusterTokenMinter.mint(REGION, CLUSTER_ID, TENANCY, USER, NOW));
+    }
+
+    @Test
+    void strictAcceptsATokenSignedWithATrustedKeyAndMarksItVerified() {
+        validator = validatorIn(SignatureVerificationMode.STRICT, List.of(ClusterTokenMinter.publicKey()));
+        String keyId = TENANCY + "/" + USER + "/" + PublicKeys.fingerprint(ClusterTokenMinter.publicKey());
+
+        Optional<AuthContext> caller = validator.validate(
+                ClusterTokenMinter.mintWithKeyId(REGION, CLUSTER_ID, keyId, NOW), cluster);
+
+        assertTrue(caller.isPresent());
+        assertTrue(caller.get().verified());
+        assertEquals(USER, caller.get().userId());
+    }
+
+    @Test
+    void aForgedTokenForAKnownKeyIsRejectedOnceVerificationIsOn() {
+        PublicKey other = OciRequestSigner.newKeyPair().getPublic();
+        validator = validatorIn(SignatureVerificationMode.KNOWN_KEYS, List.of(other));
+        String keyId = TENANCY + "/" + USER + "/" + PublicKeys.fingerprint(other);
+
+        assertRejected(ClusterTokenMinter.mintWithKeyId(REGION, CLUSTER_ID, keyId, NOW));
     }
 
     @Test

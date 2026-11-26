@@ -116,8 +116,8 @@ public class CustomerSecretKeyService implements AccessKeyResolver {
                 : TenancyAwareStorageBackend.entriesByPartition(keys).entrySet()) {
             StoredCustomerSecretKey key = partition.getValue().get(accessKey);
             if (key != null && "ACTIVE".equals(key.getLifecycleState())) {
-                return Optional.of(new AuthContext(TenancyAwareStorageBackend.tenancyOf(partition.getKey()),
-                        key.getUserId(), null));
+                return Optional.of(AuthContext.unknown(TenancyAwareStorageBackend.tenancyOf(partition.getKey()),
+                        key.getUserId()));
             }
         }
         return Optional.empty();

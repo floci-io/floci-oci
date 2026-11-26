@@ -17,6 +17,8 @@ All configuration lives under the `floci-oci.*` prefix; every property maps to a
 | `FLOCI_OCI_STORAGE_MODE` | `memory` | `memory`, `persistent`, `hybrid`, or `wal` |
 | `FLOCI_OCI_STORAGE_PERSISTENT_PATH` | `./data` | Where persisted state is written |
 | `FLOCI_OCI_AUTH_REQUIRE_SIGNATURE` | `false` | Reject unsigned requests with 401. `/health`, `/_floci/*`, `/_floci-oci/*`, pre-authenticated requests (`/p/*`) and the OCIR registry protocol (`/v2/*` and its token endpoint) are always exempt |
+| `FLOCI_OCI_AUTH_SIGNATURE_VERIFICATION` | `off` | Verify OCI request signatures: `off` (keyId parsed only), `known-keys` (security tokens and uploaded or trusted API keys must verify; unknown API keys pass unverified) or `strict` (every API key must be known and verify). Failures are `401 NotAuthenticated`. See [Request signing](../services/identity.md#request-signing) |
+| `FLOCI_OCI_AUTH_TRUSTED_PUBLIC_KEYS` | – | Comma-separated PEM files (public, or unencrypted private) whose key verifies any keyId with that key's fingerprint, whatever tenancy and user it names. Bootstraps the first `UploadApiKey` in `strict` mode. An unreadable file stops startup |
 | `FLOCI_OCI_TLS_ENABLED` | `false` | Serve HTTPS + HTTP on the same port |
 | `FLOCI_OCI_TLS_HTTPS_PORT` | `443` | Extra HTTPS binding for clients that assume 443 (0 disables) |
 | `FLOCI_OCI_DNS_HOST_PORT` | – | When floci-oci runs on the host, the embedded DNS server also answers on `127.0.0.1:<port>` (for example `dig @127.0.0.1 -p 5354 app.example.internal`). Ignored in a container, where it serves port 53 to the sidecars |

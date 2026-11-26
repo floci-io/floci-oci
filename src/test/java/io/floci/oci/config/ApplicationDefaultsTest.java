@@ -31,6 +31,8 @@ class ApplicationDefaultsTest {
                 config.storage().mode());
         assertEquals(annotationDefault(EmulatorConfig.AuthConfig.class, "requireSignature"),
                 String.valueOf(config.auth().requireSignature()));
+        assertEquals(annotationDefault(EmulatorConfig.AuthConfig.class, "signatureVerification"),
+                config.auth().signatureVerification().name().toLowerCase(Locale.ROOT).replace('_', '-'));
         assertEquals(annotationDefault(EmulatorConfig.TlsConfig.class, "enabled"),
                 String.valueOf(config.tls().enabled()));
         assertEquals(annotationDefault(EmulatorConfig.ServicesConfig.OkeServiceConfig.class, "kubeconfigAuth"),
@@ -56,6 +58,12 @@ class ApplicationDefaultsTest {
     @Test
     void signatureIsNotRequiredByDefault() {
         assertFalse(config.auth().requireSignature());
+    }
+
+    @Test
+    void signaturesAreNotVerifiedByDefault() {
+        assertEquals(EmulatorConfig.SignatureVerificationMode.OFF, config.auth().signatureVerification());
+        assertTrue(config.auth().trustedPublicKeys().isEmpty());
     }
 
     private static String annotationDefault(Class<?> iface, String method) throws Exception {
