@@ -552,8 +552,12 @@ public class NetworkingService implements CompartmentUsage, NetworkReferences {
         notifyVcnListeners(listener -> listener.vcnDeleted(vcn.getId()), vcn.getId());
     }
 
-    /** The DNS resolver attached to a VCN (GetVcnDnsResolverAssociation), from the first listener that has one. */
-    public Optional<String> dnsResolverId(String vcnId) {
+    /**
+     * The DNS resolver attached to a VCN (GetVcnDnsResolverAssociation), from the first listener that has one.
+     * It holds the Networking lock so a concurrent VCN delete cannot run between the lookup and a listener
+     * creating the resolver.
+     */
+    public synchronized Optional<String> dnsResolverId(String vcnId) {
         VcnLifecycleListener.Vcn vcn = vcnOf(get(NetworkKind.VCN, vcnId));
         for (VcnLifecycleListener listener : vcnListeners) {
             Optional<String> resolverId = listener.dnsResolverId(vcn);
