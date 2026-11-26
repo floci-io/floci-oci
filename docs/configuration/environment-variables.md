@@ -76,6 +76,7 @@ All configuration lives under the `floci-oci.*` prefix; every property maps to a
 | `FLOCI_OCI_SERVICES_MYSQL_READY_TIMEOUT_SECONDS` | `180` | How long a MySQL DB system may take to accept connections before it goes `FAILED` |
 | `FLOCI_OCI_SERVICES_DOCKER_NETWORK` | – | Shared Docker network for sidecar containers |
 | `FLOCI_OCI_DOCKER_RESOURCE_NAMESPACE` | – | Namespace inserted into sidecar container/volume names (`floci-oci-<ns>-…`) so parallel emulator instances on one Docker host don't collide |
+| `FLOCI_OCI_DOCKER_IMAGE_PULL_TIMEOUT_SECONDS` | `300` | How long one sidecar image pull may take before the start fails. Raise it for large images on a slow connection, or pull the image beforehand |
 | `FLOCI_OCI_DOCKER_ENDPOINT_MODE` | `auto` | How a sidecar's published port is addressed in the endpoints returned to clients: `auto` (`localhost` when floci-oci runs on the host, the sidecar's container name when it runs in a container) or `published` (always the Docker daemon's host and the published port; for a remote daemon, or host-side clients of a containerised floci-oci). Only services that build their client endpoint from this setting follow it: OKE cluster endpoints do not, and are always `127.0.0.1` |
 
 Per-service storage overrides use the map form:

@@ -5,6 +5,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 
 import java.net.URI;
+import java.time.Duration;
 import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -180,5 +181,11 @@ class DockerClientProducerTest {
                 "unix:///var/run/docker.sock", "");
         assertEquals("unix:///var/run/docker.sock", result,
                 "Default unix socket should be used when DOCKER_HOST env var is blank");
+    }
+
+    @Test
+    void theResponseTimeoutNeverEndsAPullBeforeItsOwnTimeout() {
+        assertEquals(Duration.ofMinutes(5), DockerClientProducer.responseTimeout(60));
+        assertEquals(Duration.ofSeconds(1800), DockerClientProducer.responseTimeout(1800));
     }
 }

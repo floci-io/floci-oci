@@ -621,6 +621,13 @@ public interface EmulatorConfig {
         Optional<String> imageRegistryBase();
 
         /**
+         * How long one image pull may take before it fails. Large sidecar images (several GB) need
+         * more than the default on a slow connection.
+         */
+        @WithDefault("300")
+        int imagePullTimeoutSeconds();
+
+        /**
          * Path to a directory containing Docker's config.json (e.g. /root/.docker).
          */
         Optional<String> dockerConfigPath();
