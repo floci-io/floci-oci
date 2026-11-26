@@ -724,8 +724,8 @@ public class ContainerInstancesService implements Resettable, CompartmentUsage {
             }
             String ip = null;
             RuntimeException failure = null;
+            List<StoredContainer> pod = containersOf(current);
             try {
-                List<StoredContainer> pod = containersOf(current);
                 ip = restart ? manager.restartPod(current, pod, pullableImage)
                         : manager.startPod(current, pod, pullableImage);
                 synchronized (this) {
@@ -743,15 +743,18 @@ public class ContainerInstancesService implements Resettable, CompartmentUsage {
             }
             settle(id, workRequestId, failure, "ACTIVE", "FAILED", ip);
             if (snapshot(id) == null) {
-                removeOrphan(current);
+                removeOrphan(current, pod);
             }
         });
     }
 
-    /** Removes the pod of an instance that was forgotten (a state reset) while it was starting. */
-    private void removeOrphan(StoredContainerInstance forgotten) {
+    /**
+     * Removes the pod of an instance that was forgotten (a state reset) while it was starting. The
+     * reset has already wiped the stored containers, so the step passes the ones it started.
+     */
+    private void removeOrphan(StoredContainerInstance forgotten, List<StoredContainer> pod) {
         try {
-            manager.removePod(forgotten, containersOf(forgotten));
+            manager.removePod(forgotten, pod);
         } catch (RuntimeException e) {
             LOG.warnv("Could not remove the pod of forgotten container instance {0}: {1}", forgotten.getId(),
                     e.getMessage());

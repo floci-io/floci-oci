@@ -445,7 +445,10 @@ class ContainerInstancesServiceTest {
 
         real.create(details());
 
-        verify(manager, times(2)).removePod(any(), anyList());
+        ArgumentCaptor<List<StoredContainer>> removed = listCaptor();
+        verify(manager, times(2)).removePod(any(), removed.capture());
+        assertEquals(1, removed.getAllValues().get(1).size(),
+                "the reset wiped the stored containers, so the orphan removal must get the started ones");
         verify(network, never()).setVnicPrivateIp(any(), any());
     }
 
