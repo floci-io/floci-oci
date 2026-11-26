@@ -65,6 +65,7 @@ floci-oci:
     container-fallback-servers:
       - 8.8.8.8
       - 8.8.4.4
+    # host-port: 5354  # FLOCI_OCI_DNS_HOST_PORT: on the host, also answer on 127.0.0.1:<port>
   auth:
     # When true, requests without a structurally valid OCI Signature Authorization
     # header are rejected with 401. The RSA signature itself is never verified.
@@ -107,6 +108,8 @@ floci-oci:
     nosql:
       enabled: true
       ttl-sweep-interval-seconds: 60
+    dns:
+      enabled: true
     monitoring:
       enabled: true
       alarm-evaluation-interval-seconds: 60

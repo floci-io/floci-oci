@@ -6,6 +6,7 @@ import io.smallrye.config.WithDefault;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalInt;
 
 @ConfigMapping(prefix = "floci-oci")
 public interface EmulatorConfig {
@@ -103,6 +104,14 @@ public interface EmulatorConfig {
          */
         @WithDefault("8.8.8.8,8.8.4.4")
         List<String> containerFallbackServers();
+
+        /**
+         * When floci-oci runs on the host (not in a container), the loopback UDP port the embedded
+         * DNS server listens on, so tools on the host can query it ({@code dig @127.0.0.1 -p 5354}).
+         * Unset (the default) starts no listener on the host. Ignored inside a container, which
+         * serves port 53.
+         */
+        OptionalInt hostPort();
     }
 
     interface SecurityConfig {
@@ -212,6 +221,7 @@ public interface EmulatorConfig {
         LoggingServiceConfig logging();
 
         NosqlServiceConfig nosql();
+        DnsServiceConfig dns();
 
         NetworkingServiceConfig networking();
 
@@ -258,6 +268,11 @@ public interface EmulatorConfig {
             /** Seconds between sweeps that delete rows whose time to live has passed. */
             @WithDefault("60")
             int ttlSweepIntervalSeconds();
+        }
+
+        interface DnsServiceConfig {
+            @WithDefault("true")
+            boolean enabled();
         }
 
         interface MonitoringServiceConfig {

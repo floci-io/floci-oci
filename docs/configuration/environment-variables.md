@@ -19,6 +19,7 @@ All configuration lives under the `floci-oci.*` prefix; every property maps to a
 | `FLOCI_OCI_AUTH_REQUIRE_SIGNATURE` | `false` | Reject unsigned requests with 401. `/health`, `/_floci/*`, `/_floci-oci/*`, pre-authenticated requests (`/p/*`) and the OCIR registry protocol (`/v2/*` and its token endpoint) are always exempt |
 | `FLOCI_OCI_TLS_ENABLED` | `false` | Serve HTTPS + HTTP on the same port |
 | `FLOCI_OCI_TLS_HTTPS_PORT` | `443` | Extra HTTPS binding for clients that assume 443 (0 disables) |
+| `FLOCI_OCI_DNS_HOST_PORT` | – | When floci-oci runs on the host, the embedded DNS server also answers on `127.0.0.1:<port>` (for example `dig @127.0.0.1 -p 5354 app.example.internal`). Ignored in a container, where it serves port 53 to the sidecars |
 | `FLOCI_OCI_SERVICES_IDENTITY_ENABLED` | `true` | Enable/disable Identity |
 | `FLOCI_OCI_SERVICES_OBJECTSTORAGE_ENABLED` | `true` | Enable/disable Object Storage |
 | `FLOCI_OCI_SERVICES_OBJECTSTORAGE_LIFECYCLE_SWEEP_INTERVAL_SECONDS` | `60` | How often object lifecycle policies run |
@@ -34,6 +35,7 @@ All configuration lives under the `floci-oci.*` prefix; every property maps to a
 | `FLOCI_OCI_SERVICES_LOGGING_ENABLED` | `true` | Enable/disable Logging (log groups, logs, ingestion, search) |
 | `FLOCI_OCI_SERVICES_NOSQL_ENABLED` | `true` | Enable/disable NoSQL Database (tables, indexes, rows, queries) |
 | `FLOCI_OCI_SERVICES_NOSQL_TTL_SWEEP_INTERVAL_SECONDS` | `60` | Seconds between sweeps that delete rows whose time to live has passed |
+| `FLOCI_OCI_SERVICES_DNS_ENABLED` | `true` | Enable/disable DNS (zones, records, views) |
 | `FLOCI_OCI_SERVICES_MONITORING_ENABLED` | `true` | Enable/disable Monitoring (metrics, alarms, suppressions) |
 | `FLOCI_OCI_SERVICES_MONITORING_ALARM_EVALUATION_INTERVAL_SECONDS` | `60` | Seconds between alarm evaluations (OCI evaluates once a minute) |
 | `FLOCI_OCI_SERVICES_NOTIFICATIONS_ENABLED` | `true` | Enable/disable Notifications (topics, subscriptions, message delivery) |

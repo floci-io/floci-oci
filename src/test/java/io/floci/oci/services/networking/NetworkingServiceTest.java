@@ -13,6 +13,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.lenient;
@@ -335,5 +336,50 @@ class NetworkingServiceTest {
     void resourcesInCountsTheVcnAndItsDefaults() {
         vcn("10.0.0.0/16", null);
         assertEquals(4, service.resourcesIn("ocid1.tenancy.oc1..test", COMPARTMENT).size());
+    }
+
+    @Test
+    void vcnListenersHearCreateAndDeleteAndAnswerTheResolverAssociation() {
+        List<String> events = new ArrayList<>();
+        VcnLifecycleListener listener = new VcnLifecycleListener() {
+            @Override
+            public void vcnCreated(Vcn vcn) {
+                events.add("created " + vcn.displayName() + " in " + vcn.compartmentId());
+            }
+
+            @Override
+            public void vcnDeleted(String vcnId) {
+                events.add("deleted " + vcnId);
+            }
+
+            @Override
+            public Optional<String> dnsResolverId(Vcn vcn) {
+                return Optional.of("resolver-of-" + vcn.id());
+            }
+        };
+        VcnLifecycleListener failing = new VcnLifecycleListener() {
+            @Override
+            public void vcnCreated(Vcn vcn) {
+                throw new IllegalStateException("listener failure");
+            }
+
+            @Override
+            public void vcnDeleted(String vcnId) {
+                throw new IllegalStateException("listener failure");
+            }
+        };
+        EmulatorConfig config = mock(EmulatorConfig.class);
+        lenient().when(config.defaultRealm()).thenReturn("oc1");
+        lenient().when(config.defaultRegion()).thenReturn("us-ashburn-1");
+        NetworkingService withListeners = new NetworkingService(new InMemoryStorage<>(), config, workRequests,
+                List.of(failing, listener));
+
+        StoredNetworkResource vcn = withListeners.create(NetworkKind.VCN,
+                Map.of("compartmentId", COMPARTMENT, "cidrBlock", "10.9.0.0/16", "displayName", "heard"));
+        assertEquals(Optional.of("resolver-of-" + vcn.getId()), withListeners.dnsResolverId(vcn.getId()));
+        withListeners.delete(NetworkKind.VCN, vcn.getId(), null);
+
+        assertEquals(List.of("created heard in " + COMPARTMENT, "deleted " + vcn.getId()), events);
+        assertEquals(Optional.empty(), service.dnsResolverId(vcn("10.8.0.0/16", null).getId()));
     }
 }

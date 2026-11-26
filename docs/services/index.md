@@ -4,6 +4,7 @@
 |---|---|---|
 | [Identity (IAM)](identity.md) | `/20160918/…` | Compartments, users, groups, memberships, policies, reference data, work requests |
 | [Object Storage](object-storage.md) | `/n/{ns}/b/{bucket}/o/{object}` | Buckets, objects, listing, rename, copy, batch delete, multipart, pre-authenticated requests, Amazon S3 Compatibility API |
+| [DNS](dns.md) | `/20180115/…` | Zones by name or OCID, `GLOBAL` and `PRIVATE` scopes, protected SOA and NS, zone, domain and RRSet reads, PUT and PATCH (`ADD`, `REMOVE`, `REQUIRE`, `PROHIBIT`), normalized RDATA, private views, VCN resolvers, records resolved for sidecars by the embedded DNS server |
 | [Networking (VCN)](networking.md) | `/20160918/…` | VCNs with default route table, security list and DHCP options, subnets, internet, NAT and service gateways, route tables, security lists, network security groups and rules, DHCP options, CIDR validation |
 | [Queue](queue.md) | `/20210201/…` | Queues (work-request driven), messages with visibility timeouts and DLQ, stats, channels |
 | [Vault, KMS & Secrets](kms-vault.md) | `/20180608/…`, `/20190301/…` | Vaults, keys and versions, **real** AES-GCM/RSA/ECDSA crypto, secrets and bundles |

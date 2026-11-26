@@ -97,6 +97,7 @@ class OkeClusterManagerTest {
         lenient().when(specBuilder.withLabels(any())).thenReturn(specBuilder);
         lenient().when(specBuilder.withDockerNetwork(any())).thenReturn(specBuilder);
         lenient().when(specBuilder.withHostDockerInternalOnLinux()).thenReturn(specBuilder);
+        lenient().when(specBuilder.withEmbeddedDns()).thenReturn(specBuilder);
         lenient().when(specBuilder.build()).thenReturn(new ContainerSpec("rancher/k3s:v1.30.1-k3s1"));
 
         manager = new OkeClusterManager(containerBuilder, lifecycleManager, portAllocator,
