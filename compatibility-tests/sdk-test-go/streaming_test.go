@@ -31,9 +31,14 @@ func TestStreamLifecycleAndCursorConsumption(t *testing.T) {
 	})
 	// Dual-mode: a full body and a work-request id.
 	assert.NotNil(t, created.OpcWorkRequestId)
-	assert.Equal(t, "ACTIVE", string(created.LifecycleState))
 	assert.Equal(t, 24, *created.RetentionInHours)
 	require.NotEmpty(t, *created.MessagesEndpoint)
+	// With the compose emulator the stream is CREATING until its pool's broker has its topic.
+	assert.Equal(t, streaming.OperationStatusSucceeded,
+		awaitStreamingWorkRequest(t, admin, created.OpcWorkRequestId).Status)
+	got, err := admin.GetStream(ctx, streaming.GetStreamRequest{StreamId: created.Id})
+	require.NoError(t, err)
+	assert.Equal(t, streaming.StreamLifecycleStateActive, got.LifecycleState)
 
 	data, err := streaming.NewStreamClientWithConfigurationProvider(configProvider(t), *created.MessagesEndpoint)
 	require.NoError(t, err)

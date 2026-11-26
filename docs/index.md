@@ -29,7 +29,7 @@ It implements real OCI wire protocols so the official OCI SDKs, the OCI CLI, Ter
 | Object Storage | `/n/{ns}/b/{bucket}/o/{object}` | Namespaces, buckets, objects, listing, rename, copy, multipart uploads, pre-authenticated requests, work requests |
 | Queue | `/20210201/…` | Queues, messages, visibility timeouts, dead-letter queues, stats |
 | Vault, KMS & Secrets | `/20180608/…`, `/20190301/…` | Vaults, keys, real AES-GCM/RSA/ECDSA crypto, secrets and bundles |
-| Streaming | `/20180418/…` | Streams, partitions, cursors, consumer groups |
+| Streaming | `/20180418/…` | Stream pools with a Kafka endpoint on Redpanda, streams, partitions, cursors, consumer groups |
 | Functions | `/20260325/…`, `/20181201/…` | Applications, functions, real invocation via an Fn Project sidecar |
 | Logging | `/20200531/…`, `/20200831/…`, `/20190909/…` | Log groups, logs, saved searches, PutLogs, SearchLogs with the query language |
 | NoSQL Database | `/20190828/…` | Tables from DDL, indexes, rows with conditional writes and TTL, SQL SELECT queries |

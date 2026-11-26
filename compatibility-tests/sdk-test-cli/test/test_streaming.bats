@@ -37,7 +37,8 @@ teardown_file() {
     stream_id="$(json_get '.data.id')"
     echo "$stream_id" > "$BATS_FILE_TMPDIR/stream_id"
 
-    wait_for_state ACTIVE '.data."lifecycle-state"' 30 streaming admin stream get --stream-id "$stream_id"
+    # The stream waits for its DefaultPool's broker with the compose emulator.
+    wait_for_state ACTIVE '.data."lifecycle-state"' 180 streaming admin stream get --stream-id "$stream_id"
 }
 
 @test "streaming: stream list contains the stream" {

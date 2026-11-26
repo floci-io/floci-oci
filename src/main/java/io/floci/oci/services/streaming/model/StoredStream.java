@@ -11,6 +11,9 @@ import java.util.Map;
 @RegisterForReflection
 public class StoredStream {
 
+    public static final String LOG_STORED = "STORED";
+    public static final String LOG_REDPANDA = "REDPANDA";
+
     private String id;
     private String name;
     private String compartmentId;
@@ -22,6 +25,10 @@ public class StoredStream {
     private Map<String, String> freeformTags;
     private Map<String, Map<String, Object>> definedTags;
     private String etag;
+    /** Where the messages live: {@link #LOG_STORED} (null for streams that predate the choice) or {@link #LOG_REDPANDA}. */
+    private String logBackend;
+    /** The create still in progress, while the stream waits for its pool's broker and topic. */
+    private String workRequestId;
     /** partition index → append-only message log. */
     private Map<Integer, List<StoredEntry>> log = new HashMap<>();
     /** group name → (partition → committed offset). */
@@ -160,6 +167,27 @@ public class StoredStream {
 
     public void setEtag(String etag) {
         this.etag = etag;
+    }
+
+    public String getLogBackend() {
+        return logBackend;
+    }
+
+    public void setLogBackend(String logBackend) {
+        this.logBackend = logBackend;
+    }
+
+    /** Whether the stream's messages live in its pool's Redpanda broker. */
+    public boolean redpandaBacked() {
+        return LOG_REDPANDA.equals(logBackend);
+    }
+
+    public String getWorkRequestId() {
+        return workRequestId;
+    }
+
+    public void setWorkRequestId(String workRequestId) {
+        this.workRequestId = workRequestId;
     }
 
     public Map<Integer, List<StoredEntry>> getLog() {

@@ -7,6 +7,7 @@ import io.floci.oci.core.common.Etags;
 import io.floci.oci.core.common.OciContext;
 import io.floci.oci.core.common.OciException;
 import io.floci.oci.core.common.Ocids;
+import io.floci.oci.core.common.Resettable;
 import io.floci.oci.core.common.ServiceDescriptor;
 import io.floci.oci.core.common.ServiceRegistry;
 import io.floci.oci.core.storage.StorageBackend;
@@ -18,12 +19,14 @@ import io.floci.oci.services.streaming.model.StoredStream;
 import io.floci.oci.services.streaming.model.StoredStream.StoredEntry;
 import io.floci.oci.services.streaming.model.StoredStreamPool;
 import io.quarkus.runtime.StartupEvent;
+import jakarta.annotation.PreDestroy;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.Observes;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Base64;
@@ -32,15 +35,23 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
 import java.util.TreeMap;
+import java.util.concurrent.Executor;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 
 /**
- * OCI Streaming: control plane (streams; work-request driven) and data plane
- * (partitioned append-only log with opaque cursors, Kafka-like offsets).
+ * OCI Streaming: control plane (stream pools and streams; work-request driven) and data plane
+ * (partitioned append-only log with opaque cursors, Kafka offsets). Outside mock mode each pool
+ * runs a Redpanda broker that is its streams' log and serves Kafka clients.
  */
 @ApplicationScoped
-public class StreamingService implements CompartmentUsage {
+public class StreamingService implements CompartmentUsage, Resettable {
 
     private static final Logger LOG = Logger.getLogger(StreamingService.class);
 
@@ -48,6 +59,9 @@ public class StreamingService implements CompartmentUsage {
     private static final int DEFAULT_RETENTION_HOURS = 24;
     private static final int MAX_VALUE_BYTES = 1024 * 1024;
     static final String DEFAULT_POOL_NAME = "DefaultPool";
+    private static final int TIME_SCAN_CHUNK = 1000;
+    private static final long POLL_SECONDS = 1;
+    static final String INTERRUPTED = "The broker was interrupted by a restart of floci-oci";
 
     private final StorageBackend<String, StoredStream> streams;
     private final StorageBackend<String, StoredStreamPool> pools;
@@ -55,29 +69,55 @@ public class StreamingService implements CompartmentUsage {
     private final OciContext ociContext;
     private final ServiceRegistry serviceRegistry;
     private final WorkRequestService workRequests;
+    private final StreamPoolKafkaManager kafka;
+    private final Clock clock;
+    /** Runs every Docker step in order: broker starts, topic creates and deletes, removals. */
+    private final Executor lifecycle;
+    private final ScheduledExecutorService worker;
 
     @Inject
     public StreamingService(StorageFactory storageFactory, EmulatorConfig config,
                             ServiceRegistry serviceRegistry, WorkRequestService workRequests,
-                            OciContext ociContext) {
+                            OciContext ociContext, StreamPoolKafkaManager kafka) {
         this.config = config;
         this.ociContext = ociContext;
         this.serviceRegistry = serviceRegistry;
         this.workRequests = workRequests;
+        this.kafka = kafka;
+        this.clock = Clock.systemUTC();
         this.streams = storageFactory.create("streaming", "streaming-streams.json",
                 new TypeReference<Map<String, StoredStream>>() {});
         this.pools = storageFactory.create("streaming", "streaming-pools.json",
                 new TypeReference<Map<String, StoredStreamPool>>() {});
+        // No thread starts until the first task is submitted, which only real mode does.
+        this.worker = Executors.newSingleThreadScheduledExecutor(daemon("streaming-kafka"));
+        this.lifecycle = worker;
     }
 
     StreamingService(StorageBackend<String, StoredStream> streams, StorageBackend<String, StoredStreamPool> pools,
                      EmulatorConfig config, WorkRequestService workRequests) {
+        this(streams, pools, config, workRequests, null, Clock.systemUTC(), Runnable::run);
+    }
+
+    /**
+     * Storage-injecting constructor for tests.
+     *
+     * @param kafka     the broker manager; null keeps every stream in floci-oci's own storage
+     * @param lifecycle runs the Docker steps; tests pass {@code Runnable::run} and call {@link #tick}
+     */
+    StreamingService(StorageBackend<String, StoredStream> streams, StorageBackend<String, StoredStreamPool> pools,
+                     EmulatorConfig config, WorkRequestService workRequests, StreamPoolKafkaManager kafka,
+                     Clock clock, Executor lifecycle) {
         this.ociContext = OciContext.fromConfig(config);
         this.streams = streams;
         this.pools = pools;
         this.config = config;
         this.serviceRegistry = null;
         this.workRequests = workRequests;
+        this.kafka = kafka;
+        this.clock = clock;
+        this.lifecycle = lifecycle;
+        this.worker = null;
     }
 
     void onStart(@Observes StartupEvent ev) {
@@ -87,6 +127,14 @@ public class StreamingService implements CompartmentUsage {
                 .resourceClasses(StreamAdminController.class, StreamDataController.class)
                 .build());
         materializeMissingPools();
+        if (realMode() && config.services().streaming().enabled()) {
+            worker.scheduleWithFixedDelay(this::tickSafely, POLL_SECONDS, POLL_SECONDS, TimeUnit.SECONDS);
+            restartPersistedPools();
+        }
+    }
+
+    boolean realMode() {
+        return kafka != null && !config.services().streaming().mock();
     }
 
     /**
@@ -143,10 +191,19 @@ public class StreamingService implements CompartmentUsage {
         applyEncryptionKey(pool, customEncryptionKeyDetails);
         pool.setFreeformTags(freeformTags);
         pool.setDefinedTags(definedTags);
-        pools.put(pool.getId(), pool);
         LOG.infov("createStreamPool {0} ({1})", name, pool.getId());
-        String wr = workRequests.succeeded(WR_SERVICE, "CREATE_STREAM_POOL", compartmentId,
+        if (!realMode()) {
+            pools.put(pool.getId(), pool);
+            String wr = workRequests.succeeded(WR_SERVICE, "CREATE_STREAM_POOL", compartmentId,
+                    List.of(poolResource(pool.getId(), "CREATED")));
+            return new PoolChange(pool, wr);
+        }
+        pool.setLifecycleState("CREATING");
+        String wr = workRequests.inProgress(WR_SERVICE, "CREATE_STREAM_POOL", compartmentId,
                 List.of(poolResource(pool.getId(), "CREATED")));
+        pool.setWorkRequestId(wr);
+        pools.put(pool.getId(), pool);
+        launchBroker(pool);
         return new PoolChange(pool, wr);
     }
 
@@ -177,10 +234,11 @@ public class StreamingService implements CompartmentUsage {
                 .toList();
     }
 
-    public PoolChange updateStreamPool(String streamPoolId, String name, Map<String, Object> kafkaSettings,
-                                       Map<String, Object> customEncryptionKeyDetails,
-                                       Map<String, String> freeformTags,
-                                       Map<String, Map<String, Object>> definedTags, String ifMatch) {
+    public synchronized PoolChange updateStreamPool(String streamPoolId, String name,
+                                                    Map<String, Object> kafkaSettings,
+                                                    Map<String, Object> customEncryptionKeyDetails,
+                                                    Map<String, String> freeformTags,
+                                                    Map<String, Map<String, Object>> definedTags, String ifMatch) {
         StoredStreamPool pool = getStreamPool(streamPoolId);
         Etags.checkIfMatch(ifMatch, pool.getEtag());
         if (name != null) {
@@ -201,7 +259,7 @@ public class StreamingService implements CompartmentUsage {
         return new PoolChange(pool, wr);
     }
 
-    public String deleteStreamPool(String streamPoolId, String ifMatch) {
+    public synchronized String deleteStreamPool(String streamPoolId, String ifMatch) {
         StoredStreamPool pool = getStreamPool(streamPoolId);
         Etags.checkIfMatch(ifMatch, pool.getEtag());
         long held = streams.scan(k -> true).stream()
@@ -214,11 +272,16 @@ public class StreamingService implements CompartmentUsage {
         }
         pools.delete(streamPoolId);
         LOG.infov("deleteStreamPool {0}", streamPoolId);
+        if (realMode()) {
+            finishWorkRequest(pool, "CANCELED", null);
+            lifecycle.execute(() -> removeQuietly(pool));
+        }
         return workRequests.succeeded(WR_SERVICE, "DELETE_STREAM_POOL", pool.getCompartmentId(),
                 List.of(poolResource(streamPoolId, "DELETED")));
     }
 
-    public String changeStreamPoolCompartment(String streamPoolId, String compartmentId, String ifMatch) {
+    public synchronized String changeStreamPoolCompartment(String streamPoolId, String compartmentId,
+                                                           String ifMatch) {
         require(compartmentId, "compartmentId");
         StoredStreamPool pool = getStreamPool(streamPoolId);
         Etags.checkIfMatch(ifMatch, pool.getEtag());
@@ -289,7 +352,7 @@ public class StreamingService implements CompartmentUsage {
             StoredStreamPool pool = pools.get(streamPoolId).orElseThrow(() ->
                     OciException.relatedResourceNotAuthorizedOrNotFound(
                             "Authorization failed or requested resource not found: stream pool " + streamPoolId));
-            if (!"ACTIVE".equals(pool.getLifecycleState())) {
+            if (!List.of("ACTIVE", "CREATING", "UPDATING").contains(pool.getLifecycleState())) {
                 throw new OciException("IncorrectState", "Stream pool " + streamPoolId + " is "
                         + pool.getLifecycleState(), 409);
             }
@@ -306,8 +369,14 @@ public class StreamingService implements CompartmentUsage {
                                 Ocids.generate("streampool", ociContext.realm(), ociContext.regionCode()),
                                 DEFAULT_POOL_NAME, compartmentId, ociContext.tenancyId(), ociContext.region());
                         pool.setDefaultPool(true);
+                        if (realMode()) {
+                            pool.setLifecycleState("CREATING");
+                        }
                         pools.put(pool.getId(), pool);
                         LOG.infov("Created the DefaultPool {0} of compartment {1}", pool.getId(), compartmentId);
+                        if (realMode()) {
+                            launchBroker(pool);
+                        }
                         return pool;
                     });
         }
@@ -318,7 +387,7 @@ public class StreamingService implements CompartmentUsage {
     public record CreatedStream(StoredStream stream, String workRequestId) {
     }
 
-    public CreatedStream createStream(String name, Integer partitions, Integer retentionInHours,
+    public synchronized CreatedStream createStream(String name, Integer partitions, Integer retentionInHours,
                                       String compartmentId, String streamPoolId,
                                       Map<String, String> freeformTags,
                                       Map<String, Map<String, Object>> definedTags) {
@@ -330,6 +399,9 @@ public class StreamingService implements CompartmentUsage {
             throw OciException.missingParameter("Either compartmentId or streamPoolId is required");
         }
         StoredStreamPool pool = poolForNewStream(compartmentId, streamPoolId);
+        if (realMode()) {
+            requireUniqueTopic(pool, name);
+        }
         StoredStream stream = new StoredStream();
         stream.setId(Ocids.generate("stream", ociContext.realm(),
                 ociContext.regionCode()));
@@ -343,12 +415,22 @@ public class StreamingService implements CompartmentUsage {
         stream.setFreeformTags(freeformTags);
         stream.setDefinedTags(definedTags);
         stream.setEtag(Etags.newEtag());
-        streams.put(stream.getId(), stream);
         LOG.infof("createStream %s (%s, %d partitions)", name, stream.getId(), partitions);
         // Terraform scans this WR's resources for entityType containing "stream".
-        String wr = workRequests.succeeded(WR_SERVICE, "CREATE_STREAM", stream.getCompartmentId(),
-                List.of(WorkRequestService.resource("stream", "CREATED", stream.getId(),
-                        "/20180418/streams/" + stream.getId())));
+        List<StoredWorkRequest.Resource> resources = List.of(WorkRequestService.resource("stream", "CREATED",
+                stream.getId(), "/20180418/streams/" + stream.getId()));
+        if (!realMode()) {
+            stream.setLogBackend(StoredStream.LOG_STORED);
+            streams.put(stream.getId(), stream);
+            String wr = workRequests.succeeded(WR_SERVICE, "CREATE_STREAM", stream.getCompartmentId(), resources);
+            return new CreatedStream(stream, wr);
+        }
+        // The topic is made once the pool's broker is up; until then the stream is CREATING.
+        stream.setLogBackend(StoredStream.LOG_REDPANDA);
+        stream.setLifecycleState("CREATING");
+        String wr = workRequests.inProgress(WR_SERVICE, "CREATE_STREAM", stream.getCompartmentId(), resources);
+        stream.setWorkRequestId(wr);
+        streams.put(stream.getId(), stream);
         return new CreatedStream(stream, wr);
     }
 
@@ -386,10 +468,18 @@ public class StreamingService implements CompartmentUsage {
         return new UpdatedStream(stream, wr);
     }
 
-    public String deleteStream(String streamId, String ifMatch) {
+    public synchronized String deleteStream(String streamId, String ifMatch) {
         StoredStream stream = getStream(streamId);
         Etags.checkIfMatch(ifMatch, stream.getEtag());
         streams.delete(streamId);
+        if (realMode() && stream.redpandaBacked()) {
+            String partition = TenancyAwareStorageBackend.regionalPartition(ociContext.tenancyId(),
+                    ociContext.region());
+            finishStreamWorkRequest(partition, stream, "CANCELED", null);
+            pools.get(stream.getStreamPoolId())
+                    .filter(pool -> "ACTIVE".equals(pool.getLifecycleState()))
+                    .ifPresent(pool -> lifecycle.execute(() -> deleteTopicQuietly(pool, stream.getName())));
+        }
         return workRequests.succeeded(WR_SERVICE, "DELETE_STREAM", stream.getCompartmentId(),
                 List.of(WorkRequestService.resource("stream", "DELETED", streamId,
                         "/20180418/streams/" + streamId)));
@@ -405,57 +495,70 @@ public class StreamingService implements CompartmentUsage {
                                  String error, String errorMessage) {
     }
 
-    public synchronized List<PutEntryResult> putMessages(String streamId,
-                                                         List<Map<String, Object>> entries) {
+    public List<PutEntryResult> putMessages(String streamId, List<Map<String, Object>> entries) {
         StoredStream stream = getStream(streamId);
         if (entries == null || entries.isEmpty()) {
             throw OciException.invalidParameter("messages must contain at least one entry");
         }
-        List<PutEntryResult> results = new ArrayList<>();
+        StreamLog log = logOf(stream);
+        PutEntryResult[] results = new PutEntryResult[entries.size()];
+        List<StreamLog.Append> accepted = new ArrayList<>();
+        List<Integer> acceptedAt = new ArrayList<>();
         int roundRobin = 0;
-        for (Map<String, Object> entry : entries) {
+        for (int i = 0; i < entries.size(); i++) {
+            Map<String, Object> entry = entries.get(i);
             String value = entry.get("value") instanceof String s ? s : null;
             String key = entry.get("key") instanceof String s ? s : null;
             if (value == null) {
-                results.add(new PutEntryResult(null, null, null,
-                        "InvalidParameter", "value is required"));
+                results[i] = new PutEntryResult(null, null, null, "InvalidParameter", "value is required");
                 continue;
             }
             byte[] decoded;
             try {
                 decoded = Base64.getDecoder().decode(value);
             } catch (IllegalArgumentException e) {
-                results.add(new PutEntryResult(null, null, null,
-                        "InvalidParameter", "value must be base64-encoded"));
+                results[i] = new PutEntryResult(null, null, null,
+                        "InvalidParameter", "value must be base64-encoded");
                 continue;
             }
             if (decoded.length > MAX_VALUE_BYTES) {
-                results.add(new PutEntryResult(null, null, null,
-                        "InvalidParameter", "value exceeds 1 MiB"));
+                results[i] = new PutEntryResult(null, null, null, "InvalidParameter", "value exceeds 1 MiB");
                 continue;
             }
             int partition = key != null
                     ? Math.floorMod(key.hashCode(), stream.getPartitions())
                     : Math.floorMod(roundRobin++, stream.getPartitions());
-            List<StoredEntry> log = stream.partitionLog(partition);
-            StoredEntry stored = new StoredEntry();
-            stored.setKey(key);
-            stored.setValue(value);
-            stored.setOffset(log.size());
-            stored.setTimestamp(Instant.now().toString());
-            log.add(stored);
-            results.add(new PutEntryResult(partition, stored.getOffset(), stored.getTimestamp(),
-                    null, null));
+            accepted.add(new StreamLog.Append(partition, key, value));
+            acceptedAt.add(i);
         }
-        streams.put(streamId, stream);
-        return results;
+        List<StreamLog.Appended> appended = accepted.isEmpty() ? List.of() : append(stream, log, accepted);
+        for (int i = 0; i < appended.size(); i++) {
+            StreamLog.Appended landed = appended.get(i);
+            results[acceptedAt.get(i)] = landed.error() != null
+                    ? new PutEntryResult(null, null, null, "InternalServerError", landed.error())
+                    : new PutEntryResult(landed.partition(), landed.offset(), landed.timestamp(), null, null);
+        }
+        return List.of(results);
+    }
+
+    /** The stored log changes the stream record, so its appends are serialized and saved. */
+    private List<StreamLog.Appended> append(StoredStream stream, StreamLog log, List<StreamLog.Append> messages) {
+        if (log != StoredStreamLog.INSTANCE) {
+            return log.append(stream, messages);
+        }
+        synchronized (this) {
+            StoredStream current = getStream(stream.getId());
+            List<StreamLog.Appended> appended = log.append(current, messages);
+            streams.put(current.getId(), current);
+            return appended;
+        }
     }
 
     // ── Data plane: cursors + consume ──────────────────────────────────────────
 
     /**
      * Cursor wire value: opaque base64 of either
-     * {@code P|streamId|partition|offset} or {@code G|streamId|group|p0:o0,p1:o1,…}.
+     * {@code P|streamId|partition|offset} or {@code G|streamId|group|p0:o0,p1:o1,...}.
      */
     public String createCursor(String streamId, String partitionValue, String type,
                                Long offset, String time) {
@@ -464,12 +567,13 @@ public class StreamingService implements CompartmentUsage {
             throw OciException.missingParameter("Missing required parameter: partition");
         }
         int partition = parsePartition(stream, partitionValue);
+        StreamLog log = logOf(stream);
         long start = switch (type != null ? type : "TRIM_HORIZON") {
             case "TRIM_HORIZON" -> 0;
-            case "LATEST" -> stream.partitionLog(partition).size();
+            case "LATEST" -> log.endOffset(stream, partition);
             case "AT_OFFSET" -> requireOffset(offset);
             case "AFTER_OFFSET" -> requireOffset(offset) + 1;
-            case "AT_TIME" -> offsetAtTime(stream, partition, time);
+            case "AT_TIME" -> offsetAtTime(stream, log, partition, time);
             default -> throw OciException.invalidParameter("Unsupported cursor type: " + type);
         };
         return encode("P|" + streamId + "|" + partition + "|" + start);
@@ -479,8 +583,8 @@ public class StreamingService implements CompartmentUsage {
                                     boolean commitOnGet) {
         StoredStream stream = getStream(streamId);
         require(groupName, "groupName");
-        Map<Integer, Long> committed = stream.getGroupOffsets()
-                .computeIfAbsent(groupName, g -> new LinkedHashMap<>());
+        StreamLog log = logOf(stream);
+        Map<Integer, Long> committed = stream.getGroupOffsets().getOrDefault(groupName, Map.of());
         StringBuilder positions = new StringBuilder();
         for (int partition = 0; partition < stream.getPartitions(); partition++) {
             long start;
@@ -489,8 +593,8 @@ public class StreamingService implements CompartmentUsage {
             } else {
                 start = switch (type != null ? type : "TRIM_HORIZON") {
                     case "TRIM_HORIZON" -> 0;
-                    case "LATEST" -> stream.partitionLog(partition).size();
-                    case "AT_TIME" -> offsetAtTime(stream, partition, time);
+                    case "LATEST" -> log.endOffset(stream, partition);
+                    case "AT_TIME" -> offsetAtTime(stream, log, partition, time);
                     default -> throw OciException.invalidParameter(
                             "Unsupported group cursor type: " + type);
                 };
@@ -500,7 +604,11 @@ public class StreamingService implements CompartmentUsage {
             }
             positions.append(partition).append(':').append(start);
         }
-        streams.put(streamId, stream);
+        synchronized (this) {
+            StoredStream current = getStream(streamId);
+            current.getGroupOffsets().computeIfAbsent(groupName, g -> new LinkedHashMap<>());
+            streams.put(streamId, current);
+        }
         return encode("G|" + streamId + "|" + groupName + "|" + positions);
     }
 
@@ -513,33 +621,37 @@ public class StreamingService implements CompartmentUsage {
         if (!parts[1].equals(streamId)) {
             throw OciException.invalidParameter("Cursor does not belong to stream " + streamId);
         }
+        StreamLog log = logOf(stream);
         int max = limit != null && limit > 0 ? Math.min(limit, 10000) : 100;
         List<Map<String, Object>> messages = new ArrayList<>();
         String nextCursor;
         if ("P".equals(parts[0])) {
             int partition = Integer.parseInt(parts[2]);
-            long offset = Long.parseLong(parts[3]);
-            List<StoredEntry> log = stream.partitionLog(partition);
-            long position = offset;
-            while (position < log.size() && messages.size() < max) {
-                messages.add(messageJson(stream, partition, log.get((int) position)));
-                position++;
+            long position = Long.parseLong(parts[3]);
+            for (StoredEntry entry : log.read(stream, partition, position, max)) {
+                messages.add(messageJson(stream, partition, entry));
+                position = entry.getOffset() + 1;
             }
             nextCursor = encode("P|" + streamId + "|" + partition + "|" + position);
         } else {
             Map<Integer, Long> positions = parsePositions(parts[3]);
+            Map<Integer, List<StoredEntry>> pending = new LinkedHashMap<>();
+            for (Map.Entry<Integer, Long> position : positions.entrySet()) {
+                pending.put(position.getKey(), new ArrayList<>(
+                        log.read(stream, position.getKey(), position.getValue(), max)));
+            }
+            // One message per partition per round, so no partition starves the others.
             boolean progress = true;
             while (messages.size() < max && progress) {
                 progress = false;
-                for (Map.Entry<Integer, Long> position : positions.entrySet()) {
+                for (Map.Entry<Integer, List<StoredEntry>> partitionEntries : pending.entrySet()) {
                     if (messages.size() >= max) {
                         break;
                     }
-                    List<StoredEntry> log = stream.partitionLog(position.getKey());
-                    if (position.getValue() < log.size()) {
-                        messages.add(messageJson(stream, position.getKey(),
-                                log.get(position.getValue().intValue())));
-                        positions.put(position.getKey(), position.getValue() + 1);
+                    if (!partitionEntries.getValue().isEmpty()) {
+                        StoredEntry entry = partitionEntries.getValue().remove(0);
+                        messages.add(messageJson(stream, partitionEntries.getKey(), entry));
+                        positions.put(partitionEntries.getKey(), entry.getOffset() + 1);
                         progress = true;
                     }
                 }
@@ -550,7 +662,7 @@ public class StreamingService implements CompartmentUsage {
     }
 
     /** Commits a group cursor's positions and returns a refreshed cursor. */
-    public String consumerCommit(String streamId, String cursorValue) {
+    public synchronized String consumerCommit(String streamId, String cursorValue) {
         StoredStream stream = getStream(streamId);
         String[] parts = decode(cursorValue);
         if ("G".equals(parts[0])) {
@@ -585,18 +697,322 @@ public class StreamingService implements CompartmentUsage {
 
     public void updateGroup(String streamId, String groupName, String type, String time) {
         StoredStream stream = getStream(streamId);
+        StreamLog log = logOf(stream);
         Map<Integer, Long> committed = new LinkedHashMap<>();
         for (int partition = 0; partition < stream.getPartitions(); partition++) {
             long offset = switch (type != null ? type : "TRIM_HORIZON") {
                 case "TRIM_HORIZON" -> 0;
-                case "LATEST" -> stream.partitionLog(partition).size();
-                case "AT_TIME" -> offsetAtTime(stream, partition, time);
+                case "LATEST" -> log.endOffset(stream, partition);
+                case "AT_TIME" -> offsetAtTime(stream, log, partition, time);
                 default -> throw OciException.invalidParameter("Unsupported type: " + type);
             };
             committed.put(partition, offset);
         }
-        stream.getGroupOffsets().put(groupName, committed);
-        streams.put(streamId, stream);
+        synchronized (this) {
+            StoredStream current = getStream(streamId);
+            current.getGroupOffsets().put(groupName, committed);
+            streams.put(streamId, current);
+        }
+    }
+
+    /**
+     * The log a stream's messages are in. A Redpanda-backed stream needs its pool's broker,
+     * which mock mode does not run, and is readable only once it and its pool are ACTIVE.
+     */
+    private StreamLog logOf(StoredStream stream) {
+        if (!stream.redpandaBacked()) {
+            return StoredStreamLog.INSTANCE;
+        }
+        if (!realMode()) {
+            throw new OciException("IncorrectState", "Stream " + stream.getId()
+                    + " keeps its messages in a Kafka broker, which mock mode does not run", 409);
+        }
+        if (!"ACTIVE".equals(stream.getLifecycleState())) {
+            throw new OciException("IncorrectState", "Stream " + stream.getId() + " is "
+                    + stream.getLifecycleState(), 409);
+        }
+        StoredStreamPool pool = getStreamPool(stream.getStreamPoolId());
+        if (!"ACTIVE".equals(pool.getLifecycleState())) {
+            throw new OciException("IncorrectState", "Stream pool " + pool.getId() + " is "
+                    + pool.getLifecycleState(), 409);
+        }
+        return new RedpandaStreamLog(kafka, pool);
+    }
+
+    // ── Kafka broker lifecycle (real mode) ─────────────────────────────────────
+
+    /**
+     * Two streams of one pool cannot share its broker's topic, which is the stream's name. OCI
+     * lets them be created and then fails Kafka authentication for them; floci-oci has nowhere
+     * to put the second one's messages, so it refuses it.
+     */
+    private void requireUniqueTopic(StoredStreamPool pool, String name) {
+        boolean taken = streams.scan(k -> true).stream()
+                .anyMatch(s -> pool.getId().equals(s.getStreamPoolId()) && name.equals(s.getName())
+                        && s.redpandaBacked() && !"DELETED".equals(s.getLifecycleState()));
+        if (taken) {
+            throw OciException.conflict("Stream pool " + pool.getId() + " already has a stream named " + name);
+        }
+    }
+
+    /** Queues the start of the pool's broker; {@link #tick} takes over once it is running. */
+    private void launchBroker(StoredStreamPool pool) {
+        String partition = TenancyAwareStorageBackend.regionalPartition(pool.getTenancyId(), pool.getRegion());
+        String id = pool.getId();
+        lifecycle.execute(() -> startBroker(partition, id));
+    }
+
+    private void startBroker(String partition, String id) {
+        Optional<StoredStreamPool> found = TenancyAwareStorageBackend.getIn(pools, partition, id);
+        if (found.isEmpty() || found.get().getBrokerStartedAt() != null) {
+            return;
+        }
+        StoredStreamPool pool = found.get();
+        try {
+            kafka.stop(pool);
+            kafka.start(pool);
+        } catch (RuntimeException e) {
+            LOG.warnv(e, "Could not start the broker of stream pool {0}", id);
+            synchronized (this) {
+                TenancyAwareStorageBackend.getIn(pools, partition, id).ifPresent(current ->
+                        failPool(partition, current, "The Kafka broker could not be started: " + e.getMessage()));
+            }
+            return;
+        }
+        synchronized (this) {
+            Optional<StoredStreamPool> current = TenancyAwareStorageBackend.getIn(pools, partition, id);
+            if (current.isEmpty()) {
+                // Deleted or reset while the broker started: remove what the start made.
+                removeQuietly(pool);
+                return;
+            }
+            current.get().setKafkaHostPort(pool.getKafkaHostPort());
+            current.get().setProxyEndpoint(pool.getProxyEndpoint());
+            current.get().setBrokerStartedAt(pool.getBrokerStartedAt());
+            TenancyAwareStorageBackend.putIn(pools, partition, id, current.get());
+        }
+    }
+
+    private void tickSafely() {
+        try {
+            tick();
+        } catch (RuntimeException e) {
+            LOG.warnv(e, "Streaming broker poll failed");
+        }
+    }
+
+    /**
+     * One pass over what is waiting on a broker. A pool whose broker answers becomes ACTIVE and
+     * gets its {@code bootstrapServers}; one whose container exited, or that passed the ready
+     * timeout, FAILED. A CREATING stream gets its topic once its pool is ACTIVE, and fails with
+     * its pool. Each outcome also finishes the work request Terraform and the CLI wait on.
+     */
+    void tick() {
+        String solePartition = TenancyAwareStorageBackend.regionalPartition(ociContext.tenancyId(),
+                ociContext.region());
+        for (Map.Entry<String, Map<String, StoredStreamPool>> entry
+                : TenancyAwareStorageBackend.entriesByPartition(pools, solePartition).entrySet()) {
+            for (StoredStreamPool pool : entry.getValue().values()) {
+                if (List.of("CREATING", "UPDATING").contains(pool.getLifecycleState())
+                        && pool.getBrokerStartedAt() != null) {
+                    pollPool(entry.getKey(), pool);
+                }
+            }
+        }
+        for (Map.Entry<String, Map<String, StoredStream>> entry
+                : TenancyAwareStorageBackend.entriesByPartition(streams, solePartition).entrySet()) {
+            for (StoredStream stream : entry.getValue().values()) {
+                if ("CREATING".equals(stream.getLifecycleState()) && stream.redpandaBacked()) {
+                    provisionTopic(entry.getKey(), stream);
+                }
+            }
+        }
+    }
+
+    private void pollPool(String partition, StoredStreamPool pool) {
+        int timeout = config.services().streaming().readyTimeoutSeconds();
+        if (kafka.isReady(pool)) {
+            synchronized (this) {
+                TenancyAwareStorageBackend.getIn(pools, partition, pool.getId())
+                        .filter(current -> Objects.equals(current.getBrokerStartedAt(), pool.getBrokerStartedAt()))
+                        .ifPresent(current -> {
+                            current.setLifecycleState("ACTIVE");
+                            current.setLifecycleStateDetails(null);
+                            current.setBootstrapServers(kafka.bootstrapServers(current));
+                            finishWorkRequest(current, "SUCCEEDED", null);
+                            TenancyAwareStorageBackend.putIn(pools, partition, current.getId(), current);
+                            LOG.infov("Stream pool {0} is ACTIVE, Kafka at {1}", current.getId(),
+                                    current.getBootstrapServers());
+                        });
+            }
+        } else if (!kafka.isRunning(pool)) {
+            synchronized (this) {
+                TenancyAwareStorageBackend.getIn(pools, partition, pool.getId()).ifPresent(current ->
+                        failPool(partition, current, "The Kafka broker exited before it was ready"));
+            }
+        } else if (clock.instant().isAfter(Instant.parse(pool.getBrokerStartedAt()).plusSeconds(timeout))) {
+            synchronized (this) {
+                TenancyAwareStorageBackend.getIn(pools, partition, pool.getId()).ifPresent(current ->
+                        failPool(partition, current, "The Kafka broker was not ready after " + timeout + " seconds"));
+            }
+        }
+    }
+
+    private void provisionTopic(String partition, StoredStream stream) {
+        Optional<StoredStreamPool> pool = TenancyAwareStorageBackend.getIn(pools, partition, stream.getStreamPoolId());
+        if (pool.isPresent() && List.of("CREATING", "UPDATING").contains(pool.get().getLifecycleState())) {
+            return;
+        }
+        String failure = null;
+        if (pool.isEmpty() || !"ACTIVE".equals(pool.get().getLifecycleState())) {
+            failure = "Stream pool " + stream.getStreamPoolId() + " is "
+                    + pool.map(StoredStreamPool::getLifecycleState).orElse("gone");
+        } else {
+            try {
+                kafka.createTopic(pool.get(), stream.getName(), stream.getPartitions(), stream.getRetentionInHours());
+            } catch (RuntimeException e) {
+                LOG.warnv("Could not create the topic of stream {0}: {1}", stream.getId(), e.getMessage());
+                failure = e.getMessage();
+            }
+        }
+        String reason = failure;
+        synchronized (this) {
+            TenancyAwareStorageBackend.getIn(streams, partition, stream.getId())
+                    .filter(current -> "CREATING".equals(current.getLifecycleState()))
+                    .ifPresent(current -> {
+                        current.setLifecycleState(reason == null ? "ACTIVE" : "FAILED");
+                        finishStreamWorkRequest(partition, current, reason == null ? "SUCCEEDED" : "FAILED", reason);
+                        TenancyAwareStorageBackend.putIn(streams, partition, current.getId(), current);
+                    });
+        }
+    }
+
+    private void failPool(String partition, StoredStreamPool pool, String message) {
+        stopQuietly(pool);
+        pool.setLifecycleState("FAILED");
+        pool.setLifecycleStateDetails(message);
+        pool.setBrokerStartedAt(null);
+        finishWorkRequest(pool, "FAILED", message);
+        TenancyAwareStorageBackend.putIn(pools, partition, pool.getId(), pool);
+        LOG.warnv("Stream pool {0} is FAILED: {1}", pool.getId(), message);
+    }
+
+    private void finishWorkRequest(StoredStreamPool pool, String status, String error) {
+        if (pool.getWorkRequestId() == null) {
+            return;
+        }
+        workRequests.finish(pool.getTenancyId(), pool.getRegion(), pool.getWorkRequestId(), status, errors(error));
+        pool.setWorkRequestId(null);
+    }
+
+    private void finishStreamWorkRequest(String partition, StoredStream stream, String status, String error) {
+        if (stream.getWorkRequestId() == null) {
+            return;
+        }
+        String region = TenancyAwareStorageBackend.regionOf(partition).orElse(ociContext.region());
+        workRequests.finish(TenancyAwareStorageBackend.tenancyOf(partition), region, stream.getWorkRequestId(),
+                status, errors(error));
+        stream.setWorkRequestId(null);
+    }
+
+    private static List<StoredWorkRequest.ErrorEntry> errors(String error) {
+        return error == null ? List.of() : List.of(new StoredWorkRequest.ErrorEntry("InternalServerError", error));
+    }
+
+    /**
+     * After a restart of the emulator, starts the broker of every pool that had one again, over
+     * the volume its topics are on. An ACTIVE pool is UPDATING until its broker answers, a
+     * CREATING one stays CREATING; their streams wait for it.
+     */
+    void restartPersistedPools() {
+        String solePartition = TenancyAwareStorageBackend.regionalPartition(ociContext.tenancyId(),
+                ociContext.region());
+        for (Map.Entry<String, Map<String, StoredStreamPool>> entry
+                : TenancyAwareStorageBackend.entriesByPartition(pools, solePartition).entrySet()) {
+            for (StoredStreamPool pool : entry.getValue().values()) {
+                if (!List.of("ACTIVE", "CREATING", "UPDATING").contains(pool.getLifecycleState())) {
+                    continue;
+                }
+                if ("ACTIVE".equals(pool.getLifecycleState())) {
+                    pool.setLifecycleState("UPDATING");
+                }
+                pool.setBrokerStartedAt(null);
+                pool.setTenancyId(TenancyAwareStorageBackend.tenancyOf(entry.getKey()));
+                pool.setRegion(TenancyAwareStorageBackend.regionOf(entry.getKey()).orElse(pool.getRegion()));
+                TenancyAwareStorageBackend.putIn(pools, entry.getKey(), pool.getId(), pool);
+                launchBroker(pool);
+            }
+        }
+    }
+
+    @PreDestroy
+    void shutdown() {
+        if (worker != null) {
+            worker.shutdownNow();
+        }
+        if (!realMode()) {
+            return;
+        }
+        boolean memory = "memory".equalsIgnoreCase(config.storage().mode());
+        for (StoredStreamPool pool : TenancyAwareStorageBackend.scanAll(pools)) {
+            if (memory) {
+                removeQuietly(pool);
+            } else {
+                stopQuietly(pool);
+            }
+        }
+    }
+
+    /**
+     * Removes every broker and its volume, since nothing could reach the topics once their
+     * pools are forgotten; then forgets every pool and stream. A broker start still running finds
+     * its pool gone and removes what it started.
+     */
+    @Override
+    public synchronized void clear() {
+        if (realMode()) {
+            for (StoredStreamPool pool : TenancyAwareStorageBackend.scanAll(pools)) {
+                try {
+                    kafka.purge(pool);
+                } catch (RuntimeException e) {
+                    LOG.warnv("Could not remove the broker of stream pool {0}: {1}", pool.getId(), e.getMessage());
+                }
+            }
+        }
+        streams.clear();
+        pools.clear();
+    }
+
+    private void stopQuietly(StoredStreamPool pool) {
+        try {
+            kafka.stop(pool);
+        } catch (RuntimeException e) {
+            LOG.warnv("Could not stop the broker of stream pool {0}: {1}", pool.getId(), e.getMessage());
+        }
+    }
+
+    private void removeQuietly(StoredStreamPool pool) {
+        try {
+            kafka.remove(pool);
+        } catch (RuntimeException e) {
+            LOG.warnv("Could not remove the broker of stream pool {0}: {1}", pool.getId(), e.getMessage());
+        }
+    }
+
+    private void deleteTopicQuietly(StoredStreamPool pool, String topic) {
+        try {
+            kafka.deleteTopic(pool, topic);
+        } catch (RuntimeException e) {
+            LOG.warnv("Could not delete topic {0} of stream pool {1}: {2}", topic, pool.getId(), e.getMessage());
+        }
+    }
+
+    private static ThreadFactory daemon(String name) {
+        return runnable -> {
+            Thread thread = new Thread(runnable, name);
+            thread.setDaemon(true);
+            return thread;
+        };
     }
 
     // ── Helpers ────────────────────────────────────────────────────────────────
@@ -632,18 +1048,25 @@ public class StreamingService implements CompartmentUsage {
         return offset;
     }
 
-    private static long offsetAtTime(StoredStream stream, int partition, String time) {
+    /** The first offset whose message is at or after {@code time}, or the end when none is. */
+    private static long offsetAtTime(StoredStream stream, StreamLog log, int partition, String time) {
         if (time == null) {
             throw OciException.invalidParameter("time is required for AT_TIME cursors");
         }
         Instant at = Instant.parse(time);
-        List<StoredEntry> log = stream.partitionLog(partition);
-        for (StoredEntry entry : log) {
-            if (!Instant.parse(entry.getTimestamp()).isBefore(at)) {
-                return entry.getOffset();
+        long position = 0;
+        while (true) {
+            List<StoredEntry> chunk = log.read(stream, partition, position, TIME_SCAN_CHUNK);
+            for (StoredEntry entry : chunk) {
+                if (!Instant.parse(entry.getTimestamp()).isBefore(at)) {
+                    return entry.getOffset();
+                }
+                position = entry.getOffset() + 1;
+            }
+            if (chunk.size() < TIME_SCAN_CHUNK) {
+                return log.endOffset(stream, partition);
             }
         }
-        return log.size();
     }
 
     private static String encode(String raw) {

@@ -206,6 +206,11 @@ def test_stream_lifecycle_and_cursor_consumption(sdk_config, stream_admin):
     # Dual-mode: full body AND a work-request id.
     assert created.headers["opc-work-request-id"]
     stream = created.data
+    # With the compose emulator the stream is CREATING until its pool's broker has its topic.
+    deadline = time.time() + 180
+    while stream.lifecycle_state != "ACTIVE" and time.time() < deadline:
+        time.sleep(1)
+        stream = stream_admin.get_stream(stream.id).data
     assert stream.lifecycle_state == "ACTIVE"
     assert stream.messages_endpoint
     assert stream.retention_in_hours == 24

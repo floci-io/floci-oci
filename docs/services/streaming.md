@@ -1,7 +1,15 @@
 # Streaming
 
-OCI Streaming, API version `20180418`. Kafka-like partitioned append-only logs with
-cursor-based consumption.
+OCI Streaming, API version `20180418`. Partitioned append-only logs with cursor-based
+consumption, grouped in stream pools. Outside mock mode each pool runs a Redpanda broker that
+holds its streams and serves Kafka clients.
+
+!!! warning "Behaviour change: Streaming needs Docker by default"
+    `streaming.mock` defaults to `false`, as for the other sidecar services, so a stream pool
+    starts a Redpanda container and its streams become topics on it. Without a Docker daemon,
+    set `FLOCI_OCI_SERVICES_STREAMING_MOCK=true`: streams then keep their messages in
+    floci-oci's own storage, as before, and pools have no Kafka endpoint. Streams created
+    before the switch keep their messages where they are.
 
 ## Supported operations
 
@@ -58,6 +66,57 @@ cursor-based consumption.
   stream that had only a pool OCID, and so no compartment, takes the tenancy's root
   compartment.
 
+## Kafka endpoint
+
+With `mock: false` (the default) every stream pool, the `DefaultPool` included, runs one
+`redpandadata/redpanda` container:
+
+- CreateStreamPool answers `CREATING` with an `IN_PROGRESS` work request. A background poller
+  moves the pool to `ACTIVE`, fills `kafkaSettings.bootstrapServers` and finishes the work
+  request `SUCCEEDED` once the broker answers. A broker that exits, or is not ready within
+  `ready-timeout-seconds`, leaves the pool `FAILED` with `lifecycleStateDetails` and a `FAILED`
+  work request. Terraform waits on the work request and then on `ACTIVE`, so both cover the
+  start.
+- CreateStream answers `CREATING` with an `IN_PROGRESS` work request too, and becomes `ACTIVE`
+  once its pool is `ACTIVE` and the stream's topic exists. The topic is the stream's **name**,
+  with the stream's partitions and `retention.ms` from `retentionInHours`. Two streams of one
+  pool cannot share a name: the second one is `409 Conflict` (*inferred*: OCI accepts it and
+  then fails Kafka authentication for the duplicates).
+- The broker is the only copy of the messages. PutMessages produces through Redpanda's HTTP
+  proxy and GetMessages reads with `rpk` in the container, so OCI offsets are Kafka offsets and
+  a message written by either side is read by the other at the same offset. PutMessages reports
+  the time of the produce as each entry's `timestamp`, since the proxy does not return the
+  broker's (*inferred*); GetMessages returns the broker's record timestamps.
+- PutMessages, GetMessages and cursors on a stream, or a pool, that is not `ACTIVE` are
+  `409 IncorrectState` (*inferred*).
+- `bootstrapServers` is the broker's published Kafka port: `localhost:<port>` (ports
+  `19092..19191`) when floci-oci runs on the host, the container's name and `9092` when it runs
+  in a container on a shared network, and the Docker daemon's host with
+  `FLOCI_OCI_DOCKER_ENDPOINT_MODE=published`.
+- **No authentication.** The listener is `PLAINTEXT` without SASL. OCI's own endpoint is
+  `cell-1.streaming.<region>.oci.oraclecloud.com:9092` with `SASL_SSL`, mechanism `PLAIN`,
+  username `<tenancy>/<user>/<streamPoolOCID>` and an auth token as the password
+  (`local/oracle/oci-docs/streaming-kafka*.md`); floci-oci has no auth tokens yet, so clients
+  connect without credentials.
+- Consumer groups of Kafka clients and OCI group cursors are separate: group cursors keep their
+  committed offsets in floci-oci.
+- The data stays on a named volume per pool. A restart of floci-oci starts the brokers again
+  (their pools are `UPDATING` until they answer); a deleted pool's volume is removed in memory
+  storage mode or with `prune-volumes-on-delete`, and `POST /_floci-oci/state/reset` removes
+  every broker and volume.
+
+```bash
+POOL=$(oci streaming admin stream-pool create $E --compartment-id "$TENANCY" \
+  --name demo-pool --query data.id --raw-output)
+oci streaming admin stream create $E --name orders --partitions 1 --stream-pool-id "$POOL"
+BOOTSTRAP=$(oci streaming admin stream-pool get $E --stream-pool-id "$POOL" \
+  --query 'data."kafka-settings"."bootstrap-servers"' --raw-output)
+
+# Any Kafka client works; the topic is the stream name.
+echo hello | kcat -b "$BOOTSTRAP" -t orders -P
+kcat -b "$BOOTSTRAP" -t orders -C -e
+```
+
 ## Partitioning and cursors
 
 - Messages with a `key` hash to a stable partition; keyless messages round-robin.
@@ -82,5 +141,6 @@ oci streaming admin stream-pool create $E --compartment-id "$TENANCY" --name dem
 
 ## Notes & limitations
 
-Private endpoints, customer-managed KMS keys, connect harnesses and the archiver are not
-implemented.
+Private endpoints, customer-managed KMS keys, Kafka SASL authentication,
+`autoCreateTopicsEnable`, connect harnesses and the archiver are not implemented. Topics
+created by Kafka clients are not streams.

@@ -58,7 +58,7 @@ class StreamingCompatibilityTest {
         admin.close();
     }
 
-    private static Stream createStream(String name, int partitions) {
+    private static Stream createStream(String name, int partitions) throws InterruptedException {
         var created = admin.createStream(CreateStreamRequest.builder()
                 .createStreamDetails(CreateStreamDetails.builder()
                         .name(name)
@@ -69,11 +69,25 @@ class StreamingCompatibilityTest {
         // Dual-mode: full body AND a work-request id.
         assertThat(created.getOpcWorkRequestId()).isNotBlank();
         assertThat(created.getStream().getId()).isNotBlank();
-        return created.getStream();
+        // With the compose emulator the stream is CREATING until its pool's broker has its topic.
+        return awaitActive(created.getStream().getId());
+    }
+
+    private static Stream awaitActive(String streamId) throws InterruptedException {
+        Instant deadline = Instant.now().plus(TIMEOUT);
+        Stream stream = null;
+        while (Instant.now().isBefore(deadline)) {
+            stream = admin.getStream(GetStreamRequest.builder().streamId(streamId).build()).getStream();
+            if (stream.getLifecycleState() == Stream.LifecycleState.Active) {
+                return stream;
+            }
+            Thread.sleep(1000);
+        }
+        return stream;
     }
 
     @Test
-    void streamLifecycleAndSummaryShape() {
+    void streamLifecycleAndSummaryShape() throws InterruptedException {
         Stream stream = createStream("sdk-stream-" + System.nanoTime(), 2);
         assertThat(stream.getLifecycleState().getValue()).isEqualTo("ACTIVE");
         assertThat(stream.getMessagesEndpoint()).isNotBlank();
@@ -92,7 +106,7 @@ class StreamingCompatibilityTest {
     }
 
     @Test
-    void produceAndConsumeWithCursors() {
+    void produceAndConsumeWithCursors() throws InterruptedException {
         Stream stream = createStream("sdk-consume-" + System.nanoTime(), 1);
 
         try (var data = EmulatorFixture.streamData(stream.getMessagesEndpoint())) {

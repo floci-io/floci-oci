@@ -121,6 +121,11 @@ floci-oci:
       enabled: true
     streaming:
       enabled: true
+      mock: false            # true = no Docker; streams keep their log in floci-oci, pools have no Kafka endpoint
+      kafka-image: "redpandadata/redpanda:v24.2.7"
+      kafka-base-port: 19092 # host ports published for Kafka endpoints, one per stream pool
+      kafka-max-port: 19191
+      ready-timeout-seconds: 60
     organizations:
       enabled: true
     governancerules:

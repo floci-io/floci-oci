@@ -43,6 +43,14 @@ class ApplicationDefaultsTest {
                 String.valueOf(config.services().psql().basePort()));
         assertEquals(annotationDefault(EmulatorConfig.ServicesConfig.PsqlServiceConfig.class, "readyTimeoutSeconds"),
                 String.valueOf(config.services().psql().readyTimeoutSeconds()));
+        assertEquals(annotationDefault(EmulatorConfig.ServicesConfig.StreamingServiceConfig.class, "kafkaImage"),
+                config.services().streaming().kafkaImage());
+        assertEquals(annotationDefault(EmulatorConfig.ServicesConfig.StreamingServiceConfig.class, "kafkaBasePort"),
+                String.valueOf(config.services().streaming().kafkaBasePort()));
+        assertEquals(annotationDefault(EmulatorConfig.ServicesConfig.StreamingServiceConfig.class, "kafkaMaxPort"),
+                String.valueOf(config.services().streaming().kafkaMaxPort()));
+        assertEquals(annotationDefault(EmulatorConfig.ServicesConfig.StreamingServiceConfig.class,
+                "readyTimeoutSeconds"), String.valueOf(config.services().streaming().readyTimeoutSeconds()));
         assertEquals(annotationDefault(EmulatorConfig.DockerConfig.class, "endpointMode"),
                 config.docker().endpointMode().name().toLowerCase(Locale.ROOT));
     }
