@@ -180,6 +180,9 @@ closest evidence:
   `etag` is the VCN's; a VCN's deletion detaches its default view from the other resolvers that
   attached it.
 - **GetRRSet** for an RRSet with no records answers `200` with no items.
+- **A record PUT without `items`** (an empty body or `"items": null`) is `400 MissingParameter`
+  and changes nothing. `items` is optional in the SDK models, but Terraform always sends a list, and
+  an empty list `[]` is how a caller asks to remove the records.
 - **IPv4-mapped AAAA** rdata is returned in the mixed notation RFC 5952 section 5 recommends
   (`::ffff:192.0.2.1`). Terraform compares AAAA through Go's `net.ParseIP(...).String()`, which prints
   both forms the same, so either echo gives an empty plan.

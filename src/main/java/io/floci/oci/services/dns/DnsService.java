@@ -430,6 +430,9 @@ public class DnsService implements CompartmentUsage {
 
     public synchronized StoredZone updateRecords(String zoneNameOrId, ZoneQuery query, RecordScope scope,
                                                  Object items, String ifMatch) {
+        if (items == null) {
+            throw OciException.missingParameter("items is required; send an empty list to remove the records");
+        }
         StoredZone zone = getZone(zoneNameOrId, query);
         Etags.checkIfMatch(ifMatch, zone.getEtag());
         List<StoredRecord> current = zone.getRecords();

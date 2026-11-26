@@ -138,6 +138,33 @@ class DnsRestIntegrationTest {
     }
 
     @Test
+    void replacingRecordsWithoutAnItemsListIsRejected() {
+        String name = uniqueZone("noitems");
+        String id = createGlobalZone(name);
+        given().contentType("application/json").body(Map.of("items", List.of(
+                    Map.of("domain", "www." + name, "rtype", "A", "rdata", "192.0.2.10", "ttl", 30))))
+            .when().put("/20180115/zones/" + id + "/records/www." + name + "/A")
+            .then().statusCode(200);
+
+        for (String path : List.of("/records", "/records/www." + name, "/records/www." + name + "/A")) {
+            given().contentType("application/json").body(Map.of())
+                .when().put("/20180115/zones/" + id + path)
+                .then().statusCode(400)
+                    .header("opc-request-id", notNullValue())
+                    .body("code", equalTo("MissingParameter"));
+        }
+        given().contentType("application/json").body("{\"items\": null}")
+            .when().put("/20180115/zones/" + id + "/records")
+            .then().statusCode(400).body("code", equalTo("MissingParameter"));
+
+        given().when().get("/20180115/zones/" + id + "/records/www." + name + "/A")
+            .then().statusCode(200).body("items.size()", equalTo(1));
+        given().contentType("application/json").body(Map.of("items", List.of()))
+            .when().put("/20180115/zones/" + id + "/records/www." + name + "/A")
+            .then().statusCode(200).body("items", empty());
+    }
+
+    @Test
     void conditionalRequests() {
         String id = createGlobalZone(uniqueZone("cond"));
         String etag = given().when().get("/20180115/zones/" + id).then().statusCode(200).extract().header("etag");
