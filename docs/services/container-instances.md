@@ -59,11 +59,16 @@ back for `oci_container_instances_container_instance`.
 - **Restart policy.** floci-oci checks the containers every five seconds. A container that
   exited is restarted under `ALWAYS`, and under `ON_FAILURE` when its exit code is not zero, and
   `containerRestartAttemptCount` counts it; otherwise it becomes `INACTIVE` with its `exitCode`
-  and `timeTerminated`. An instance whose containers have all stopped becomes `INACTIVE`.
+  and `timeTerminated`. An instance whose containers have all stopped becomes `INACTIVE`. The
+  check runs in turn with stop, start, restart and delete, and restarts a container only while
+  its instance is `ACTIVE` with nothing pending, so it never undoes a stop.
 - **Logs.** `RetrieveLogs` returns the container's stdout and stderr as text (at most 20 MB).
   `isPrevious` is accepted and ignored.
 - **Restarts of floci-oci.** A create that was running is marked `FAILED`; an `ACTIVE` instance
   is started again; a delete that was running finishes.
+- **State reset.** `POST /_floci-oci/state/reset` removes the pods and volumes of every tenancy
+  and region. A create or start still running when the reset arrives removes what it started
+  once it finishes.
 
 With `FLOCI_OCI_SERVICES_CONTAINERINSTANCES_MOCK=true` nothing touches Docker: instances and
 containers are `ACTIVE` as soon as they are created, work requests are `SUCCEEDED`, the VNIC gets

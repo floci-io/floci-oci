@@ -5,6 +5,7 @@ import io.floci.oci.core.common.NetworkReferences;
 import io.floci.oci.core.common.OciContext;
 import io.floci.oci.core.common.OciException;
 import io.floci.oci.core.storage.InMemoryStorage;
+import io.floci.oci.core.storage.TenancyAwareStorageBackend;
 import io.floci.oci.core.workrequest.StoredWorkRequest;
 import io.floci.oci.core.workrequest.WorkRequestService;
 import io.floci.oci.services.containerinstances.model.StoredContainer;
@@ -21,6 +22,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.UnaryOperator;
 
@@ -363,6 +365,20 @@ class ContainerInstancesServiceTest {
     }
 
     @Test
+    void aStopThatLandsWhileThePolicyCheckRunsIsNotUndone() {
+        String id = real.create(details()).instance().getId();
+        when(manager.state(any())).thenAnswer(call -> {
+            real.stop(id, null);
+            return Optional.of(new ContainerInstanceManager.ContainerState(false, 137, null));
+        });
+
+        real.refreshActive();
+
+        verify(manager, never()).restartContainer(any(), any());
+        assertEquals("INACTIVE", real.get(id).getLifecycleState());
+    }
+
+    @Test
     void theRestartPolicyAndRestartActionPassTheInstanceForItsShutdownTimeout() {
         Map<String, Object> d = details();
         d.put("gracefulShutdownTimeoutInSeconds", 42);
@@ -371,6 +387,50 @@ class ContainerInstancesServiceTest {
         ArgumentCaptor<StoredContainerInstance> instance = ArgumentCaptor.forClass(StoredContainerInstance.class);
         verify(manager).restartContainer(instance.capture(), any());
         assertEquals(42L, instance.getValue().getAttributes().get("gracefulShutdownTimeoutInSeconds"));
+    }
+
+    @Test
+    void anInstanceForgottenByAResetWhileStartingHasItsPodRemoved() {
+        when(manager.startPod(any(), anyList(), any())).thenAnswer(call -> {
+            real.clear();
+            return "172.18.0.9";
+        });
+
+        real.create(details());
+
+        verify(manager, times(2)).removePod(any(), anyList());
+        verify(network, never()).setVnicPrivateIp(any(), any());
+    }
+
+    @Test
+    void resetAndShutdownFindTheContainersOfEveryPartition() {
+        AtomicReference<String> partition = new AtomicReference<>("tenancy-a");
+        TenancyAwareStorageBackend<StoredContainerInstance> partitionedInstances =
+                new TenancyAwareStorageBackend<>(new InMemoryStorage<>(), partition::get);
+        TenancyAwareStorageBackend<StoredContainer> partitionedContainers =
+                new TenancyAwareStorageBackend<>(new InMemoryStorage<>(), partition::get);
+        ContainerInstancesService partitioned = new ContainerInstancesService(partitionedInstances,
+                partitionedContainers, config, null, workRequests, manager, OciContext.fromConfig(config), network,
+                UnaryOperator.identity(), ad -> ad.equalsIgnoreCase(AD), null, (tenancy, region, task) -> task.run(),
+                new MutableClock(), Runnable::run);
+        partitioned.create(details());
+        partition.set("tenancy-b");
+
+        partitioned.shutdown();
+        partitioned.clear();
+
+        ArgumentCaptor<List<StoredContainer>> stopped = listCaptor();
+        verify(manager).stopPod(any(), stopped.capture());
+        assertEquals(1, stopped.getValue().size());
+        ArgumentCaptor<List<StoredContainer>> removed = listCaptor();
+        verify(manager).removePod(any(), removed.capture());
+        assertEquals(1, removed.getValue().size());
+        assertTrue(TenancyAwareStorageBackend.scanAll(partitionedInstances).isEmpty());
+    }
+
+    @SuppressWarnings("unchecked")
+    private static ArgumentCaptor<List<StoredContainer>> listCaptor() {
+        return ArgumentCaptor.forClass(List.class);
     }
 
     @Test

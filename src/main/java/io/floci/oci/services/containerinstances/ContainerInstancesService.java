@@ -54,6 +54,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.function.UnaryOperator;
@@ -68,7 +69,9 @@ import java.util.function.UnaryOperator;
  * <p>Every change to stored state happens under this object's lock. The Docker work runs on one
  * worker thread outside it, inside a request context for the instance's tenancy and region, and
  * records its outcome under the lock again, so a delete that arrives while a start is running
- * wins.
+ * wins. The restart-policy check runs on that same worker, so it never overlaps a stop, start,
+ * restart or delete. A step that finishes after its instance was forgotten (a state reset)
+ * removes what it started.
  */
 @ApplicationScoped
 public class ContainerInstancesService implements Resettable, CompartmentUsage {
@@ -111,6 +114,7 @@ public class ContainerInstancesService implements Resettable, CompartmentUsage {
     private final Executor lifecycle;
     private final ExecutorService ownedLifecycle;
     private final ScheduledExecutorService poller;
+    private final AtomicBoolean refreshQueued = new AtomicBoolean();
 
     @Inject
     public ContainerInstancesService(StorageFactory storageFactory, EmulatorConfig config,
@@ -181,10 +185,11 @@ public class ContainerInstancesService implements Resettable, CompartmentUsage {
             ownedLifecycle.shutdownNow();
         }
         if (realMode()) {
+            Map<String, StoredContainer> everyContainer = containersById();
             for (StoredContainerInstance instance : TenancyAwareStorageBackend.scanAll(instances)) {
                 if (Set.of("ACTIVE", "UPDATING", "CREATING").contains(instance.getLifecycleState())) {
                     try {
-                        manager.stopPod(instance, containersOf(instance));
+                        manager.stopPod(instance, containersOf(instance, everyContainer));
                     } catch (RuntimeException e) {
                         LOG.warnv("Could not stop container instance {0}: {1}", instance.getId(), e.getMessage());
                     }
@@ -196,10 +201,11 @@ public class ContainerInstancesService implements Resettable, CompartmentUsage {
     /** Removes every pod and volume, then forgets every container instance and its VNICs. */
     @Override
     public synchronized void clear() {
+        Map<String, StoredContainer> everyContainer = realMode() ? containersById() : Map.of();
         for (StoredContainerInstance instance : TenancyAwareStorageBackend.scanAll(instances)) {
             if (realMode()) {
                 try {
-                    manager.removePod(instance, containersOf(instance));
+                    manager.removePod(instance, containersOf(instance, everyContainer));
                 } catch (RuntimeException e) {
                     LOG.warnv("Could not remove container instance {0}: {1}", instance.getId(), e.getMessage());
                 }
@@ -498,6 +504,32 @@ public class ContainerInstancesService implements Resettable, CompartmentUsage {
         return found;
     }
 
+    /**
+     * The containers of {@code instance} out of {@code everyContainer}, for work that walks every
+     * tenancy and region at once (reset, shutdown), where {@link #containersOf(StoredContainerInstance)}
+     * would read only the current partition.
+     */
+    private static List<StoredContainer> containersOf(StoredContainerInstance instance,
+                                                      Map<String, StoredContainer> everyContainer) {
+        List<StoredContainer> found = new ArrayList<>();
+        for (String id : instance.getContainerIds()) {
+            StoredContainer container = everyContainer.get(id);
+            if (container != null) {
+                found.add(container);
+            }
+        }
+        return found;
+    }
+
+    /** Every stored container of every tenancy and region, by OCID (OCIDs are globally unique). */
+    private Map<String, StoredContainer> containersById() {
+        Map<String, StoredContainer> byId = new LinkedHashMap<>();
+        for (StoredContainer container : TenancyAwareStorageBackend.scanAll(containers)) {
+            byId.put(container.getId(), container);
+        }
+        return byId;
+    }
+
     public List<ContainerInstancesCatalog.Shape> shapes(String compartmentId, String availabilityDomain) {
         if (compartmentId == null) {
             throw OciException.missingParameter("Missing required parameter: compartmentId");
@@ -709,7 +741,20 @@ public class ContainerInstancesService implements Resettable, CompartmentUsage {
                 failure = e;
             }
             settle(id, workRequestId, failure, "ACTIVE", "FAILED", ip);
+            if (snapshot(id) == null) {
+                removeOrphan(current);
+            }
         });
+    }
+
+    /** Removes the pod of an instance that was forgotten (a state reset) while it was starting. */
+    private void removeOrphan(StoredContainerInstance forgotten) {
+        try {
+            manager.removePod(forgotten, containersOf(forgotten));
+        } catch (RuntimeException e) {
+            LOG.warnv("Could not remove the pod of forgotten container instance {0}: {1}", forgotten.getId(),
+                    e.getMessage());
+        }
     }
 
     /**
@@ -821,10 +866,21 @@ public class ContainerInstancesService implements Resettable, CompartmentUsage {
                     partitionsWithWork.add(List.of(instance.getTenancyId(), instance.getRegion()));
                 }
             }
-            for (List<String> partition : partitionsWithWork) {
-                partitions.runAs(partition.get(0), partition.get(1), this::refreshActive);
+            if (partitionsWithWork.isEmpty() || !refreshQueued.compareAndSet(false, true)) {
+                return;
             }
+            lifecycle.execute(() -> {
+                refreshQueued.set(false);
+                for (List<String> partition : partitionsWithWork) {
+                    try {
+                        partitions.runAs(partition.get(0), partition.get(1), this::refreshActive);
+                    } catch (RuntimeException e) {
+                        LOG.warnv("Container instance poll failed in {0}: {1}", partition, e.getMessage());
+                    }
+                }
+            });
         } catch (RuntimeException e) {
+            refreshQueued.set(false);
             LOG.warnv("Container instance poll failed: {0}", e.getMessage());
         }
     }
@@ -833,7 +889,9 @@ public class ContainerInstancesService implements Resettable, CompartmentUsage {
      * Reads what Docker reports for the containers of every ACTIVE instance in the current
      * partition: a container that exited is restarted when the restart policy says so (ALWAYS, or
      * ON_FAILURE with a non-zero exit code), otherwise it becomes INACTIVE with its exit code; an
-     * instance whose containers have all stopped becomes INACTIVE.
+     * instance whose containers have all stopped becomes INACTIVE. It runs on the lifecycle worker,
+     * and a container is restarted only while its instance is still ACTIVE with no lifecycle step
+     * pending, so a stop the user asked for is never undone.
      */
     void refreshActive() {
         List<StoredContainerInstance> active = instances.scan(k -> true).stream()
@@ -851,6 +909,9 @@ public class ContainerInstancesService implements Resettable, CompartmentUsage {
                 }
                 Integer exitCode = state.get().exitCode();
                 boolean restart = "ALWAYS".equals(policy) || ("ON_FAILURE".equals(policy) && !Integer.valueOf(0).equals(exitCode));
+                if (!stillRunnable(instance.getId(), container.getId())) {
+                    continue;
+                }
                 if (restart) {
                     try {
                         manager.restartContainer(instance, container);
@@ -882,6 +943,13 @@ public class ContainerInstancesService implements Resettable, CompartmentUsage {
                 }
             }
         }
+    }
+
+    /** Whether the instance is still ACTIVE with no step pending and the container still ACTIVE. */
+    private synchronized boolean stillRunnable(String instanceId, String containerId) {
+        StoredContainerInstance current = instances.get(instanceId).orElse(null);
+        return current != null && "ACTIVE".equals(current.getLifecycleState()) && current.getWorkRequestId() == null
+                && containers.get(containerId).map(c -> "ACTIVE".equals(c.getLifecycleState())).orElse(false);
     }
 
     /**
