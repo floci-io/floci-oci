@@ -5,6 +5,7 @@ import jakarta.enterprise.inject.Instance;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Checks the VCN, subnet and network security group OCIDs other services take in a request body
@@ -12,6 +13,9 @@ import java.util.List;
  * not resolve in the caller's tenancy and region is a 400 RelatedResourceNotAuthorizedOrNotFound,
  * the body-reference error of Oracle's global catalog. Null and empty arguments are not checked:
  * whether a field is required is the caller's rule.
+ *
+ * <p>It also attaches VNICs for services that place something on a subnet (Container Instances),
+ * so Core GetVnic can return them.
  */
 public interface NetworkReferences {
 
@@ -28,13 +32,55 @@ public interface NetworkReferences {
         @Override
         public void requireNsgs(Collection<String> nsgIds) {
         }
+
+        @Override
+        public String attachVnic(VnicRequest request) {
+            return Ocids.generateGlobal("vnic", "oc1");
+        }
+
+        @Override
+        public void setVnicPrivateIp(String vnicId, String privateIp) {
+        }
+
+        @Override
+        public void detachVnic(String vnicId) {
+        }
     };
+
+    /**
+     * A VNIC to create on a subnet (CreateContainerVnicDetails in oci-go-sdk/containerinstances).
+     *
+     * @param privateIp the requested address, or null for the next free one in the subnet
+     * @param allocatePrivateIp false to leave the address unset until {@link #setVnicPrivateIp}
+     *                          records the one the workload really got
+     */
+    record VnicRequest(String compartmentId, String availabilityDomain, String subnetId, String displayName,
+                       String hostnameLabel, List<String> nsgIds, Boolean skipSourceDestCheck, String privateIp,
+                       boolean allocatePrivateIp, boolean publicIpAssigned, Map<String, String> freeformTags,
+                       Map<String, Map<String, Object>> definedTags) {
+    }
 
     void requireVcn(String vcnId);
 
     void requireSubnets(Collection<String> subnetIds);
 
     void requireNsgs(Collection<String> nsgIds);
+
+    /**
+     * Creates a VNIC on {@code request.subnetId()} and returns its OCID. Checks the subnet and the
+     * NSGs like {@link #requireSubnets} and {@link #requireNsgs}.
+     */
+    String attachVnic(VnicRequest request);
+
+    /**
+     * Records the address the workload of a VNIC created without one really got, again each time
+     * it changes (a restarted pod can come back with another); a requested or allocated address
+     * is kept.
+     */
+    void setVnicPrivateIp(String vnicId, String privateIp);
+
+    /** Deletes a VNIC; one that is already gone is ignored. */
+    void detachVnic(String vnicId);
 
     default void requireSubnet(String subnetId) {
         if (subnetId != null) {

@@ -3,6 +3,7 @@ package io.floci.oci.compat;
 import com.oracle.bmc.Region;
 import com.oracle.bmc.auth.SimpleAuthenticationDetailsProvider;
 import com.oracle.bmc.containerengine.ContainerEngineClient;
+import com.oracle.bmc.containerinstances.ContainerInstanceClient;
 import com.oracle.bmc.core.VirtualNetworkClient;
 import com.oracle.bmc.functions.FunctionsManagementClient;
 import com.oracle.bmc.functions.WorkRequestManagementClient;
@@ -249,6 +250,13 @@ public final class EmulatorFixture {
 
     public static PostgresqlClient postgresql() {
         PostgresqlClient client = PostgresqlClient.builder()
+                .region(Region.US_ASHBURN_1).build(AUTH);
+        client.setEndpoint(ENDPOINT);
+        return client;
+    }
+
+    public static ContainerInstanceClient containerInstances() {
+        ContainerInstanceClient client = ContainerInstanceClient.builder()
                 .region(Region.US_ASHBURN_1).build(AUTH);
         client.setEndpoint(ENDPOINT);
         return client;

@@ -81,6 +81,21 @@ class MysqlServiceTest {
                                 + nsgIds.iterator().next());
             }
         }
+
+        @Override
+        public String attachVnic(VnicRequest request) {
+            throw new UnsupportedOperationException("MySQL attaches no VNICs");
+        }
+
+        @Override
+        public void setVnicPrivateIp(String vnicId, String privateIp) {
+            throw new UnsupportedOperationException("MySQL attaches no VNICs");
+        }
+
+        @Override
+        public void detachVnic(String vnicId) {
+            throw new UnsupportedOperationException("MySQL attaches no VNICs");
+        }
     };
 
     @BeforeEach

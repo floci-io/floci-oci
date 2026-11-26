@@ -66,7 +66,11 @@ public class ContainerBuilder {
         return new Builder(resolveImage(image), config, dockerHostResolver, embeddedDnsServer, currentContainerNetworkResolver);
     }
 
-    private String resolveImage(String image) {
+    /**
+     * The reference a container of {@code image} is created from, with
+     * {@code floci-oci.docker.image-registry-base} applied: what to pull before creating it.
+     */
+    public String resolveImage(String image) {
         return resolveImage(image, configuredImageRegistryBase(config));
     }
 
@@ -115,6 +119,7 @@ public class ContainerBuilder {
         private List<String> entrypoint;
         private String workingDir;
         private Long memoryBytes;
+        private Long nanoCpus;
         private final Map<Integer, Integer> portBindings = new HashMap<>();
         private final List<Integer> exposedPorts = new ArrayList<>();
         private String networkMode;
@@ -208,6 +213,14 @@ public class ContainerBuilder {
          */
         public Builder withMemoryBytes(long memoryBytes) {
             this.memoryBytes = memoryBytes;
+            return this;
+        }
+
+        /**
+         * Sets the CPU limit in billionths of a CPU (Docker's --cpus times 1e9).
+         */
+        public Builder withNanoCpus(long nanoCpus) {
+            this.nanoCpus = nanoCpus;
             return this;
         }
 
@@ -455,7 +468,8 @@ public class ContainerBuilder {
                     workingDir,
                     user,
                     List.copyOf(groupAdd),
-                    Map.copyOf(labels)
+                    Map.copyOf(labels),
+                    nanoCpus
             );
         }
     }

@@ -17,6 +17,7 @@
 | [Notifications](notifications.md) | `/20181201/topics`, `/20181201/subscriptions` | Topics, subscriptions with confirmation and unsubscribe links, PublishMessage; real HTTPS POST and Functions delivery with retries, email, Slack, PagerDuty and SMS recorded in an inspection endpoint |
 | [Container Engine for Kubernetes (OKE)](containerengine.md) | `/20180222/…` | Clusters CRUD, Node Pools CRUD, Options, Kubeconfig generation, work requests, real k3s sidecar |
 | [Container Registry (OCIR)](artifacts.md) | `/20160918/container/…`, `/v2/…` | Container repositories, images read live from the registry, container configuration with create-on-first-push; Docker push and pull through a real `registry:2` sidecar |
+| [Container Instances](container-instances.md) | `/20210415/…` | Container instances on Docker (one pod per instance on the shared network), containers, logs, start/stop/restart, restart policies, EMPTYDIR and CONFIGFILE volumes, BASIC and VAULT image pull secrets, local OCIR images, shapes, work requests; one VNIC per instance served by Networking |
 | [Database with PostgreSQL](psql.md) | `/20220915/…` | DB systems CRUD, start/stop/restart, password reset, connection details with a CA certificate, shapes, custom configurations, default configurations, backups, restore and point-in-time recovery, instance patches, failover and replicas, Kerberos and insight settings, work requests, real PostgreSQL sidecar |
 | [MySQL HeatWave](mysql.md) | `/20190415/…` | DB systems CRUD, start/stop/restart, shapes, versions, default and custom configurations, work requests, real MySQL sidecar |
 | [Organizations](organizations.md) | `/20230401/…` | Child tenancies with their own home region and isolated storage, organizations, organization tenancies, transfer approval, links and link features, invitations, governance opt-in, domains and domain governance, subscriptions and subscription mappings, orders, work requests |
@@ -65,6 +66,7 @@ FLOCI_OCI_SERVICES_OKE_ENABLED=false
 FLOCI_OCI_SERVICES_ARTIFACTS_ENABLED=false
 FLOCI_OCI_SERVICES_PSQL_ENABLED=false
 FLOCI_OCI_SERVICES_MYSQL_ENABLED=false
+FLOCI_OCI_SERVICES_CONTAINERINSTANCES_ENABLED=false
 ```
 
 Disabled services answer `503 ServiceUnavailable`.
