@@ -15,9 +15,11 @@ import org.mockito.Answers;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
@@ -242,6 +244,75 @@ class StreamingKafkaServiceTest {
         service.clear();
         verify(kafka).purge(any());
         assertTrue(service.listStreamPools(COMPARTMENT, null, null, null, null, null).isEmpty());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void aGroupReadBuffersNoMoreRecordsThanTheLimitAcrossPartitions() {
+        StoredStream stream = activeStream("wide", 20);
+        AtomicInteger loaded = new AtomicInteger();
+        when(kafka.read(any(), eq("wide"), anyInt(), anyLong(), anyInt())).thenAnswer(invocation -> {
+            long from = invocation.getArgument(3);
+            int max = invocation.getArgument(4);
+            List<StoredEntry> entries = new ArrayList<>();
+            for (long offset = from; offset < from + max; offset++) {
+                StoredEntry entry = new StoredEntry();
+                entry.setOffset(offset);
+                entry.setValue(b64("m" + offset));
+                entry.setTimestamp("2026-11-25T00:00:00Z");
+                entries.add(entry);
+            }
+            loaded.addAndGet(entries.size());
+            return entries;
+        });
+
+        String cursor = service.createGroupCursor(stream.getId(), "g", "TRIM_HORIZON", null, false);
+        StreamingService.ConsumeResult read = service.getMessages(stream.getId(), cursor, 100);
+
+        assertEquals(100, read.messages().size());
+        assertEquals(100, loaded.get());
+        for (int i = 0; i < 20; i++) {
+            assertEquals(String.valueOf(i), read.messages().get(i).get("partition"));
+            assertEquals(0L, read.messages().get(i).get("offset"));
+        }
+        assertEquals("1", read.messages().get(21).get("partition"));
+        assertEquals(1L, read.messages().get(21).get("offset"));
+
+        service.consumerCommit(stream.getId(), read.nextCursor());
+        Map<String, Object> group = service.getGroup(stream.getId(), "g");
+        List<Map<String, Object>> reservations = (List<Map<String, Object>>) group.get("reservations");
+        assertEquals(20, reservations.size());
+        reservations.forEach(reservation -> assertEquals(5L, reservation.get("committedOffset")));
+    }
+
+    @Test
+    void aGroupReadRefillsTheOnlyPartitionWithRecordsUpToTheLimit() {
+        StoredStream stream = activeStream("skewed", 4);
+        AtomicInteger loaded = new AtomicInteger();
+        when(kafka.read(any(), eq("skewed"), anyInt(), anyLong(), anyInt())).thenAnswer(invocation -> {
+            int partition = invocation.getArgument(2);
+            long from = invocation.getArgument(3);
+            int max = invocation.getArgument(4);
+            List<StoredEntry> entries = new ArrayList<>();
+            for (long offset = from; partition == 0 && offset < Math.min(from + max, 50); offset++) {
+                StoredEntry entry = new StoredEntry();
+                entry.setOffset(offset);
+                entry.setValue(b64("m" + offset));
+                entry.setTimestamp("2026-11-25T00:00:00Z");
+                entries.add(entry);
+            }
+            loaded.addAndGet(entries.size());
+            return entries;
+        });
+
+        String cursor = service.createGroupCursor(stream.getId(), "g", "TRIM_HORIZON", null, false);
+        StreamingService.ConsumeResult read = service.getMessages(stream.getId(), cursor, 20);
+
+        assertEquals(20, read.messages().size());
+        assertEquals(20, loaded.get());
+        for (int i = 0; i < 20; i++) {
+            assertEquals((long) i, read.messages().get(i).get("offset"));
+        }
     }
 
     private StoredStream activeStream(String name, int partitions) {

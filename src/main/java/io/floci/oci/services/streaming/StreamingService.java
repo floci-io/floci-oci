@@ -28,15 +28,18 @@ import org.jboss.logging.Logger;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Instant;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.TreeMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
@@ -643,30 +646,51 @@ public class StreamingService implements CompartmentUsage, Resettable {
             nextCursor = encode("P|" + streamId + "|" + partition + "|" + position);
         } else {
             Map<Integer, Long> positions = parsePositions(parts[3]);
-            Map<Integer, List<StoredEntry>> pending = new LinkedHashMap<>();
-            for (Map.Entry<Integer, Long> position : positions.entrySet()) {
-                pending.put(position.getKey(), new ArrayList<>(
-                        log.read(stream, position.getKey(), position.getValue(), max)));
-            }
-            // One message per partition per round, so no partition starves the others.
-            boolean progress = true;
-            while (messages.size() < max && progress) {
-                progress = false;
-                for (Map.Entry<Integer, List<StoredEntry>> partitionEntries : pending.entrySet()) {
-                    if (messages.size() >= max) {
-                        break;
-                    }
-                    if (!partitionEntries.getValue().isEmpty()) {
-                        StoredEntry entry = partitionEntries.getValue().remove(0);
-                        messages.add(messageJson(stream, partitionEntries.getKey(), entry));
-                        positions.put(partitionEntries.getKey(), entry.getOffset() + 1);
-                        progress = true;
-                    }
-                }
-            }
+            readRoundRobin(stream, log, positions, max, messages);
             nextCursor = encode("G|" + streamId + "|" + parts[2] + "|" + formatPositions(positions));
         }
         return new ConsumeResult(messages, nextCursor);
+    }
+
+    /**
+     * Takes one message per partition per round, so no partition starves the others, and
+     * advances {@code positions} past each one taken. A partition is read only when its buffer
+     * runs dry, for its share of what the response still has room for, so the records buffered
+     * across partitions stay near {@code max} however many partitions the stream has.
+     */
+    private void readRoundRobin(StoredStream stream, StreamLog log, Map<Integer, Long> positions, int max,
+                                List<Map<String, Object>> messages) {
+        Map<Integer, ArrayDeque<StoredEntry>> buffered = new LinkedHashMap<>();
+        Set<Integer> drained = new HashSet<>();
+        for (Integer partition : positions.keySet()) {
+            buffered.put(partition, new ArrayDeque<>());
+        }
+        boolean progress = true;
+        while (messages.size() < max && progress) {
+            progress = false;
+            for (Map.Entry<Integer, ArrayDeque<StoredEntry>> partitionEntries : buffered.entrySet()) {
+                if (messages.size() >= max) {
+                    break;
+                }
+                int partition = partitionEntries.getKey();
+                ArrayDeque<StoredEntry> buffer = partitionEntries.getValue();
+                if (buffer.isEmpty() && !drained.contains(partition)) {
+                    int open = buffered.size() - drained.size();
+                    int share = Math.ceilDiv(max - messages.size(), open);
+                    List<StoredEntry> read = log.read(stream, partition, positions.get(partition), share);
+                    if (read.size() < share) {
+                        drained.add(partition);
+                    }
+                    buffer.addAll(read);
+                }
+                StoredEntry entry = buffer.poll();
+                if (entry != null) {
+                    messages.add(messageJson(stream, partition, entry));
+                    positions.put(partition, entry.getOffset() + 1);
+                    progress = true;
+                }
+            }
+        }
     }
 
     /** Commits a group cursor's positions and returns a refreshed cursor. */

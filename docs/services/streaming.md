@@ -128,6 +128,9 @@ kcat -b "$BOOTSTRAP" -t orders -C -e
   stream is a 400.
 - Committing a group cursor persists per-partition offsets; a fresh group cursor for the
   same group resumes from them.
+- GetMessages on a group cursor takes one message from each partition in turn until `limit`
+  is reached. Each partition is read only for its share of what the response still has room
+  for, so a wide stream never loads much more than `limit` records for one call.
 
 ## Quickstart
 
