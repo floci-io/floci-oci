@@ -66,7 +66,11 @@ public class ContainerBuilder {
         return new Builder(resolveImage(image), config, dockerHostResolver, embeddedDnsServer, currentContainerNetworkResolver);
     }
 
-    private String resolveImage(String image) {
+    /**
+     * The reference a container of {@code image} is created from, with
+     * {@code floci-oci.docker.image-registry-base} applied: what to pull before creating it.
+     */
+    public String resolveImage(String image) {
         return resolveImage(image, configuredImageRegistryBase(config));
     }
 

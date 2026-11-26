@@ -109,8 +109,9 @@ public class ContainerInstanceManager {
 
     /**
      * Pulls every image, starts the pause container and then the containers, in order. Returns the
-     * pod's IP address on its Docker network, or null when Docker reports none. On failure what
-     * was started is removed again and the exception propagates.
+     * pod's IP address on its Docker network, or null when Docker reports none. On failure the
+     * containers that were started are removed again and the exception propagates; the volumes are
+     * kept, since a rebuild of a stopped instance must not lose its EMPTYDIR data.
      *
      * @param pullable turns a stored image reference into one the daemon can pull (local OCIR)
      */
@@ -118,7 +119,7 @@ public class ContainerInstanceManager {
                     UnaryOperator<String> pullable) {
         try {
             for (StoredContainer container : containers) {
-                pull(instance, pullable.apply(container.getImageUrl()));
+                pull(instance, containerBuilder.resolveImage(pullable.apply(container.getImageUrl())));
             }
             String pause = podName(instance);
             lifecycle.removeIfExists(pause);
@@ -135,7 +136,9 @@ public class ContainerInstanceManager {
             return podIp(pause, pauseSpec.networkMode());
         } catch (RuntimeException e) {
             try {
-                removePod(instance, containers);
+                Failures failures = new Failures();
+                removeContainers(failures, instance, containers);
+                failures.throwIfAny();
             } catch (RuntimeException cleanup) {
                 e.addSuppressed(cleanup);
             }
@@ -284,7 +287,11 @@ public class ContainerInstanceManager {
         }
     }
 
-    /** A POSIX ustar archive of {@code files}, keyed by absolute path; Docker creates the parents. */
+    /**
+     * A POSIX ustar archive of {@code files}, keyed by absolute path; Docker creates the parents.
+     * Names are UTF-8 and measured in bytes: one that fits neither the 100-byte name field nor a
+     * 155-byte prefix plus a 100-byte name is refused, never cut short.
+     */
     static byte[] tar(Map<String, byte[]> files) {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         long mtime = Instant.now().getEpochSecond();
@@ -292,10 +299,13 @@ public class ContainerInstanceManager {
             String name = path.replaceAll("/+", "/").replaceFirst("^/", "");
             byte[] header = new byte[512];
             String prefix = "";
-            if (name.length() > 100) {
-                int split = name.lastIndexOf('/', 155);
-                if (split <= 0 || name.length() - split - 1 > 100) {
-                    throw new IllegalArgumentException("Config file path too long: " + path);
+            if (utf8Length(name) > 100) {
+                int split = name.lastIndexOf('/');
+                while (split > 0 && utf8Length(name.substring(0, split)) > 155) {
+                    split = name.lastIndexOf('/', split - 1);
+                }
+                if (split <= 0 || utf8Length(name.substring(split + 1)) > 100) {
+                    throw new IllegalArgumentException("Config file path too long for a tar header: " + path);
                 }
                 prefix = name.substring(0, split);
                 name = name.substring(split + 1);
@@ -337,9 +347,16 @@ public class ContainerInstanceManager {
         return text.toString();
     }
 
+    private static int utf8Length(String text) {
+        return text.getBytes(StandardCharsets.UTF_8).length;
+    }
+
     private static void put(byte[] header, int offset, String value, int length) {
         byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
-        System.arraycopy(bytes, 0, header, offset, Math.min(bytes.length, length));
+        if (bytes.length > length) {
+            throw new IllegalArgumentException("Tar header field of " + length + " bytes cannot hold " + value);
+        }
+        System.arraycopy(bytes, 0, header, offset, bytes.length);
     }
 
     private static Map<String, Object> volume(StoredContainerInstance instance, String name) {
@@ -438,18 +455,27 @@ public class ContainerInstanceManager {
      */
     void removePod(StoredContainerInstance instance, List<StoredContainer> containers) {
         Failures failures = new Failures();
+        removeContainers(failures, instance, containers);
+        for (Map<String, Object> volume : mapList(instance.getAttributes().get("volumes"))) {
+            String name = String.valueOf(volume.get("name"));
+            failures.attempt(() -> lifecycle.deleteVolume(volumeName(instance, name)));
+        }
+        failures.throwIfAny();
+    }
+
+    /** Removes the containers, the pause container and the seed helpers, keeping the volumes. */
+    private void removeContainers(Failures failures, StoredContainerInstance instance,
+                                  List<StoredContainer> containers) {
         for (StoredContainer container : containers) {
             failures.attempt(() -> lifecycle.forceRemove(containerName(container)));
         }
         failures.attempt(() -> lifecycle.forceRemove(podName(instance)));
         for (Map<String, Object> volume : mapList(instance.getAttributes().get("volumes"))) {
-            String name = String.valueOf(volume.get("name"));
             if ("CONFIGFILE".equals(volume.get("volumeType"))) {
+                String name = String.valueOf(volume.get("name"));
                 failures.attempt(() -> lifecycle.forceRemove(seedName(instance, name)));
             }
-            failures.attempt(() -> lifecycle.deleteVolume(volumeName(instance, name)));
         }
-        failures.throwIfAny();
     }
 
     /** Runs every step and keeps the first failure, with the later ones suppressed on it. */

@@ -51,6 +51,7 @@ class ContainerInstanceManagerTest {
         spec = mock(ContainerBuilder.Builder.class, invocation ->
                 invocation.getMethod().getReturnType() == ContainerBuilder.Builder.class ? invocation.getMock() : null);
         lenient().when(builder.newContainer(anyString())).thenReturn(spec);
+        lenient().when(builder.resolveImage(anyString())).thenAnswer(call -> call.getArgument(0));
         lenient().when(spec.build()).thenReturn(new ContainerSpec("busybox"));
         lifecycle = mock(ContainerLifecycleManager.class, RETURNS_DEEP_STUBS);
         lenient().when(lifecycle.create(any())).thenReturn("created-id");
@@ -148,6 +149,9 @@ class ContainerInstanceManagerTest {
 
         assertTrue(e.getMessage().contains("removal failed"), e.getMessage());
         verify(lifecycle, never()).startCreated(any(), any());
+        verify(lifecycle, never()).deleteVolume(anyString());
+
+        manager.removePod(instance, List.of(container));
         InOrder order = inOrder(lifecycle);
         order.verify(lifecycle).forceRemove(seed);
         order.verify(lifecycle).deleteVolume(volume);
@@ -228,6 +232,31 @@ class ContainerInstanceManagerTest {
     }
 
     @Test
+    void aFailedRebuildOfAStoppedPodKeepsItsVolumes() {
+        StoredContainerInstance instance = instance(List.of(Map.of("name", "data", "volumeType", "EMPTYDIR")));
+        StoredContainer container = container(Map.of());
+        when(lifecycle.findByName(anyString())).thenReturn(Optional.empty());
+        doThrow(new IllegalStateException("pull failed")).when(images).ensureImageExists(anyString());
+
+        assertThrows(IllegalStateException.class, () -> manager.restartPod(instance, List.of(container), i -> i));
+
+        verify(lifecycle).forceRemove(manager.podName(instance));
+        verify(lifecycle, never()).deleteVolume(anyString());
+    }
+
+    @Test
+    void imagesArePulledThroughTheConfiguredMirror() {
+        when(builder.resolveImage("busybox:1.36")).thenReturn("mirror.example/busybox:1.36");
+        StoredContainer container = container(Map.of());
+        container.setImageUrl("busybox:1.36");
+
+        manager.startPod(instance(List.of()), List.of(container), image -> image);
+
+        verify(images).ensureImageExists("mirror.example/busybox:1.36");
+        verify(images, never()).ensureImageExists("busybox:1.36");
+    }
+
+    @Test
     void removeTriesEverythingAndThrowsWhatDockerCouldNotRemove() {
         StoredContainerInstance instance = instance(List.of(Map.of("name", "shm", "volumeType", "EMPTYDIR",
                 "backingStore", "MEMORY")));
@@ -283,6 +312,17 @@ class ContainerInstanceManagerTest {
         assertArrayEquals(new byte[]{1, 2, 3}, files.get(path.substring(1)));
     }
 
+    @Test
+    void namesAreMeasuredInUtf8Bytes() {
+        String fits = "/etc/" + "é".repeat(45) + ".conf";
+        Map<String, byte[]> files = untar(ContainerInstanceManager.tar(Map.of(fits, new byte[]{7})));
+        assertArrayEquals(new byte[]{7}, files.get(fits.substring(1)));
+
+        String tooLong = "/etc/" + "é".repeat(60);
+        assertThrows(IllegalArgumentException.class,
+                () -> ContainerInstanceManager.tar(Map.of(tooLong, new byte[]{7})));
+    }
+
     /** Reads back what {@link ContainerInstanceManager#tar} writes: name (with prefix) to content. */
     private static Map<String, byte[]> untar(byte[] tar) {
         Map<String, byte[]> files = new LinkedHashMap<>();
@@ -309,7 +349,7 @@ class ContainerInstanceManagerTest {
         while (end < offset + length && tar[end] != 0) {
             end++;
         }
-        return new String(tar, offset, end - offset, StandardCharsets.US_ASCII);
+        return new String(tar, offset, end - offset, StandardCharsets.UTF_8);
     }
 
     @Test
