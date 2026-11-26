@@ -31,6 +31,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -284,8 +285,18 @@ public class NetworkingService implements CompartmentUsage, NetworkReferences {
                 }
             }
             case INTERNET_GATEWAY, NAT_GATEWAY, SERVICE_GATEWAY -> requireNotRouteTarget(r);
+            case SUBNET -> {
+                if (!vnicsOn(id).isEmpty()) {
+                    throw OciException.conflict("Subnet " + id + " still has attached VNICs.");
+                }
+            }
+            case NETWORK_SECURITY_GROUP -> {
+                if (!vnicsInNsg(id).isEmpty()) {
+                    throw OciException.conflict("Network security group " + id + " still contains VNICs.");
+                }
+            }
             default -> {
-                // subnets and network security groups have no dependants floci-oci tracks
+                // the remaining kinds have no dependants floci-oci tracks
             }
         }
         if (kind != NetworkKind.VCN) {
@@ -948,6 +959,151 @@ public class NetworkingService implements CompartmentUsage, NetworkReferences {
         for (String id : subnetIds) {
             requireOwned(id, NetworkKind.SUBNET, vcn, field);
         }
+    }
+
+    // ── VNICs ──────────────────────────────────────────────────────────────────
+
+    /**
+     * A VNIC on a subnet, the shape of oci-go-sdk/core/vnic.go. The private IP is the requested
+     * one, or the next free address of the subnet (OCI keeps the first two and the last address
+     * of every subnet: network, virtual router and broadcast), or unset until the workload reports
+     * the one it got. A public IP, when asked for, comes from 203.0.113.0/24 (RFC 5737), since no
+     * address floci-oci hands out is publicly routable.
+     */
+    @Override
+    public synchronized String attachVnic(VnicRequest request) {
+        if (!checksReferences()) {
+            return Ocids.generate(NetworkKind.VNIC.ocidType(), ociContext.realm(), ociContext.regionCode());
+        }
+        if (request.subnetId() == null) {
+            throw OciException.missingParameter("subnetId is required");
+        }
+        requireSubnets(List.of(request.subnetId()));
+        requireNsgs(request.nsgIds());
+        StoredNetworkResource subnet = get(NetworkKind.SUBNET, request.subnetId());
+        StoredNetworkResource vnic = newResource(NetworkKind.VNIC, request.compartmentId(), request.displayName());
+        vnic.setFreeformTags(request.freeformTags() != null ? request.freeformTags() : Map.of());
+        vnic.setDefinedTags(request.definedTags() != null ? request.definedTags() : Map.of());
+        Map<String, Object> a = vnic.getAttributes();
+        Object subnetDomain = subnet.getAttributes().get("availabilityDomain");
+        a.put("availabilityDomain", request.availabilityDomain() != null ? request.availabilityDomain() : subnetDomain);
+        a.put("subnetId", subnet.getId());
+        if (request.hostnameLabel() != null) {
+            a.put("hostnameLabel", request.hostnameLabel());
+        }
+        a.put("nsgIds", request.nsgIds() != null ? List.copyOf(request.nsgIds()) : List.of());
+        a.put("skipSourceDestCheck", Boolean.TRUE.equals(request.skipSourceDestCheck()));
+        a.put("isPrimary", true);
+        a.put("macAddress", syntheticMac());
+        a.put("ipv6Addresses", List.of());
+        String privateIp = privateIp(subnet, request.privateIp(), request.allocatePrivateIp());
+        if (privateIp != null) {
+            a.put("privateIp", privateIp);
+        }
+        if (request.publicIpAssigned()) {
+            a.put("publicIp", "203.0.113." + ThreadLocalRandom.current().nextInt(1, 255));
+        }
+        resources.put(vnic.getId(), vnic);
+        LOG.infov("attach vnic {0} on subnet {1}", vnic.getId(), subnet.getId());
+        return vnic.getId();
+    }
+
+    private String privateIp(StoredNetworkResource subnet, String requested, boolean allocate) {
+        Cidr4 cidr = parseCidr((String) subnet.getAttributes().get("cidrBlock"));
+        Set<String> taken = new HashSet<>();
+        for (StoredNetworkResource vnic : vnicsOn(subnet.getId())) {
+            if (vnic.getAttributes().get("privateIp") instanceof String ip) {
+                taken.add(ip);
+            }
+        }
+        if (requested != null) {
+            boolean inSubnet = Cidr4.parse(requested + "/32").map(cidr::contains).orElse(false);
+            if (!inSubnet) {
+                throw OciException.invalidParameter("privateIp " + requested + " is not in subnet " + subnet.getId()
+                        + " (" + cidr + ")");
+            }
+            if (taken.contains(requested)) {
+                throw OciException.conflict("privateIp " + requested + " is already in use in subnet " + subnet.getId());
+            }
+            return requested;
+        }
+        if (!allocate) {
+            return null;
+        }
+        for (long offset = 2; offset < cidr.size() - 1; offset++) {
+            String candidate = cidr.addressAt(offset).orElseThrow();
+            if (!taken.contains(candidate)) {
+                return candidate;
+            }
+        }
+        throw OciException.invalidParameter("Subnet " + subnet.getId() + " has no free private IP address");
+    }
+
+    @Override
+    public synchronized void setVnicPrivateIp(String vnicId, String privateIp) {
+        resources.get(vnicId).filter(r -> r.getKind() == NetworkKind.VNIC).ifPresent(found -> {
+            if (found.getAttributes().get("privateIp") != null || privateIp == null) {
+                return;
+            }
+            StoredNetworkResource vnic = found.copy();
+            vnic.getAttributes().put("privateIp", privateIp);
+            vnic.setEtag(Etags.newEtag());
+            resources.put(vnicId, vnic);
+        });
+    }
+
+    @Override
+    public synchronized void detachVnic(String vnicId) {
+        if (vnicId != null && resources.get(vnicId).filter(r -> r.getKind() == NetworkKind.VNIC).isPresent()) {
+            resources.delete(vnicId);
+            LOG.infov("detach vnic {0}", vnicId);
+        }
+    }
+
+    /** UpdateVnic: names, tags, hostname label, NSGs and the source/destination check (UpdateVnicDetails). */
+    public synchronized StoredNetworkResource updateVnic(String vnicId, Map<String, Object> body, String ifMatch) {
+        StoredNetworkResource vnic = editable(NetworkKind.VNIC, vnicId);
+        Etags.checkIfMatch(ifMatch, vnic.getEtag());
+        Map<String, Object> b = body == null ? Map.of() : body;
+        if (b.get("nsgIds") instanceof List<?>) {
+            requireNsgs(stringList(b.get("nsgIds")));
+            vnic.getAttributes().put("nsgIds", stringList(b.get("nsgIds")));
+        }
+        if (str(b, "displayName") != null) {
+            vnic.setDisplayName(str(b, "displayName"));
+        }
+        if (str(b, "hostnameLabel") != null) {
+            vnic.getAttributes().put("hostnameLabel", str(b, "hostnameLabel"));
+        }
+        if (b.get("skipSourceDestCheck") instanceof Boolean skip) {
+            vnic.getAttributes().put("skipSourceDestCheck", skip);
+        }
+        if (b.get("freeformTags") instanceof Map<?, ?>) {
+            vnic.setFreeformTags(stringMap(b, "freeformTags"));
+        }
+        if (b.get("definedTags") instanceof Map<?, ?>) {
+            vnic.setDefinedTags(definedTags(b));
+        }
+        vnic.setEtag(Etags.newEtag());
+        resources.put(vnicId, vnic);
+        return vnic;
+    }
+
+    /** The VNICs whose NSGs include {@code nsgId}, for ListNetworkSecurityGroupVnics. */
+    public List<StoredNetworkResource> vnicsInNsg(String nsgId) {
+        get(NetworkKind.NETWORK_SECURITY_GROUP, nsgId);
+        return resources.scan(k -> true).stream()
+                .filter(r -> r.getKind() == NetworkKind.VNIC)
+                .filter(r -> stringList(r.getAttributes().get("nsgIds")).contains(nsgId))
+                .sorted(Comparator.comparing(StoredNetworkResource::getTimeCreated))
+                .toList();
+    }
+
+    private List<StoredNetworkResource> vnicsOn(String subnetId) {
+        return resources.scan(k -> true).stream()
+                .filter(r -> r.getKind() == NetworkKind.VNIC)
+                .filter(r -> subnetId.equals(r.getAttributes().get("subnetId")))
+                .toList();
     }
 
     private boolean checksReferences() {

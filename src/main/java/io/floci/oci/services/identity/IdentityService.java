@@ -779,6 +779,11 @@ public class IdentityService {
                 .toList();
     }
 
+    /** Whether {@code name} is one of the caller's availability domains in this region, ignoring case. */
+    public boolean isAvailabilityDomain(String name) {
+        return name != null && availabilityDomainNames().stream().anyMatch(name::equalsIgnoreCase);
+    }
+
     public List<Map<String, Object>> faultDomains(String compartmentId, String availabilityDomain) {
         requireNonBlank(compartmentId, "compartmentId");
         requireNonBlank(availabilityDomain, "availabilityDomain");

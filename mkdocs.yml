@@ -81,6 +81,7 @@ nav:
     - NoSQL Database: services/nosql.md
     - Container Engine (OKE): services/containerengine.md
     - Container Registry (OCIR): services/artifacts.md
+    - Container Instances: services/container-instances.md
     - Database with PostgreSQL: services/psql.md
     - MySQL HeatWave: services/mysql.md
     - Organizations: services/organizations.md

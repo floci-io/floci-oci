@@ -59,6 +59,9 @@ All configuration lives under the `floci-oci.*` prefix; every property maps to a
 | `FLOCI_OCI_SERVICES_OKE_KUBECONFIG_AUTH` | `exec` | Kubeconfig user: `exec` (real OKE `oci ce cluster generate-token`) or `token` (static bearer token). Any other value stops startup while OKE is enabled |
 | `FLOCI_OCI_SERVICES_OKE_ENDPOINT_MODE` | `host` | Cluster API address in `endpoints.kubernetes` and the kubeconfig: `host` (`https://127.0.0.1:<hostPort>`, for the Docker host) or `network` (the k3s sidecar's container name, for other containers on floci-oci's network; only when floci-oci runs in a container). Any other value stops startup while OKE is enabled |
 | `FLOCI_OCI_SERVICES_OKE_READY_TIMEOUT_SECONDS` | `300` | How long a cluster may stay `CREATING` before it goes `FAILED` |
+| `FLOCI_OCI_SERVICES_CONTAINERINSTANCES_ENABLED` | `true` | Enable/disable Container Instances |
+| `FLOCI_OCI_SERVICES_CONTAINERINSTANCES_MOCK` | `false` | Start no containers; container instances become `ACTIVE` at once and their logs are empty |
+| `FLOCI_OCI_SERVICES_CONTAINERINSTANCES_PAUSE_IMAGE` | `registry.k8s.io/pause:3.10` | Image of the container that holds each container instance's network namespace |
 | `FLOCI_OCI_SERVICES_PSQL_ENABLED` | `true` | Enable/disable Database with PostgreSQL |
 | `FLOCI_OCI_SERVICES_PSQL_MOCK` | `false` | Skip the PostgreSQL sidecar; DB systems become `ACTIVE` at once with nothing listening on their endpoint |
 | `FLOCI_OCI_SERVICES_PSQL_IMAGE` | `postgres:{major}-alpine` | PostgreSQL image for DB system sidecars; `{major}` is replaced with the major of the DB system's `dbVersion` |

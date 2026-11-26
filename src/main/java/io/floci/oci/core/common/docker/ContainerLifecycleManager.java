@@ -479,6 +479,71 @@ public class ContainerLifecycleManager {
         }
     }
 
+    /** Inspects a container, or returns empty when it does not exist. */
+    public Optional<InspectContainerResponse> inspect(String containerId) {
+        try {
+            return Optional.of(dockerClient.inspectContainerCmd(containerId).exec());
+        } catch (NotFoundException e) {
+            return Optional.empty();
+        }
+    }
+
+    /**
+     * Stops a running container, killing it after {@code timeoutSeconds}. The container is not
+     * removed.
+     *
+     * @throws NotFoundException when the container does not exist
+     */
+    public void stop(String containerId, int timeoutSeconds) {
+        dockerClient.stopContainerCmd(containerId).withTimeout(timeoutSeconds).exec();
+    }
+
+    /**
+     * Starts an existing, stopped container.
+     *
+     * @throws NotFoundException when the container does not exist
+     */
+    public void start(String containerId) {
+        dockerClient.startContainerCmd(containerId).exec();
+    }
+
+    /**
+     * Restarts a container, killing it after {@code timeoutSeconds} if it does not stop.
+     *
+     * @throws NotFoundException when the container does not exist
+     */
+    public void restart(String containerId, int timeoutSeconds) {
+        dockerClient.restartContainerCmd(containerId).withTimeout(timeoutSeconds).exec();
+    }
+
+    /**
+     * A container's stdout and stderr, interleaved as Docker kept them, truncated at about
+     * {@code limitBytes}. Empty when the container does not exist; whatever arrived so far when
+     * {@code timeout} passes or the thread is interrupted.
+     */
+    public String logs(String containerId, int limitBytes, Duration timeout) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        try {
+            dockerClient.logContainerCmd(containerId)
+                    .withStdOut(true)
+                    .withStdErr(true)
+                    .exec(new ResultCallback.Adapter<Frame>() {
+                        @Override
+                        public void onNext(Frame frame) {
+                            if (out.size() < limitBytes) {
+                                out.writeBytes(frame.getPayload());
+                            }
+                        }
+                    })
+                    .awaitCompletion(timeout.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (NotFoundException e) {
+            return "";
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        return out.toString(StandardCharsets.UTF_8);
+    }
+
     /** The {@code KEY=value} environment an existing container was created with. */
     public List<String> containerEnv(String containerId) {
         InspectContainerResponse inspect = dockerClient.inspectContainerCmd(containerId).exec();
@@ -722,6 +787,9 @@ public class ContainerLifecycleManager {
         }
 
         // Memory limit
+        if (spec.nanoCpus() != null && spec.nanoCpus() > 0) {
+            hostConfig.withNanoCPUs(spec.nanoCpus());
+        }
         if (spec.hasMemoryLimit()) {
             hostConfig.withMemory(spec.memoryBytes());
         }

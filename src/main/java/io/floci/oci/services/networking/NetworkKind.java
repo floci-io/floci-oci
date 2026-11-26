@@ -17,7 +17,9 @@ public enum NetworkKind {
     ROUTE_TABLE("routeTables", "routetable"),
     SECURITY_LIST("securityLists", "securitylist"),
     NETWORK_SECURITY_GROUP("networkSecurityGroups", "networksecuritygroup"),
-    DHCP_OPTIONS("dhcps", "dhcpoptions");
+    DHCP_OPTIONS("dhcps", "dhcpoptions"),
+    /** Not in {@link #COLLECTIONS}: VNICs are created by the services that attach them, never by CRUD. */
+    VNIC("vnics", "vnic");
 
     /** The JAX-RS path regex matching every collection, for one generic CRUD resource. */
     public static final String COLLECTIONS =

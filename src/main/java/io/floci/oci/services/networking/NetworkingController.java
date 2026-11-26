@@ -207,12 +207,36 @@ public class NetworkingController {
         return Response.ok(json).header("etag", vcn.getEtag()).build();
     }
 
-    /** floci-oci attaches no VNICs to anything, so this list is always empty. */
+    /** The VNICs in the group (NetworkSecurityGroupVnic: vnicId and timeAssociated), a bare array. */
     @GET
     @Path("/networkSecurityGroups/{id}/vnics")
-    public Response listNetworkSecurityGroupVnics(@PathParam("id") String id) {
-        service.get(NetworkKind.NETWORK_SECURITY_GROUP, id);
-        return Response.ok(List.of()).build();
+    public Response listNetworkSecurityGroupVnics(@PathParam("id") String id,
+                                                  @QueryParam("limit") Integer limit,
+                                                  @QueryParam("page") String page) {
+        List<Map<String, Object>> vnics = service.vnicsInNsg(id).stream().map(vnic -> {
+            Map<String, Object> json = new LinkedHashMap<>();
+            json.put("vnicId", vnic.getId());
+            json.put("timeAssociated", vnic.getTimeCreated());
+            return json;
+        }).toList();
+        return paged(vnics, limit, page);
+    }
+
+    // ── VNICs (created by the services that attach them) ───────────────────────
+
+    @GET
+    @Path("/vnics/{vnicId}")
+    public Response getVnic(@PathParam("vnicId") String vnicId) {
+        StoredNetworkResource vnic = service.get(NetworkKind.VNIC, vnicId);
+        return Response.ok(toWire(vnic)).header("etag", vnic.getEtag()).build();
+    }
+
+    @PUT
+    @Path("/vnics/{vnicId}")
+    public Response updateVnic(@PathParam("vnicId") String vnicId, @HeaderParam("if-match") String ifMatch,
+                               Map<String, Object> body) {
+        StoredNetworkResource vnic = service.updateVnic(vnicId, body, ifMatch);
+        return Response.ok(toWire(vnic)).header("etag", vnic.getEtag()).build();
     }
 
     // ── Wire projection ────────────────────────────────────────────────────────

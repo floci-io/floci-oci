@@ -245,6 +245,8 @@ public interface EmulatorConfig {
 
         ArtifactsServiceConfig artifacts();
 
+        ContainerInstancesServiceConfig containerinstances();
+
         interface IdentityServiceConfig {
             @WithDefault("true")
             boolean enabled();
@@ -328,6 +330,22 @@ public interface EmulatorConfig {
 
             @WithDefault("5299")
             int registryMaxPort();
+        }
+
+        interface ContainerInstancesServiceConfig {
+            @WithDefault("true")
+            boolean enabled();
+
+            /**
+             * When true, no Docker containers are started: container instances are management-plane
+             * only and become ACTIVE at once. Env: FLOCI_OCI_SERVICES_CONTAINERINSTANCES_MOCK.
+             */
+            @WithDefault("false")
+            boolean mock();
+
+            /** The image of the container that holds each container instance's network namespace. */
+            @WithDefault("registry.k8s.io/pause:3.10")
+            String pauseImage();
         }
 
         interface PsqlServiceConfig {

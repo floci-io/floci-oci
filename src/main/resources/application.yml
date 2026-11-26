@@ -157,6 +157,10 @@ floci-oci:
       kubeconfig-auth: exec  # exec = real OKE `oci ce cluster generate-token`; token = static bearer token
       endpoint-mode: host    # host = https://127.0.0.1:<hostPort>; network = sidecar container name (floci-oci in a container)
       ready-timeout-seconds: 300
+    containerinstances:
+      enabled: true
+      mock: false            # true = no Docker; container instances are management-plane only
+      pause-image: "registry.k8s.io/pause:3.10"  # holds each instance's network namespace
     psql:
       enabled: true
       mock: false            # true = no Docker; DB systems are management-plane only

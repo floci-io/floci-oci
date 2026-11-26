@@ -40,6 +40,22 @@ public class ImageCacheService {
     }
 
     public void ensureImageExists(String imageUri) {
+        ensureImageExists(imageUri, null);
+    }
+
+    /**
+     * Like {@link #ensureImageExists(String)}, pulling with {@code username} and {@code password}
+     * instead of the configured registry credentials: a resource that brings its own (a container
+     * instance's image pull secrets).
+     */
+    public void ensureImageExists(String imageUri, String username, String password) {
+        ensureImageExists(imageUri, new AuthConfig()
+                .withUsername(username)
+                .withPassword(password)
+                .withRegistryAddress(extractRegistryHost(imageUri)));
+    }
+
+    private void ensureImageExists(String imageUri, AuthConfig auth) {
         if (pulledImages.contains(imageUri)) {
             return;
         }
@@ -57,7 +73,7 @@ public class ImageCacheService {
             try {
                 runWithRetry(imageUri, MAX_PULL_ATTEMPTS, INITIAL_BACKOFF_MS,
                         () -> dockerClient.pullImageCmd(imageUri)
-                                .withAuthConfig(resolveAuth(imageUri))
+                                .withAuthConfig(auth != null ? auth : resolveAuth(imageUri))
                                 .exec(new PullImageResultCallback())
                                 .awaitCompletion(5, TimeUnit.MINUTES));
                 pulledImages.add(imageUri);

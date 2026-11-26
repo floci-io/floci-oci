@@ -14,7 +14,8 @@ port 4599. Resources are kept as state only: no Docker network is created for a 
 | Services | ListServices, GetService |
 | Route tables | Create, Get, List, Update, Delete, ChangeCompartment |
 | Security lists | Create, Get, List, Update, Delete, ChangeCompartment |
-| Network security groups | Create, Get, List, Update, Delete, ChangeCompartment; AddNetworkSecurityGroupSecurityRules, UpdateNetworkSecurityGroupSecurityRules, RemoveNetworkSecurityGroupSecurityRules, ListNetworkSecurityGroupSecurityRules, ListNetworkSecurityGroupVnics (always empty) |
+| Network security groups | Create, Get, List, Update, Delete, ChangeCompartment; AddNetworkSecurityGroupSecurityRules, UpdateNetworkSecurityGroupSecurityRules, RemoveNetworkSecurityGroupSecurityRules, ListNetworkSecurityGroupSecurityRules, ListNetworkSecurityGroupVnics |
+| VNICs | GetVnic, UpdateVnic (VNICs are created by the services that attach them) |
 | DHCP options | Create, Get, List, Update, Delete, ChangeCompartment |
 
 ## Wire notes
@@ -78,10 +79,26 @@ oci network internet-gateway create $E --compartment-id "$TENANCY" --vcn-id "$VC
 With Terraform, add `oci_core.VirtualNetworkClient` to `client_host_overrides` in the
 provider block.
 
+## VNICs
+
+A VNIC is created by the service that places something on a subnet, today
+[Container Instances](container-instances.md), and deleted with it; there is no CreateVnic.
+`GetVnic` returns the `Vnic` shape of oci-go-sdk/core/vnic.go: `subnetId`, `availabilityDomain`,
+`privateIp`, `hostnameLabel`, `nsgIds`, `skipSourceDestCheck`, `isPrimary: true`, a synthetic
+`macAddress`, and `publicIp` only when one was asked for. The private IP is the one requested, the
+address the workload really got (a container instance in real mode), or else the next free one in
+the subnet, skipping the first two and the last address, which OCI keeps for the network, the
+virtual router and the broadcast. A requested address outside the subnet is `400
+InvalidParameter`, one already in use `409 Conflict`. A public IP, when asked for, comes from
+`203.0.113.0/24` (documentation addresses, RFC 5737): nothing floci-oci hands out is publicly
+routable. `UpdateVnic` changes the display name, hostname label, NSGs, `skipSourceDestCheck` and
+tags, and checks `if-match`. `ListNetworkSecurityGroupVnics` lists the VNICs in a group. A subnet
+with VNICs cannot be deleted (`409 Conflict`).
+
 ## Notes and limitations
 
 VCN and subnet CIDR changes (add, modify and remove CIDR, IPv6), VLANs, DRGs, local peering
-gateways, private and public IPs, and VNICs are not implemented.
+gateways, and private and public IP objects are not implemented.
 
 OKE, Functions and Database with PostgreSQL check every VCN, subnet and network security group
 OCID they receive against this service: one that does not exist in the caller's tenancy and region

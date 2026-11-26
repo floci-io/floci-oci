@@ -839,3 +839,59 @@ output "mysql_shape_cpu_core_count" {
 output "mysql_version_families" {
   value = length(data.oci_mysql_mysql_versions.tf_mysql_versions.versions)
 }
+
+# ── Container Instances ─────────────────────────────────────────────────────
+
+data "oci_identity_availability_domains" "tf_ads" {
+  compartment_id = var.tenancy_ocid
+}
+
+data "oci_container_instances_container_instance_shapes" "tf_ci_shapes" {
+  compartment_id = var.tenancy_ocid
+}
+
+resource "oci_container_instances_container_instance" "tf_container_instance" {
+  compartment_id      = var.tenancy_ocid
+  availability_domain = data.oci_identity_availability_domains.tf_ads.availability_domains[0].name
+  display_name        = "tf-compat-container-instance"
+  shape               = "CI.Standard.E4.Flex"
+
+  shape_config {
+    ocpus         = 1
+    memory_in_gbs = 2
+  }
+
+  containers {
+    display_name          = "tf-compat-web"
+    image_url             = "busybox:1.36"
+    command               = ["httpd"]
+    arguments             = ["-f", "-p", "8080"]
+    environment_variables = { MODE = "terraform" }
+
+    volume_mounts {
+      mount_path  = "/data"
+      volume_name = "scratch"
+    }
+  }
+
+  vnics {
+    subnet_id = oci_core_subnet.tf_private_subnet.id
+  }
+
+  volumes {
+    name        = "scratch"
+    volume_type = "EMPTYDIR"
+  }
+}
+
+output "container_instance_state" {
+  value = oci_container_instances_container_instance.tf_container_instance.state
+}
+
+output "container_instance_private_ip" {
+  value = oci_container_instances_container_instance.tf_container_instance.vnics[0].private_ip
+}
+
+output "container_instance_shape_names" {
+  value = join(",", [for shape in data.oci_container_instances_container_instance_shapes.tf_ci_shapes.container_instance_shape_collection[0].items : shape.name])
+}

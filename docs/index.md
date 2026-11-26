@@ -37,6 +37,7 @@ It implements real OCI wire protocols so the official OCI SDKs, the OCI CLI, Ter
 | Monitoring | `/20180401/…` | Custom metrics, MQL queries, alarms notifying Notifications and Streaming, suppressions |
 | Notifications | `/20181201/…` | Topics, subscriptions, publish; HTTPS and Functions delivery, other protocols recorded |
 | Container Engine for Kubernetes (OKE) | `/20180222/…` | Clusters, node pools, options, kubeconfig generation, work requests, real k3s sidecar |
+| Container Instances | `/20210415/…` | Container instances running on Docker, containers, logs, start/stop/restart, volumes, image pull secrets, shapes, work requests |
 | Database with PostgreSQL | `/20220915/…` | DB systems, start/stop/restart, password reset, connection details, shapes, default and custom configurations, backups and restore, instances and replicas, Kerberos and insight settings, work requests, real PostgreSQL sidecar |
 | MySQL HeatWave | `/20190415/…` | DB systems, start/stop/restart, shapes, versions, default and custom configurations, work requests, real MySQL sidecar |
 | Organizations | `/20230401/…` | Child tenancies, organizations, organization tenancies, links, invitations, domains, subscriptions, orders, work requests |

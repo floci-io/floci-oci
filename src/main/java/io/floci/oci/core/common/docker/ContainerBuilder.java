@@ -115,6 +115,7 @@ public class ContainerBuilder {
         private List<String> entrypoint;
         private String workingDir;
         private Long memoryBytes;
+        private Long nanoCpus;
         private final Map<Integer, Integer> portBindings = new HashMap<>();
         private final List<Integer> exposedPorts = new ArrayList<>();
         private String networkMode;
@@ -208,6 +209,14 @@ public class ContainerBuilder {
          */
         public Builder withMemoryBytes(long memoryBytes) {
             this.memoryBytes = memoryBytes;
+            return this;
+        }
+
+        /**
+         * Sets the CPU limit in billionths of a CPU (Docker's --cpus times 1e9).
+         */
+        public Builder withNanoCpus(long nanoCpus) {
+            this.nanoCpus = nanoCpus;
             return this;
         }
 
@@ -455,7 +464,8 @@ public class ContainerBuilder {
                     workingDir,
                     user,
                     List.copyOf(groupAdd),
-                    Map.copyOf(labels)
+                    Map.copyOf(labels),
+                    nanoCpus
             );
         }
     }
