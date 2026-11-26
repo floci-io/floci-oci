@@ -206,7 +206,21 @@ class StreamingKafkaDockerTest {
     @Test
     @Order(7)
     void deletingTheStreamAndPoolRemovesTheBroker() throws Exception {
-        given().when().delete("/20180418/streams/" + streamId).then().statusCode(202);
+        String streamDeleted = given().when().delete("/20180418/streams/" + streamId)
+            .then().statusCode(202).extract().header("opc-work-request-id");
+        Instant streamDeadline = Instant.now().plus(READY_TIMEOUT);
+        int status = 200;
+        while (status != 404 && Instant.now().isBefore(streamDeadline)) {
+            status = given().when().get("/20180418/streams/" + streamId).then().extract().statusCode();
+            if (status != 404) {
+                Thread.sleep(500);
+            }
+        }
+        assertEquals(404, status, "the stream is gone once its topic is deleted");
+        given().when().get("/20180418/workRequests/" + streamDeleted)
+            .then().statusCode(200).body("status", equalTo("SUCCEEDED"));
+        String topics = exec("rpk", "-X", "brokers=127.0.0.1:29092", "topic", "list");
+        assertTrue(!topics.contains(streamName), "the stream's topic is deleted: " + topics);
         String deleted = given().when().delete("/20180418/streampools/" + poolId)
             .then().statusCode(202).extract().header("opc-work-request-id");
         given().when().get("/20180418/workRequests/" + deleted)

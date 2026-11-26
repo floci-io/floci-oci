@@ -479,21 +479,38 @@ public class StreamingService implements CompartmentUsage, Resettable {
         return new UpdatedStream(stream, wr);
     }
 
+    /**
+     * Deletes a stream. One whose messages are a topic on its pool's broker stays DELETING, and
+     * keeps its name in the pool, until the broker confirms the topic is gone, so a stream
+     * created with the same name never finds the old one's messages. The record is the pending
+     * deletion: it survives a restart of floci-oci and {@link #tick} retries it once the pool's
+     * broker is back.
+     */
     public synchronized String deleteStream(String streamId, String ifMatch) {
         StoredStream stream = getStream(streamId);
         Etags.checkIfMatch(ifMatch, stream.getEtag());
-        streams.delete(streamId);
-        if (realMode() && stream.redpandaBacked()) {
-            String partition = TenancyAwareStorageBackend.regionalPartition(ociContext.tenancyId(),
-                    ociContext.region());
-            finishStreamWorkRequest(partition, stream, "CANCELED", null);
-            pools.get(stream.getStreamPoolId())
-                    .filter(pool -> "ACTIVE".equals(pool.getLifecycleState()))
-                    .ifPresent(pool -> lifecycle.execute(() -> deleteTopicQuietly(pool, stream.getName())));
+        List<StoredWorkRequest.Resource> resources = List.of(WorkRequestService.resource("stream", "DELETED",
+                streamId, "/20180418/streams/" + streamId));
+        if (!stream.redpandaBacked()) {
+            streams.delete(streamId);
+            return workRequests.succeeded(WR_SERVICE, "DELETE_STREAM", stream.getCompartmentId(), resources);
         }
-        return workRequests.succeeded(WR_SERVICE, "DELETE_STREAM", stream.getCompartmentId(),
-                List.of(WorkRequestService.resource("stream", "DELETED", streamId,
-                        "/20180418/streams/" + streamId)));
+        if ("DELETING".equals(stream.getLifecycleState())) {
+            throw new OciException("IncorrectState", "Stream " + streamId + " is DELETING", 409);
+        }
+        String partition = TenancyAwareStorageBackend.regionalPartition(ociContext.tenancyId(),
+                ociContext.region());
+        finishStreamWorkRequest(partition, stream, "CANCELED", null);
+        String wr = workRequests.inProgress(WR_SERVICE, "DELETE_STREAM", stream.getCompartmentId(), resources);
+        stream.setWorkRequestId(wr);
+        stream.setLifecycleState("DELETING");
+        stream.setEtag(Etags.newEtag());
+        streams.put(streamId, stream);
+        LOG.infov("deleteStream {0}: DELETING until the topic {1} is gone", streamId, stream.getName());
+        if (realMode()) {
+            lifecycle.execute(() -> retireStream(partition, streamId));
+        }
+        return wr;
     }
 
     public String messagesEndpoint() {
@@ -783,7 +800,8 @@ public class StreamingService implements CompartmentUsage, Resettable {
                 .anyMatch(s -> pool.getId().equals(s.getStreamPoolId()) && name.equals(s.getName())
                         && s.redpandaBacked() && !"DELETED".equals(s.getLifecycleState()));
         if (taken) {
-            throw OciException.conflict("Stream pool " + pool.getId() + " already has a stream named " + name);
+            throw OciException.conflict("Stream pool " + pool.getId() + " already has a stream named " + name
+                    + ", or one that is still DELETING");
         }
     }
 
@@ -854,10 +872,46 @@ public class StreamingService implements CompartmentUsage, Resettable {
         for (Map.Entry<String, Map<String, StoredStream>> entry
                 : TenancyAwareStorageBackend.entriesByPartition(streams, solePartition).entrySet()) {
             for (StoredStream stream : entry.getValue().values()) {
-                if ("CREATING".equals(stream.getLifecycleState()) && stream.redpandaBacked()) {
-                    provisionTopic(entry.getKey(), stream);
+                if (!stream.redpandaBacked()) {
+                    continue;
+                }
+                if ("DELETING".equals(stream.getLifecycleState())) {
+                    retireStream(entry.getKey(), stream.getId());
+                } else if ("CREATING".equals(stream.getLifecycleState())) {
+                    provisionTopic(entry.getKey(), stream.getId());
                 }
             }
+        }
+    }
+
+    /**
+     * Finishes the deletion of a DELETING stream once its topic is gone. A pool whose broker is
+     * starting is waited for; a FAILED or deleted pool never runs its broker again, so nothing
+     * can reach the topic and the deletion finishes without it.
+     */
+    void retireStream(String partition, String streamId) {
+        Optional<StoredStream> found = TenancyAwareStorageBackend.getIn(streams, partition, streamId)
+                .filter(stream -> "DELETING".equals(stream.getLifecycleState()));
+        if (found.isEmpty()) {
+            return;
+        }
+        StoredStream stream = found.get();
+        Optional<StoredStreamPool> pool = TenancyAwareStorageBackend.getIn(pools, partition, stream.getStreamPoolId());
+        String poolState = pool.map(StoredStreamPool::getLifecycleState).orElse("DELETED");
+        if (List.of("CREATING", "UPDATING").contains(poolState)) {
+            return;
+        }
+        if ("ACTIVE".equals(poolState) && !deleteTopicQuietly(pool.get(), stream.getName())) {
+            return;
+        }
+        synchronized (this) {
+            TenancyAwareStorageBackend.getIn(streams, partition, streamId)
+                    .filter(current -> "DELETING".equals(current.getLifecycleState()))
+                    .ifPresent(current -> {
+                        finishStreamWorkRequest(partition, current, "SUCCEEDED", null);
+                        TenancyAwareStorageBackend.deleteAllIn(streams, partition, List.of(streamId));
+                        LOG.infov("Stream {0} is deleted", streamId);
+                    });
         }
     }
 
@@ -890,7 +944,18 @@ public class StreamingService implements CompartmentUsage, Resettable {
         }
     }
 
-    private void provisionTopic(String partition, StoredStream stream) {
+    /**
+     * Gives a CREATING stream its topic. The stream is read again rather than taken from the
+     * tick's scan, so one deleted since is left alone; its deletion is queued behind this tick
+     * on the same thread and keeps its name held until the topic is gone.
+     */
+    private void provisionTopic(String partition, String streamId) {
+        Optional<StoredStream> found = TenancyAwareStorageBackend.getIn(streams, partition, streamId)
+                .filter(current -> "CREATING".equals(current.getLifecycleState()));
+        if (found.isEmpty()) {
+            return;
+        }
+        StoredStream stream = found.get();
         Optional<StoredStreamPool> pool = TenancyAwareStorageBackend.getIn(pools, partition, stream.getStreamPoolId());
         if (pool.isPresent() && List.of("CREATING", "UPDATING").contains(pool.get().getLifecycleState())) {
             return;
@@ -1031,11 +1096,13 @@ public class StreamingService implements CompartmentUsage, Resettable {
         }
     }
 
-    private void deleteTopicQuietly(StoredStreamPool pool, String topic) {
+    /** Whether the topic is gone; false leaves it for the next {@link #tick}. */
+    private boolean deleteTopicQuietly(StoredStreamPool pool, String topic) {
         try {
-            kafka.deleteTopic(pool, topic);
+            return kafka.deleteTopic(pool, topic);
         } catch (RuntimeException e) {
             LOG.warnv("Could not delete topic {0} of stream pool {1}: {2}", topic, pool.getId(), e.getMessage());
+            return false;
         }
     }
 

@@ -178,12 +178,42 @@ public class StreamPoolKafkaManager {
         }
     }
 
-    public void deleteTopic(StoredStreamPool pool, String topic) {
+    /**
+     * Deletes the stream's topic.
+     *
+     * @return true once the broker no longer has the topic, including when it never had it
+     */
+    public boolean deleteTopic(StoredStreamPool pool, String topic) {
         ExecResult result = rpk(pool, "topic", "delete", topic);
-        if (!result.succeeded()) {
-            LOG.warnv("Could not delete topic {0} of stream pool {1} (exit {2}): {3}", topic, pool.getId(),
-                    result.exitCode(), (result.stdout() + result.stderr()).strip());
+        if (topicGone(result)) {
+            return true;
         }
+        LOG.warnv("Could not delete topic {0} of stream pool {1} (exit {2}): {3}", topic, pool.getId(),
+                result.exitCode(), (result.stdout() + result.stderr()).strip());
+        return false;
+    }
+
+    /**
+     * Whether {@code rpk topic delete} left the broker without the topic. It prints one
+     * {@code TOPIC STATUS} row per topic: {@code OK}, or the Kafka error, which for a topic that
+     * does not exist is {@code UNKNOWN_TOPIC_OR_PARTITION}.
+     */
+    static boolean topicGone(ExecResult result) {
+        String output = result.stdout() + result.stderr();
+        if (output.contains("UNKNOWN_TOPIC_OR_PARTITION")) {
+            return true;
+        }
+        if (!result.succeeded()) {
+            return false;
+        }
+        String[] lines = result.stdout().strip().split("\n");
+        for (int i = 1; i < lines.length; i++) {
+            String[] row = lines[i].trim().split("\\s+", 2);
+            if (row.length < 2 || !"OK".equals(row[1].trim())) {
+                return false;
+            }
+        }
+        return true;
     }
 
     public List<KafkaRestClient.RecordOffset> produce(StoredStreamPool pool, String topic,

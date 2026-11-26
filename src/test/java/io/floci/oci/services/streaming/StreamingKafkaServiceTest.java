@@ -11,6 +11,7 @@ import io.floci.oci.services.streaming.model.StoredStreamPool;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Answers;
+import org.mockito.InOrder;
 
 import java.time.Clock;
 import java.time.Instant;
@@ -27,9 +28,11 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -210,11 +213,93 @@ class StreamingKafkaServiceTest {
     @Test
     void deletingStreamsAndPoolsRemovesTopicsAndBrokers() {
         StoredStream stream = activeStream("gone", 1);
-        service.deleteStream(stream.getId(), null);
+        when(kafka.deleteTopic(any(), eq("gone"))).thenReturn(true);
+        String wr = service.deleteStream(stream.getId(), null);
         verify(kafka).deleteTopic(any(), eq("gone"));
+        assertThrows(OciException.class, () -> service.getStream(stream.getId()));
+        assertEquals("SUCCEEDED", workRequests.get(wr).getStatus());
 
         service.deleteStreamPool(stream.getStreamPoolId(), null);
         verify(kafka).remove(any());
+    }
+
+    @Test
+    void aDeletingStreamHoldsItsNameUntilTheTopicIsGone() {
+        StoredStream stream = activeStream("orders", 1);
+        when(kafka.deleteTopic(any(), eq("orders"))).thenReturn(false);
+
+        String wr = service.deleteStream(stream.getId(), null);
+        assertEquals("DELETING", service.getStream(stream.getId()).getLifecycleState());
+        assertEquals("IN_PROGRESS", workRequests.get(wr).getStatus());
+        OciException conflict = assertThrows(OciException.class,
+                () -> service.createStream("orders", 1, null, null, stream.getStreamPoolId(), null, null));
+        assertEquals("Conflict", conflict.getCode());
+        assertEquals(409, conflict.getHttpStatus());
+        OciException again = assertThrows(OciException.class, () -> service.deleteStream(stream.getId(), null));
+        assertEquals("IncorrectState", again.getCode());
+
+        when(kafka.deleteTopic(any(), eq("orders"))).thenReturn(true);
+        service.tick();
+        OciException gone = assertThrows(OciException.class, () -> service.getStream(stream.getId()));
+        assertEquals(404, gone.getHttpStatus());
+        assertEquals("SUCCEEDED", workRequests.get(wr).getStatus());
+
+        StoredStream replacement = service.createStream("orders", 1, null, null, stream.getStreamPoolId(),
+                null, null).stream();
+        service.tick();
+        assertEquals("ACTIVE", service.getStream(replacement.getId()).getLifecycleState());
+        InOrder order = inOrder(kafka);
+        order.verify(kafka, times(2)).deleteTopic(any(), eq("orders"));
+        order.verify(kafka).createTopic(any(), eq("orders"), eq(1), eq(24));
+    }
+
+    @Test
+    void aStreamDeletedWhileItsPoolRestartsLosesItsTopicOnceTheBrokerIsBack() {
+        StoredStream stream = activeStream("restarted", 1);
+        when(kafka.isReady(any())).thenReturn(false);
+        service.restartPersistedPools();
+        assertEquals("UPDATING", service.getStreamPool(stream.getStreamPoolId()).getLifecycleState());
+
+        service.deleteStream(stream.getId(), null);
+        service.tick();
+        verify(kafka, never()).deleteTopic(any(), any());
+        assertEquals("DELETING", service.getStream(stream.getId()).getLifecycleState());
+
+        when(kafka.isReady(any())).thenReturn(true);
+        when(kafka.deleteTopic(any(), eq("restarted"))).thenReturn(true);
+        service.tick();
+        verify(kafka).deleteTopic(any(), eq("restarted"));
+        assertThrows(OciException.class, () -> service.getStream(stream.getId()));
+    }
+
+    @Test
+    void aStreamDeletedBeforeItsTopicWasMadeNeverGetsOne() {
+        StoredStreamPool pool = service.createStreamPool("p", COMPARTMENT, null, null, null, null).pool();
+        StoredStream stream = service.createStream("early", 1, null, null, pool.getId(), null, null).stream();
+        service.deleteStream(stream.getId(), null);
+
+        when(kafka.isReady(any())).thenReturn(true);
+        when(kafka.deleteTopic(any(), eq("early"))).thenReturn(true);
+        service.tick();
+        verify(kafka, never()).createTopic(any(), any(), anyInt(), anyInt());
+        verify(kafka).deleteTopic(any(), eq("early"));
+        assertThrows(OciException.class, () -> service.getStream(stream.getId()));
+    }
+
+    @Test
+    void aStreamOfAFailedPoolIsDeletedWithoutItsBroker() {
+        StreamingService.PoolChange created = service.createStreamPool("p", COMPARTMENT, null, null, null, null);
+        StoredStream stream = service.createStream("stranded", 1, null, null, created.pool().getId(),
+                null, null).stream();
+        when(kafka.isReady(any())).thenReturn(false);
+        when(kafka.isRunning(any())).thenReturn(false);
+        service.tick();
+        assertEquals("FAILED", service.getStreamPool(created.pool().getId()).getLifecycleState());
+
+        String wr = service.deleteStream(stream.getId(), null);
+        verify(kafka, never()).deleteTopic(any(), any());
+        assertThrows(OciException.class, () -> service.getStream(stream.getId()));
+        assertEquals("SUCCEEDED", workRequests.get(wr).getStatus());
     }
 
     @Test

@@ -58,7 +58,8 @@ holds its streams and serves Kafka clients.
 - ListStreamPools is a bare JSON array and needs `compartmentId` (`400 MissingParameter`
   without it). It filters on `id`, `name` and `lifecycleState`. `sortBy=TIMECREATED`
   (the default) sorts newest first and `NAME` sorts A to Z, unless `sortOrder` says otherwise.
-- Deleting a pool that still holds streams is `409 IncorrectState` (*inferred*).
+- Deleting a pool that still holds streams, `DELETING` ones included, is `409 IncorrectState`
+  (*inferred*).
   ChangeStreamPoolCompartment moves the pool only; its streams keep their compartment
   (*inferred*).
 - A pool created with CreateStreamPool keeps its compartment from being deleted. A
@@ -84,6 +85,18 @@ With `mock: false` (the default) every stream pool, the `DefaultPool` included, 
   with the stream's partitions and `retention.ms` from `retentionInHours`. Two streams of one
   pool cannot share a name: the second one is `409 Conflict` (*inferred*: OCI accepts it and
   then fails Kafka authentication for the duplicates).
+- DeleteStream answers `202` with an `IN_PROGRESS` work request and leaves the stream
+  `DELETING`: GetStream and ListStreams still return it, PutMessages and GetMessages are
+  `409 IncorrectState`, and its name stays taken in the pool, so a CreateStream with that name
+  is `409 Conflict` until the deletion finishes. Once the broker confirms the topic is gone the
+  stream is removed (GetStream is `404`) and the work request is `SUCCEEDED`. A deletion
+  waits while the pool's broker is starting (`CREATING`, or `UPDATING` after a restart of
+  floci-oci) and resumes when it is `ACTIVE`, across restarts too. A stream of a `FAILED` pool
+  is removed at once, since that broker never runs again. A second DeleteStream on a
+  `DELETING` stream is `409 IncorrectState`. OCI documents the `DELETING` state but not how
+  long it lasts or what a repeated delete answers, so the timing and the repeated-delete error
+  are *inferred*. In mock mode a stream whose topic is on a broker stays `DELETING` until
+  floci-oci runs with `mock: false` again.
 - The broker is the only copy of the messages. PutMessages produces through Redpanda's HTTP
   proxy and GetMessages reads with `rpk` in the container, so OCI offsets are Kafka offsets and
   a message written by either side is read by the other at the same offset. PutMessages reports
@@ -124,7 +137,7 @@ kcat -b "$BOOTSTRAP" -t orders -C -e
 - Messages with a `key` hash to a stable partition; keyless messages round-robin.
 - Cursor types: `TRIM_HORIZON`, `LATEST`, `AT_OFFSET`, `AFTER_OFFSET`, `AT_TIME`.
   Group cursors support only `TRIM_HORIZON`, `LATEST`, `AT_TIME`.
-- Cursors are opaque (base64) and bound to their stream — using one against another
+- Cursors are opaque (base64) and bound to their stream: using one against another
   stream is a 400.
 - Committing a group cursor persists per-partition offsets; a fresh group cursor for the
   same group resumes from them.

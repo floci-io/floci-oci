@@ -4,13 +4,16 @@ import io.floci.oci.config.EmulatorConfig;
 import io.floci.oci.core.common.docker.ContainerBuilder;
 import io.floci.oci.core.common.docker.ContainerDetector;
 import io.floci.oci.core.common.docker.ContainerLifecycleManager;
+import io.floci.oci.core.common.docker.ContainerLifecycleManager.ExecResult;
 import io.floci.oci.core.common.docker.CurrentContainerNetworkResolver;
 import io.floci.oci.core.common.docker.PortAllocator;
 import org.junit.jupiter.api.Test;
 import org.mockito.Answers;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -34,6 +37,16 @@ class StreamPoolKafkaManagerTest {
     @Test
     void highWatermarkRejectsAMissingPartition() {
         assertThrows(IllegalStateException.class, () -> StreamPoolKafkaManager.highWatermark(DESCRIBE, 2));
+    }
+
+    @Test
+    void topicGoneReadsTheStatusOfRpkTopicDelete() {
+        assertTrue(StreamPoolKafkaManager.topicGone(new ExecResult(0, "TOPIC  STATUS\nt1     OK\n", "")));
+        assertTrue(StreamPoolKafkaManager.topicGone(new ExecResult(0, "TOPIC  STATUS\n"
+                + "t1     UNKNOWN_TOPIC_OR_PARTITION: This server does not host this topic-partition.\n", "")));
+        assertFalse(StreamPoolKafkaManager.topicGone(new ExecResult(0, "TOPIC  STATUS\n"
+                + "t1     REQUEST_TIMED_OUT: The request timed out.\n", "")));
+        assertFalse(StreamPoolKafkaManager.topicGone(new ExecResult(1, "", "unable to dial")));
     }
 
     @Test
