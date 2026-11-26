@@ -112,6 +112,7 @@ public class MysqlContainerManager {
                     .withPortBinding(MYSQL_PORT, hostPort)
                     .withNamedVolume(system.getVolumeName(), "/var/lib/mysql")
                     .withDockerNetwork(Optional.empty())
+                    .withEmbeddedDns()
                     .withLogRotation()
                     .withLabels(ContainerStorageHelper.resourceIdentityLabels(
                             "mysql", system.getId(), system.getCompartmentId(), system.getRegion()))

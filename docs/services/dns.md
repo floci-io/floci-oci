@@ -103,7 +103,9 @@ The embedded DNS server answers from the zones of the DNS service, so the sideca
 floci-oci starts resolve the records managed through the API.
 
 - **Who gets it:** the containers started with Floci's resolver: OKE's k3s node, the Functions
-  `fnserver`, and PostgreSQL DB systems. Their `/etc/resolv.conf` names the embedded server.
+  `fnserver`, PostgreSQL and MySQL DB systems, and container instances. Their `/etc/resolv.conf`
+  names the embedded server. A container instance's containers share its pause container's
+  network namespace, and with it that resolver.
 - **Only in a container:** the server starts only when floci-oci itself runs in Docker (as with
   `docker compose`). On the host, the sidecars keep Docker's resolver; set
   `FLOCI_OCI_DNS_HOST_PORT` to query the server from the host with `dig @127.0.0.1 -p <port>`.

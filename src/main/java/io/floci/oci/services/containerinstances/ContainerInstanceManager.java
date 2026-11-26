@@ -126,6 +126,9 @@ public class ContainerInstanceManager {
             ContainerSpec pauseSpec = containerBuilder.newContainer(config.services().containerinstances().pauseImage())
                     .withName(pause)
                     .withDockerNetwork(Optional.empty())
+                    // The containers join this network namespace and so its resolver: Docker
+                    // refuses --dns on a container started with --network container:<pause>.
+                    .withEmbeddedDns()
                     .withLabels(labels(instance, instance.getId()))
                     .build();
             lifecycle.createAndStart(pauseSpec);

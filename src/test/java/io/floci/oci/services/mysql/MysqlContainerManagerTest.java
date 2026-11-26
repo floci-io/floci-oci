@@ -8,6 +8,7 @@ import io.floci.oci.core.common.docker.ContainerSpec;
 import io.floci.oci.core.common.docker.DockerHostResolver;
 import io.floci.oci.core.common.docker.ImageCacheService;
 import io.floci.oci.core.common.docker.PortAllocator;
+import io.floci.oci.core.common.dns.EmbeddedDnsServer;
 import io.floci.oci.services.mysql.model.StoredMysqlDbSystem;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -40,6 +41,7 @@ class MysqlContainerManagerTest {
     private ContainerLifecycleManager lifecycleManager;
     private ImageCacheService imageCacheService;
     private PortAllocator portAllocator;
+    private EmbeddedDnsServer embeddedDns;
     private MysqlContainerManager manager;
 
     @BeforeEach
@@ -58,7 +60,9 @@ class MysqlContainerManagerTest {
         imageCacheService = mock(ImageCacheService.class);
         portAllocator = mock(PortAllocator.class);
         lenient().when(portAllocator.allocate(13306, 13405)).thenReturn(13310);
-        manager = new MysqlContainerManager(new ContainerBuilder(config, mock(DockerHostResolver.class), null),
+        embeddedDns = mock(EmbeddedDnsServer.class);
+        lenient().when(embeddedDns.getServerIp()).thenReturn(Optional.empty());
+        manager = new MysqlContainerManager(new ContainerBuilder(config, mock(DockerHostResolver.class), embeddedDns),
                 lifecycleManager, imageCacheService, portAllocator, config);
     }
 
@@ -83,6 +87,16 @@ class MysqlContainerManagerTest {
     private static String env(ContainerSpec spec, String name) {
         return spec.env().stream().filter(entry -> entry.startsWith(name + "="))
                 .map(entry -> entry.substring(name.length() + 1)).findFirst().orElse(null);
+    }
+
+    @Test
+    void theServerResolvesThroughTheEmbeddedDns() {
+        when(embeddedDns.getServerIp()).thenReturn(Optional.of("172.18.0.4"));
+        lenient().when(config.dns().containerFallbackEnabled()).thenReturn(false);
+
+        manager.start(system("adminUser"), null);
+
+        assertEquals(List.of("172.18.0.4"), started().dnsServers());
     }
 
     @Test
