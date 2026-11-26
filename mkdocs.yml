@@ -77,6 +77,7 @@ nav:
     - Notifications: services/notifications.md
     - Monitoring: services/monitoring.md
     - Logging: services/logging.md
+    - NoSQL Database: services/nosql.md
     - Container Engine (OKE): services/containerengine.md
     - Container Registry (OCIR): services/artifacts.md
     - Database with PostgreSQL: services/psql.md

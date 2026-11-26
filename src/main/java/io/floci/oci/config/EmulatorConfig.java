@@ -211,6 +211,8 @@ public interface EmulatorConfig {
 
         LoggingServiceConfig logging();
 
+        NosqlServiceConfig nosql();
+
         NetworkingServiceConfig networking();
 
         ArtifactsServiceConfig artifacts();
@@ -247,6 +249,15 @@ public interface EmulatorConfig {
         interface LoggingServiceConfig {
             @WithDefault("true")
             boolean enabled();
+        }
+
+        interface NosqlServiceConfig {
+            @WithDefault("true")
+            boolean enabled();
+
+            /** Seconds between sweeps that delete rows whose time to live has passed. */
+            @WithDefault("60")
+            int ttlSweepIntervalSeconds();
         }
 
         interface MonitoringServiceConfig {
