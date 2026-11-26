@@ -128,16 +128,27 @@ class PsqlContainerManagerTest {
     }
 
     @Test
-    void aSystemKeepsItsPortAcrossARestartWhenItIsStillFree() {
+    void aSystemKeepsItsPortAcrossARestartWhenItCanBeReclaimed() {
         StoredDbSystem system = system("16");
         system.setHostPort(15450);
-        when(portAllocator.isPortFree(15450)).thenReturn(true);
+        when(portAllocator.reclaim(15450)).thenReturn(true);
 
         manager.start(system, PASSWORD);
 
-        verify(portAllocator).markReserved(15450);
         verify(portAllocator, never()).allocate(anyInt(), anyInt());
         assertEquals(15450, system.getHostPort());
+    }
+
+    @Test
+    void aRestartTakesANewPortWhenDockerOrTheAllocatorHoldsThePreviousOne() {
+        StoredDbSystem system = system("16");
+        system.setHostPort(15450);
+        when(portAllocator.reclaim(15450)).thenReturn(false);
+
+        manager.start(system, PASSWORD);
+
+        verify(portAllocator, never()).markReserved(anyInt());
+        assertEquals(15440, system.getHostPort());
     }
 
     @Test
