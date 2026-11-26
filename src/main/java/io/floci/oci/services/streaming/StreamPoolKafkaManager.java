@@ -285,10 +285,12 @@ public class StreamPoolKafkaManager {
         return URI.create("http://" + pool.getProxyEndpoint() + "/");
     }
 
-    /** The port the pool had before, when it is still free, so its endpoint survives a restart. */
-    private int claimPort(int previous) {
-        if (previous > 0 && portAllocator.isPortFree(previous)) {
-            portAllocator.markReserved(previous);
+    /**
+     * The port the pool had before, so its endpoint survives a restart, unless this process, a
+     * running container or a local listener holds it now; otherwise a fresh port in the range.
+     */
+    int claimPort(int previous) {
+        if (previous > 0 && portAllocator.reclaim(previous)) {
             return previous;
         }
         return portAllocator.allocate(config.services().streaming().kafkaBasePort(),

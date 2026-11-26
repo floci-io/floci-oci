@@ -9,7 +9,9 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -56,6 +58,32 @@ class PortAllocatorDockerAwareTest {
         assertEquals(19903, allocated, "the first port neither published nor bound");
         verify(dockerClient, times(1)).listContainersCmd();
         allocator.release(allocated);
+    }
+
+    @Test
+    void reclaimRefusesAPortAnotherContainerPublishes() {
+        PortAllocator allocator = new PortAllocator(dockerPublishing(19910));
+
+        assertFalse(allocator.reclaim(19910));
+    }
+
+    @Test
+    void reclaimRefusesAPortThisProcessAlreadyReserved() {
+        PortAllocator allocator = new PortAllocator(dockerPublishing());
+        int allocated = allocator.allocate(19920, 19999);
+
+        assertFalse(allocator.reclaim(allocated));
+        allocator.release(allocated);
+    }
+
+    @Test
+    void reclaimReservesAFreePortSoAllocateSkipsIt() {
+        PortAllocator allocator = new PortAllocator(dockerPublishing());
+
+        assertTrue(allocator.reclaim(19930));
+        assertEquals(19931, allocator.allocate(19930, 19999));
+        allocator.release(19930);
+        allocator.release(19931);
     }
 
     @Test

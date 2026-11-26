@@ -64,6 +64,21 @@ public class PortAllocator {
     }
 
     /**
+     * Reserves {@code port} again when nothing holds it: not this process, not a running Docker
+     * container that publishes it, and not a local listener. Used to give a restarted sidecar the
+     * host port it had before, so its endpoint survives the restart.
+     *
+     * @return true when the port is now reserved for the caller, false when it is taken
+     */
+    public synchronized boolean reclaim(int port) {
+        if (port <= 0 || reserved.contains(port) || publishedHostPorts().contains(port) || !isPortFree(port)) {
+            return false;
+        }
+        reserved.add(port);
+        return true;
+    }
+
+    /**
      * Marks a port as reserved without probing whether it is free. Used on restart to
      * re-reserve host ports already held by surviving containers (e.g. persisted EC2
      * port forwards) so the allocator does not hand them out again.
