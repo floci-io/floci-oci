@@ -7,7 +7,7 @@ protocol adherence.
 |---|---|---|
 | `sdk-test-java` | oci-java-sdk (default suite) | Identity, Object Storage (incl. multipart and work requests), Queue, Streaming, KMS and Vault, OKE, PostgreSQL, Organizations, Governance Rules, NoSQL |
 | `sdk-test-python` | oci (Python SDK) | Identity, Object Storage (incl. `UploadManager` streaming), Queue, Streaming, KMS, Vault and Secrets, the Functions management plane, PostgreSQL, Organizations, Governance Rules, NoSQL, DNS |
-| `sdk-test-cli` | oci-cli (official CLI) + bats | Smoke CRUD across Identity, Object Storage, Queue, Streaming, KMS, Vault and Secrets, Functions, OKE, PostgreSQL, Organizations, NoSQL and DNS, incl. error codes and PAR access |
+| `sdk-test-cli` | oci-cli (official CLI) + bats | Smoke CRUD across Identity, Object Storage, Queue, Streaming, KMS, Vault and Secrets, Functions, OKE (incl. a pod pulling an image pushed to the local OCIR), PostgreSQL, Organizations, NoSQL and DNS, incl. error codes and PAR access |
 | `compat-terraform` | Terraform + oracle/oci provider + bats | Full apply → no-drift plan → destroy cycle over Identity, Object Storage, Queue, Streaming, KMS, Vault, OKE, PostgreSQL, NoSQL and DNS resources, plus Organizations and NoSQL data sources. No Functions: see the note in `main.tf` |
 | `compat-opentofu` | OpenTofu + oracle/oci provider + bats | Same cycle as Terraform |
 | `sdk-test-go` | oci-go-sdk + gotestsum | Identity, Object Storage (incl. multipart and work requests), Queue, Streaming, KMS, Vault and Secrets, the Functions management plane, OKE, DNS |
@@ -36,6 +36,14 @@ floci-oci with `FLOCI_OCI_SERVICES_OKE_ENDPOINT_MODE=network`, which makes the k
 point at the k3s sidecar's container name on the shared network. `docker-compose.yml` keeps
 `host` unless that variable is set. On a host-local run (`make test-cli-compat`), the case
 skips when `kubectl` is not installed.
+
+The same cluster then runs a pod from an image in the local OCIR. The suite image has no Docker
+engine, so the case copies busybox from Docker Hub into OCIR over the Registry HTTP API (the
+calls `docker push` makes) and runs it by its `iad.ocir.localhost.floci.io:4599` reference. k3s
+pulls it through the `registries.yaml` mirror floci-oci writes, which with floci-oci in a
+container points at the registry sidecar's IP on the shared network: the route
+`OkeOcirDockerTest`, with floci-oci on the host, does not cover. The case skips when `kubectl` is
+missing or the OCIR data plane answers 503 (Artifacts in mock mode).
 
 ## Running locally
 
