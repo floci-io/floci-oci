@@ -1,5 +1,6 @@
 package io.floci.oci.services.oke;
 
+import com.github.dockerjava.api.command.InspectContainerResponse;
 import io.floci.oci.config.EmulatorConfig;
 import io.floci.oci.core.common.ContainerImageResolver.RegistryMirror;
 import io.floci.oci.core.common.docker.ContainerBuilder;
@@ -25,10 +26,14 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -39,10 +44,14 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
+import static org.mockito.Mockito.after;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -719,9 +728,10 @@ class OkeClusterManagerTest {
     }
 
     @Test
-    void k3sEntrypointWritesRegistriesYamlOnlyWhenTheEnvironmentCarriesOne() {
+    void k3sEntrypointWritesRegistriesYamlOnlyWhenTheEnvironmentCarriesOneAndNoRefreshWroteIt() {
         String script = OkeClusterManager.K3S_ENTRYPOINT.get(2);
-        assertTrue(script.contains("if [ -n \"$" + OkeClusterManager.REGISTRIES_ENV + "\" ]; then"));
+        assertTrue(script.contains("if [ -n \"$" + OkeClusterManager.REGISTRIES_ENV + "\" ] && [ ! -f "
+                + OkeClusterManager.REGISTRIES_FILE + " ]; then"));
         assertTrue(script.contains("\"$" + OkeClusterManager.REGISTRIES_ENV + "\" > "
                 + OkeClusterManager.REGISTRIES_FILE + "; fi"));
         assertTrue(script.indexOf(OkeClusterManager.REGISTRIES_FILE) < script.indexOf("exec /bin/k3s"));
@@ -820,10 +830,12 @@ class OkeClusterManagerTest {
                 OkeClusterManager.REGISTRIES_ENV + "=" + registries));
         when(lifecycleManager.containerLabels(anyString())).thenReturn(
                 Map.of(ContainerStorageHelper.REGION_LABEL, "us-ashburn-1"));
+        liveRegistriesFile(registries + "\n");
 
         mirrored.startCluster(cluster);
 
         verify(lifecycleManager, never()).createAndStart(any());
+        verify(lifecycleManager, never()).restart(anyString(), anyInt());
     }
 
     @Test
@@ -844,5 +856,388 @@ class OkeClusterManagerTest {
         manager.startCluster(cluster);
 
         verify(lifecycleManager).createAndStart(any());
+    }
+
+    private static final RegistryMirror MOVED_IAD_MIRROR = new RegistryMirror(
+            List.of("iad.ocir.localhost.floci.io", "iad.ocir.localhost.floci.io:4599"),
+            "http://host.docker.internal:5201", "iad/");
+
+    private static final List<String> CAT_REGISTRIES = List.of("cat", OkeClusterManager.REGISTRIES_FILE);
+
+    private void sidecarEntrypoint(List<String> entrypoint) {
+        InspectContainerResponse inspect = mock(InspectContainerResponse.class, RETURNS_DEEP_STUBS);
+        lenient().when(inspect.getConfig().getEntrypoint()).thenReturn(entrypoint.toArray(String[]::new));
+        lenient().when(lifecycleManager.inspect(anyString())).thenReturn(Optional.of(inspect));
+    }
+
+    private void liveRegistriesFile(String content) {
+        lenient().when(lifecycleManager.exec(anyString(), eq(List.of()), eq(CAT_REGISTRIES), any()))
+                .thenReturn(content == null
+                        ? new ContainerLifecycleManager.ExecResult(1, "", "cat: no such file")
+                        : new ContainerLifecycleManager.ExecResult(0, content, ""));
+    }
+
+    @Test
+    void mirrorRefreshLeavesASidecarAloneWithoutARegistryOrWhenItIsNotRunning() {
+        String sidecar = "floci-oci-oke-refresh001";
+        assertEquals(OkeClusterManager.MirrorRefresh.NONE, manager.mirrorRefresh(sidecar, null));
+
+        when(lifecycleManager.isContainerRunning(sidecar)).thenReturn(false);
+        assertEquals(OkeClusterManager.MirrorRefresh.NONE, manager.mirrorRefresh(sidecar, "mirrors: {}"));
+        verify(lifecycleManager, never()).exec(anyString(), anyList(), anyList(), any());
+    }
+
+    @Test
+    void mirrorRefreshLeavesASidecarAloneWhoseFileAlreadyMirrorsToTheRegistry() {
+        String registries = managerWithMirror(region -> Optional.of(MOVED_IAD_MIRROR)).registriesYaml("us-ashburn-1");
+        when(lifecycleManager.isContainerRunning(anyString())).thenReturn(true);
+        liveRegistriesFile(registries + "\n");
+
+        assertEquals(OkeClusterManager.MirrorRefresh.NONE, manager.mirrorRefresh("floci-oci-oke-refresh002", registries));
+    }
+
+    @Test
+    void mirrorRefreshRestartsASidecarWhoseEntrypointKeepsTheRewrittenFile() {
+        String registries = managerWithMirror(region -> Optional.of(MOVED_IAD_MIRROR)).registriesYaml("us-ashburn-1");
+        when(lifecycleManager.isContainerRunning(anyString())).thenReturn(true);
+        liveRegistriesFile(managerWithMirror(region -> Optional.of(IAD_MIRROR)).registriesYaml("us-ashburn-1") + "\n");
+        sidecarEntrypoint(OkeClusterManager.K3S_ENTRYPOINT);
+
+        assertEquals(OkeClusterManager.MirrorRefresh.RESTART,
+                manager.mirrorRefresh("floci-oci-oke-refresh003", registries));
+    }
+
+    @Test
+    void mirrorRefreshRestartsASidecarThatHasNoFileYet() {
+        when(lifecycleManager.isContainerRunning(anyString())).thenReturn(true);
+        liveRegistriesFile(null);
+        sidecarEntrypoint(OkeClusterManager.K3S_ENTRYPOINT);
+
+        assertEquals(OkeClusterManager.MirrorRefresh.RESTART,
+                manager.mirrorRefresh("floci-oci-oke-refresh004", "mirrors: {}"));
+    }
+
+    @Test
+    void mirrorRefreshRecreatesASidecarWhoseOlderEntrypointRewritesTheFileFromTheEnv() {
+        when(lifecycleManager.isContainerRunning(anyString())).thenReturn(true);
+        liveRegistriesFile("mirrors: {}\n");
+        sidecarEntrypoint(List.of("sh", "-c", "exec /bin/k3s \"$@\""));
+
+        assertEquals(OkeClusterManager.MirrorRefresh.RECREATE,
+                manager.mirrorRefresh("floci-oci-oke-refresh005", "mirrors:\n  other: {}"));
+    }
+
+    @Test
+    void aMovedRegistryRewritesTheFileAndRestartsTheSidecarOffTheCallerThread() {
+        List<RegistryMirror> mirror = new ArrayList<>(List.of(IAD_MIRROR));
+        OkeClusterManager mirrored = managerWithMirror(region -> Optional.of(mirror.get(0)));
+        when(portAllocator.allocate(6443, 6543)).thenReturn(6443);
+        when(lifecycleManager.createAndStart(any())).thenReturn(new ContainerLifecycleManager.ContainerInfo("c-1", Map.of()));
+        StoredOkeCluster cluster = adoptableCluster("ocid1.cluster.oc1.iad.refresh006");
+        cluster.setHostPort(0);
+        mirrored.startCluster(cluster);
+        String sidecar = containerName(cluster);
+
+        mirror.set(0, MOVED_IAD_MIRROR);
+        String moved = mirrored.registriesYaml("us-ashburn-1");
+        when(lifecycleManager.isContainerRunning(sidecar)).thenReturn(true);
+        liveRegistriesFile(managerWithMirror(region -> Optional.of(IAD_MIRROR)).registriesYaml("us-ashburn-1") + "\n");
+        sidecarEntrypoint(OkeClusterManager.K3S_ENTRYPOINT);
+        Thread caller = Thread.currentThread();
+        List<Thread> restartedOn = new CopyOnWriteArrayList<>();
+        when(lifecycleManager.exec(eq(sidecar), eq(List.of(OkeClusterManager.REGISTRIES_ENV + "=" + moved)),
+                eq(OkeClusterManager.WRITE_REGISTRIES), any()))
+                .thenReturn(new ContainerLifecycleManager.ExecResult(0, "", ""));
+        doAnswer(invocation -> {
+            restartedOn.add(Thread.currentThread());
+            return null;
+        }).when(lifecycleManager).restart(eq(sidecar), anyInt());
+
+        mirrored.registryMirrorMoved();
+
+        verify(lifecycleManager, timeout(5000)).restart(eq(sidecar), anyInt());
+        assertFalse(restartedOn.contains(caller), "the refresh must not run on the thread that moved the registry");
+        verify(lifecycleManager, times(1)).createAndStart(any());
+    }
+
+    @Test
+    void aMovedRegistryRecreatesASidecarFromAnOlderFlociOnItsVolume() {
+        List<RegistryMirror> mirror = new ArrayList<>(List.of(IAD_MIRROR));
+        OkeClusterManager mirrored = managerWithMirror(region -> Optional.of(mirror.get(0)));
+        when(portAllocator.allocate(6443, 6543)).thenReturn(6443);
+        when(lifecycleManager.createAndStart(any())).thenReturn(new ContainerLifecycleManager.ContainerInfo("c-1", Map.of()));
+        StoredOkeCluster cluster = adoptableCluster("ocid1.cluster.oc1.iad.refresh007");
+        cluster.setHostPort(0);
+        mirrored.startCluster(cluster);
+        String sidecar = containerName(cluster);
+        String original = mirrored.registriesYaml("us-ashburn-1");
+
+        mirror.set(0, MOVED_IAD_MIRROR);
+        when(lifecycleManager.isContainerRunning(sidecar)).thenReturn(true);
+        liveRegistriesFile(original + "\n");
+        sidecarEntrypoint(List.of("sh", "-c", "exec /bin/k3s \"$@\""));
+        when(lifecycleManager.containerEnv(sidecar)).thenReturn(List.of(
+                OkeClusterManager.API_TOKEN_ENV + "=" + cluster.getApiToken(),
+                OkeClusterManager.REGISTRIES_ENV + "=" + original));
+
+        mirrored.refreshRegistryMirrors();
+
+        verify(lifecycleManager, times(2)).createAndStart(any());
+        verify(lifecycleManager, never()).restart(anyString(), anyInt());
+        verify(lifecycleManager, never()).removeVolume(anyString());
+        assertEquals(6443, cluster.getHostPort());
+    }
+
+    @Test
+    void aMovedRegistryIsIgnoredWithoutActiveClusters() {
+        manager.registryMirrorMoved();
+        manager.refreshRegistryMirrors();
+
+        verify(lifecycleManager, never()).isContainerRunning(anyString());
+        verify(lifecycleManager, never()).restart(anyString(), anyInt());
+    }
+
+    /** A sidecar whose env carries {@code registries}, so only its live file can be stale. */
+    private StoredOkeCluster adoptableSidecarWithMirror(OkeClusterManager mirrored, String id, String registries) {
+        StoredOkeCluster cluster = adoptableCluster(id);
+        String webhookKubeconfig = mirrored.webhookKubeconfig(cluster);
+        String tlsSan = containerName(cluster);
+        when(lifecycleManager.isContainerRunning(anyString())).thenReturn(true);
+        when(lifecycleManager.containerEnv(anyString())).thenReturn(List.of(
+                OkeClusterManager.API_TOKEN_ENV + "=" + cluster.getApiToken(),
+                OkeClusterManager.WEBHOOK_KUBECONFIG_ENV + "=" + webhookKubeconfig,
+                OkeClusterManager.TLS_SAN_ENV + "=" + tlsSan,
+                OkeClusterManager.REGISTRIES_ENV + "=" + registries));
+        when(lifecycleManager.containerLabels(anyString())).thenReturn(
+                Map.of(ContainerStorageHelper.REGION_LABEL, "us-ashburn-1"));
+        return cluster;
+    }
+
+    @Test
+    void startClusterRewritesAndRestartsAnAdoptedSidecarWhoseLiveFileARefreshMoved() {
+        OkeClusterManager mirrored = managerWithMirror(region -> Optional.of(IAD_MIRROR));
+        String registries = mirrored.registriesYaml("us-ashburn-1");
+        StoredOkeCluster cluster = adoptableSidecarWithMirror(mirrored, "ocid1.cluster.oc1.iad.adoptstale001", registries);
+        String sidecar = containerName(cluster);
+        liveRegistriesFile(managerWithMirror(region -> Optional.of(MOVED_IAD_MIRROR)).registriesYaml("us-ashburn-1") + "\n");
+        sidecarEntrypoint(OkeClusterManager.K3S_ENTRYPOINT);
+        when(lifecycleManager.exec(eq(sidecar), eq(List.of(OkeClusterManager.REGISTRIES_ENV + "=" + registries)),
+                eq(OkeClusterManager.WRITE_REGISTRIES), any()))
+                .thenReturn(new ContainerLifecycleManager.ExecResult(0, "", ""));
+
+        mirrored.startCluster(cluster);
+
+        InOrder order = inOrder(lifecycleManager);
+        order.verify(lifecycleManager).exec(eq(sidecar), eq(List.of(OkeClusterManager.REGISTRIES_ENV + "=" + registries)),
+                eq(OkeClusterManager.WRITE_REGISTRIES), any());
+        order.verify(lifecycleManager).restart(eq(sidecar), anyInt());
+        verify(lifecycleManager, never()).createAndStart(any());
+        verify(lifecycleManager, never()).removeIfExists(anyString());
+        assertTrue(mirrored.isActive(cluster.getId()));
+    }
+
+    @Test
+    void startClusterRecreatesAnAdoptedSidecarWhoseLiveFileCannotBeRewritten() {
+        OkeClusterManager mirrored = managerWithMirror(region -> Optional.of(IAD_MIRROR));
+        String registries = mirrored.registriesYaml("us-ashburn-1");
+        StoredOkeCluster cluster = adoptableSidecarWithMirror(mirrored, "ocid1.cluster.oc1.iad.adoptstale002", registries);
+        liveRegistriesFile(managerWithMirror(region -> Optional.of(MOVED_IAD_MIRROR)).registriesYaml("us-ashburn-1") + "\n");
+        sidecarEntrypoint(OkeClusterManager.K3S_ENTRYPOINT);
+        when(lifecycleManager.exec(anyString(), anyList(), eq(OkeClusterManager.WRITE_REGISTRIES), any()))
+                .thenReturn(new ContainerLifecycleManager.ExecResult(1, "", "read-only file system"));
+        when(lifecycleManager.createAndStart(any())).thenReturn(new ContainerLifecycleManager.ContainerInfo("c-new", Map.of()));
+
+        mirrored.startCluster(cluster);
+
+        verify(lifecycleManager).createAndStart(any());
+        verify(lifecycleManager, never()).restart(anyString(), anyInt());
+        verify(lifecycleManager, never()).removeVolume(anyString());
+        verify(specBuilder).withEnv(OkeClusterManager.REGISTRIES_ENV, registries);
+    }
+
+    @Test
+    void startClusterRecreatesAnAdoptedSidecarFromAnOlderFlociWhoseLiveFileIsStale() {
+        OkeClusterManager mirrored = managerWithMirror(region -> Optional.of(IAD_MIRROR));
+        String registries = mirrored.registriesYaml("us-ashburn-1");
+        StoredOkeCluster cluster = adoptableSidecarWithMirror(mirrored, "ocid1.cluster.oc1.iad.adoptstale003", registries);
+        liveRegistriesFile("mirrors: {}\n");
+        sidecarEntrypoint(List.of("sh", "-c", "exec /bin/k3s \"$@\""));
+        when(lifecycleManager.createAndStart(any())).thenReturn(new ContainerLifecycleManager.ContainerInfo("c-new", Map.of()));
+
+        mirrored.startCluster(cluster);
+
+        verify(lifecycleManager).createAndStart(any());
+        verify(lifecycleManager, never()).exec(anyString(), anyList(), eq(OkeClusterManager.WRITE_REGISTRIES), any());
+    }
+
+    /** Starts a cluster with {@link #IAD_MIRROR}, then moves the registry to {@link #MOVED_IAD_MIRROR}. */
+    private StoredOkeCluster runningClusterWhoseRegistryMoved(List<RegistryMirror> mirror, OkeClusterManager mirrored,
+                                                              String id) {
+        when(portAllocator.allocate(6443, 6543)).thenReturn(6443);
+        when(lifecycleManager.createAndStart(any())).thenReturn(new ContainerLifecycleManager.ContainerInfo("c-1", Map.of()));
+        StoredOkeCluster cluster = adoptableCluster(id);
+        cluster.setHostPort(0);
+        mirrored.startCluster(cluster);
+        String original = mirrored.registriesYaml("us-ashburn-1");
+        mirror.set(0, MOVED_IAD_MIRROR);
+        String sidecar = containerName(cluster);
+        when(lifecycleManager.isContainerRunning(sidecar)).thenReturn(true);
+        liveRegistriesFile(original + "\n");
+        return cluster;
+    }
+
+    /** The refresh inspects the sidecar's entrypoint last when it decides; the delete lands right then. */
+    private void deleteWhenTheRefreshInspects(OkeClusterManager mirrored, StoredOkeCluster cluster, List<String> entrypoint) {
+        InspectContainerResponse inspect = mock(InspectContainerResponse.class, RETURNS_DEEP_STUBS);
+        when(inspect.getConfig().getEntrypoint()).thenReturn(entrypoint.toArray(String[]::new));
+        String sidecar = containerName(cluster);
+        when(lifecycleManager.inspect(sidecar)).thenAnswer(invocation -> {
+            mirrored.stopCluster(cluster);
+            return Optional.of(inspect);
+        });
+    }
+
+    @Test
+    void aDeleteBetweenTheRecreateDecisionAndTheRecreateLeavesNoClusterBehind() {
+        List<RegistryMirror> mirror = new ArrayList<>(List.of(IAD_MIRROR));
+        OkeClusterManager mirrored = managerWithMirror(region -> Optional.of(mirror.get(0)));
+        StoredOkeCluster cluster = runningClusterWhoseRegistryMoved(mirror, mirrored, "ocid1.cluster.oc1.iad.retired001");
+        deleteWhenTheRefreshInspects(mirrored, cluster, List.of("sh", "-c", "exec /bin/k3s \"$@\""));
+
+        mirrored.refreshRegistryMirrors();
+
+        assertFalse(mirrored.isActive(cluster.getId()));
+        verify(lifecycleManager, times(1)).createAndStart(any());
+        verify(portAllocator, never()).markReserved(anyInt());
+        verify(portAllocator).release(6443);
+        verify(lifecycleManager, times(1)).ensureVolume(anyString());
+    }
+
+    @Test
+    void aDeleteBetweenTheRestartDecisionAndTheRestartLeavesNoClusterBehind() {
+        List<RegistryMirror> mirror = new ArrayList<>(List.of(IAD_MIRROR));
+        OkeClusterManager mirrored = managerWithMirror(region -> Optional.of(mirror.get(0)));
+        StoredOkeCluster cluster = runningClusterWhoseRegistryMoved(mirror, mirrored, "ocid1.cluster.oc1.iad.retired002");
+        deleteWhenTheRefreshInspects(mirrored, cluster, OkeClusterManager.K3S_ENTRYPOINT);
+
+        mirrored.refreshRegistryMirrors();
+
+        assertFalse(mirrored.isActive(cluster.getId()));
+        verify(lifecycleManager, never()).exec(anyString(), anyList(), eq(OkeClusterManager.WRITE_REGISTRIES), any());
+        verify(lifecycleManager, never()).restart(anyString(), anyInt());
+        verify(lifecycleManager, times(1)).createAndStart(any());
+        verify(portAllocator, never()).markReserved(anyInt());
+        verify(portAllocator).release(6443);
+    }
+
+    @Test
+    void aResetBetweenTheRecreateDecisionAndTheRecreateLeavesNoClusterBehind() {
+        List<RegistryMirror> mirror = new ArrayList<>(List.of(IAD_MIRROR));
+        OkeClusterManager mirrored = managerWithMirror(region -> Optional.of(mirror.get(0)));
+        StoredOkeCluster cluster = runningClusterWhoseRegistryMoved(mirror, mirrored, "ocid1.cluster.oc1.iad.retired003");
+        InspectContainerResponse inspect = mock(InspectContainerResponse.class, RETURNS_DEEP_STUBS);
+        when(inspect.getConfig().getEntrypoint()).thenReturn(new String[] {"sh", "-c", "exec /bin/k3s \"$@\""});
+        String sidecar = containerName(cluster);
+        when(lifecycleManager.inspect(sidecar)).thenAnswer(invocation -> {
+            mirrored.clear();
+            return Optional.of(inspect);
+        });
+
+        mirrored.refreshRegistryMirrors();
+
+        assertFalse(mirrored.isActive(cluster.getId()));
+        verify(lifecycleManager, times(1)).createAndStart(any());
+        verify(portAllocator, never()).markReserved(anyInt());
+        verify(portAllocator).release(6443);
+    }
+
+    @Test
+    void aResetDuringARecreateRemovesTheSidecarTheRecreateStarted() throws Exception {
+        List<RegistryMirror> mirror = new ArrayList<>(List.of(IAD_MIRROR));
+        OkeClusterManager mirrored = managerWithMirror(region -> Optional.of(mirror.get(0)));
+        StoredOkeCluster cluster = runningClusterWhoseRegistryMoved(mirror, mirrored, "ocid1.cluster.oc1.iad.retired006");
+        InspectContainerResponse inspect = mock(InspectContainerResponse.class, RETURNS_DEEP_STUBS);
+        when(inspect.getConfig().getEntrypoint()).thenReturn(new String[] {"sh", "-c", "exec /bin/k3s \"$@\""});
+        String sidecar = containerName(cluster);
+        when(lifecycleManager.inspect(sidecar)).thenReturn(Optional.of(inspect));
+        CountDownLatch recreating = new CountDownLatch(1);
+        CountDownLatch finishRecreate = new CountDownLatch(1);
+        doAnswer(invocation -> {
+            recreating.countDown();
+            assertTrue(finishRecreate.await(5, TimeUnit.SECONDS));
+            return new ContainerLifecycleManager.ContainerInfo("c-recreated", Map.of());
+        }).when(lifecycleManager).createAndStart(any());
+        Thread refresher = new Thread(mirrored::refreshRegistryMirrors);
+        refresher.start();
+        assertTrue(recreating.await(5, TimeUnit.SECONDS));
+
+        Thread resetter = new Thread(mirrored::clear);
+        resetter.start();
+        finishRecreate.countDown();
+        refresher.join(5000);
+        resetter.join(5000);
+
+        assertNotEquals("FAILED", cluster.getLifecycleState(), "the recreate itself succeeded");
+        assertFalse(mirrored.isActive(cluster.getId()), "the recreated sidecar is not left registered");
+        InOrder order = inOrder(lifecycleManager);
+        order.verify(lifecycleManager).createAndStart(any());
+        order.verify(lifecycleManager).removeIfExists(sidecar);
+    }
+
+    @Test
+    void aDeleteDuringARestartWaitsForItThenRemovesTheSidecar() throws Exception {
+        List<RegistryMirror> mirror = new ArrayList<>(List.of(IAD_MIRROR));
+        OkeClusterManager mirrored = managerWithMirror(region -> Optional.of(mirror.get(0)));
+        StoredOkeCluster cluster = runningClusterWhoseRegistryMoved(mirror, mirrored, "ocid1.cluster.oc1.iad.retired004");
+        String sidecar = containerName(cluster);
+        sidecarEntrypoint(OkeClusterManager.K3S_ENTRYPOINT);
+        when(lifecycleManager.exec(eq(sidecar), anyList(), eq(OkeClusterManager.WRITE_REGISTRIES), any()))
+                .thenReturn(new ContainerLifecycleManager.ExecResult(0, "", ""));
+        CountDownLatch restarting = new CountDownLatch(1);
+        CountDownLatch finishRestart = new CountDownLatch(1);
+        doAnswer(invocation -> {
+            restarting.countDown();
+            assertTrue(finishRestart.await(5, TimeUnit.SECONDS));
+            return null;
+        }).when(lifecycleManager).restart(eq(sidecar), anyInt());
+        Thread refresher = new Thread(mirrored::refreshRegistryMirrors);
+        refresher.start();
+        assertTrue(restarting.await(5, TimeUnit.SECONDS));
+
+        Thread deleter = new Thread(() -> mirrored.stopCluster(cluster));
+        deleter.start();
+        // Once from the first start; the delete's removal must wait for the restart to finish.
+        verify(lifecycleManager, after(300).times(1)).removeIfExists(sidecar);
+        assertFalse(mirrored.isActive(cluster.getId()));
+        finishRestart.countDown();
+        refresher.join(5000);
+        deleter.join(5000);
+
+        InOrder order = inOrder(lifecycleManager);
+        order.verify(lifecycleManager).restart(eq(sidecar), anyInt());
+        order.verify(lifecycleManager).removeIfExists(sidecar);
+        verify(portAllocator).release(6443);
+        assertFalse(mirrored.isActive(cluster.getId()));
+    }
+
+    @Test
+    void aFailedDeleteKeepsTheClusterForAResetToCleanUp() {
+        when(portAllocator.allocate(6443, 6543)).thenReturn(6443);
+        when(lifecycleManager.createAndStart(any())).thenReturn(new ContainerLifecycleManager.ContainerInfo("c-1", Map.of()));
+        StoredOkeCluster cluster = adoptableCluster("ocid1.cluster.oc1.iad.retired005");
+        cluster.setHostPort(0);
+        manager.startCluster(cluster);
+        String sidecar = containerName(cluster);
+        doThrow(new RuntimeException("Container removal failure"))
+                .doNothing()
+                .when(lifecycleManager).removeIfExists(sidecar);
+
+        assertThrows(RuntimeException.class, () -> manager.stopCluster(cluster));
+        assertTrue(manager.isActive(cluster.getId()));
+
+        manager.clear();
+
+        assertFalse(manager.isActive(cluster.getId()));
+        verify(portAllocator).release(6443);
     }
 }

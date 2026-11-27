@@ -2,6 +2,7 @@ package io.floci.oci.services.oke;
 
 import io.floci.oci.config.EmulatorConfig;
 import io.floci.oci.core.common.docker.ContainerStorageHelper;
+import io.floci.oci.core.common.docker.PortAllocator;
 import io.floci.oci.services.artifacts.ArtifactsRegistryManager;
 import io.floci.oci.testing.TestCompartments;
 import io.floci.oci.testing.TestNetworks;
@@ -32,6 +33,7 @@ import java.util.concurrent.TimeUnit;
 
 import static io.restassured.RestAssured.given;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
@@ -39,7 +41,9 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  * Real-sidecar lane for a pod whose image is in the local OCIR: pushes busybox into the
  * {@code registry:2} sidecar, starts a real k3s cluster, and runs a pod from the image's
  * {@code iad.ocir.localhost.floci.io:<port>} reference, which k3s can only pull through the
- * {@code registries.yaml} mirror floci-oci writes. Skips when no Docker engine responds.
+ * {@code registries.yaml} mirror floci-oci writes. Then moves the registry to another port and
+ * runs a second pod that must pull again, through the mirror floci-oci rewrote in the running
+ * sidecar. Skips when no Docker engine responds.
  */
 @QuarkusTest
 @TestProfile(OkeOcirDockerTest.RealOkeAndOcirProfile.class)
@@ -50,6 +54,7 @@ class OkeOcirDockerTest {
     private static final String SOURCE_IMAGE = "busybox:1.36";
     private static final String REPOSITORY = "oke-ocir/busybox";
     private static final String POD = "ocir-pod";
+    private static final String POD_AFTER_MOVE = "ocir-pod-after-move";
     private static final Duration TIMEOUT = Duration.ofSeconds(180);
     private static final Duration COMMAND_TIMEOUT = Duration.ofMinutes(10);
 
@@ -58,6 +63,9 @@ class OkeOcirDockerTest {
 
     @Inject
     EmulatorConfig config;
+
+    @Inject
+    PortAllocator portAllocator;
 
     private String compartment;
     private String vcnId;
@@ -153,6 +161,58 @@ class OkeOcirDockerTest {
 
     @Test
     @Order(4)
+    void aMovedRegistryIsMirroredByTheRunningSidecarWithoutANewNode() throws Exception {
+        String sidecar = ContainerStorageHelper.dockerName(config, "oke-" + clusterId);
+        String nodeBefore = kubectl("get", "nodes", "-o", "jsonpath={.items[*].metadata.name}").output().trim();
+        String startedBefore = docker("inspect", "-f", "{{.State.StartedAt}}", sidecar).output().trim();
+        int oldPort = registry.hostPort();
+
+        // Holding the released port while the registry starts again makes it pick another one.
+        registry.stop();
+        portAllocator.markReserved(oldPort);
+        try {
+            registry.ensureReady();
+        } finally {
+            portAllocator.release(oldPort);
+        }
+        assertNotEquals(oldPort, registry.hostPort(), "the registry should have moved");
+
+        Instant restarted = Instant.now().plus(TIMEOUT);
+        String startedAfter = startedBefore;
+        while (Instant.now().isBefore(restarted) && startedAfter.equals(startedBefore)) {
+            Thread.sleep(1000);
+            startedAfter = docker("inspect", "-f", "{{.State.StartedAt}}", sidecar).output().trim();
+        }
+        assertNotEquals(startedBefore, startedAfter, "the k3s sidecar should restart with the moved mirror");
+        String registries = docker("exec", sidecar, "cat", OkeClusterManager.REGISTRIES_FILE).output();
+        assertTrue(registries.contains("host.docker.internal:" + registry.hostPort()), registries);
+
+        Instant apiBack = Instant.now().plus(TIMEOUT);
+        while (Instant.now().isBefore(apiBack) && kubectl("get", "serviceaccount", "default").exitCode() != 0) {
+            Thread.sleep(2000);
+        }
+        String image = "iad.ocir.localhost.floci.io:" + config.port() + "/" + namespace + "/" + REPOSITORY + ":1";
+        Result run = kubectl("run", POD_AFTER_MOVE, "--image=" + image, "--image-pull-policy=Always",
+                "--restart=Never", "--command", "--", "sh", "-c", "sleep 3600");
+        assertEquals(0, run.exitCode(), run.output());
+
+        Instant deadline = Instant.now().plus(TIMEOUT);
+        String phase = "";
+        while (Instant.now().isBefore(deadline)) {
+            phase = kubectl("get", "pod", POD_AFTER_MOVE, "-o", "jsonpath={.status.phase}").output().trim();
+            if ("Running".equals(phase) || "Failed".equals(phase)) {
+                break;
+            }
+            Thread.sleep(2000);
+        }
+        String events = kubectl("describe", "pod", POD_AFTER_MOVE).output();
+        assertEquals("Running", phase, "the pod should pull from the moved OCIR registry:\n" + events);
+        assertEquals(nodeBefore, kubectl("get", "nodes", "-o", "jsonpath={.items[*].metadata.name}").output().trim(),
+                "restarting the sidecar in place keeps its node");
+    }
+
+    @Test
+    @Order(5)
     void cleanUpStateAndSidecars() throws Exception {
         // Removes the k3s sidecar, the registry container and their volumes via Resettable.
         given().post("/_floci-oci/state/reset").then().statusCode(200);

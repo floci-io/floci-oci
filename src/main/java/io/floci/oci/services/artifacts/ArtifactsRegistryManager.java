@@ -1,15 +1,17 @@
 package io.floci.oci.services.artifacts;
 
 import io.floci.oci.config.EmulatorConfig;
+import io.floci.oci.core.common.OciException;
+import io.floci.oci.core.common.RegistryMirrorListener;
 import io.floci.oci.core.common.docker.ContainerBuilder;
 import io.floci.oci.core.common.docker.ContainerDetector;
 import io.floci.oci.core.common.docker.ContainerLifecycleManager;
 import io.floci.oci.core.common.docker.ContainerSpec;
-import io.floci.oci.core.common.OciException;
 import io.floci.oci.core.common.docker.ContainerStorageHelper;
 import io.floci.oci.core.common.docker.CurrentContainerNetworkResolver;
 import io.floci.oci.core.common.docker.PortAllocator;
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.enterprise.inject.Instance;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
@@ -19,6 +21,8 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.List;
+import java.util.Objects;
 
 /**
  * Driver for the one shared {@code registry:2} container behind the OCIR data plane. Every
@@ -28,7 +32,8 @@ import java.time.Duration;
  * self-healing {@link #ensureStarted()}, one cheap {@link #isReady()} probe, a {@link #stop()} that
  * removes the container and releases the host port, and a {@link #reset()} that also removes the
  * volume. The volume outlives {@code stop()}, so pushed images survive a restart of the container or
- * of floci-oci itself.
+ * of floci-oci itself. A start that gives other sidecars another address than the previous one tells
+ * every {@link RegistryMirrorListener}, so mirrors written with the old address get the new one.
  */
 @ApplicationScoped
 public class ArtifactsRegistryManager {
@@ -45,6 +50,7 @@ public class ArtifactsRegistryManager {
     private final PortAllocator portAllocator;
     private final CurrentContainerNetworkResolver networkResolver;
     private final EmulatorConfig config;
+    private final Iterable<RegistryMirrorListener> mirrorListeners;
     private final HttpClient http = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(5))
             .followRedirects(HttpClient.Redirect.NEVER)
@@ -53,11 +59,31 @@ public class ArtifactsRegistryManager {
     private volatile String containerId;
     private volatile String endpoint;
     private volatile int hostPort = -1;
+    /** The last {@link #sidecarEndpoint()} handed out; kept across {@link #stop()} to spot a move. */
+    private String lastSidecarEndpoint;
 
     @Inject
     public ArtifactsRegistryManager(ContainerBuilder containerBuilder, ContainerLifecycleManager lifecycleManager,
                                     ContainerDetector containerDetector, PortAllocator portAllocator,
-                                    CurrentContainerNetworkResolver networkResolver, EmulatorConfig config) {
+                                    CurrentContainerNetworkResolver networkResolver, EmulatorConfig config,
+                                    Instance<RegistryMirrorListener> mirrorListeners) {
+        // The cast selects the Iterable overload; without it this constructor would call itself.
+        this(containerBuilder, lifecycleManager, containerDetector, portAllocator, networkResolver, config,
+                (Iterable<RegistryMirrorListener>) mirrorListeners);
+    }
+
+    ArtifactsRegistryManager(ContainerBuilder containerBuilder, ContainerLifecycleManager lifecycleManager,
+                             ContainerDetector containerDetector, PortAllocator portAllocator,
+                             CurrentContainerNetworkResolver networkResolver, EmulatorConfig config) {
+        this(containerBuilder, lifecycleManager, containerDetector, portAllocator, networkResolver, config,
+                List.of());
+    }
+
+    ArtifactsRegistryManager(ContainerBuilder containerBuilder, ContainerLifecycleManager lifecycleManager,
+                             ContainerDetector containerDetector, PortAllocator portAllocator,
+                             CurrentContainerNetworkResolver networkResolver, EmulatorConfig config,
+                             Iterable<RegistryMirrorListener> mirrorListeners) {
+        this.mirrorListeners = mirrorListeners;
         this.containerBuilder = containerBuilder;
         this.lifecycleManager = lifecycleManager;
         this.containerDetector = containerDetector;
@@ -102,6 +128,28 @@ public class ArtifactsRegistryManager {
         hostPort = port;
         endpoint = reachableEndpoint(info.containerId(), port);
         LOG.infov("OCIR registry started ({0}) at {1}", containerId, endpoint);
+        announceIfMoved();
+    }
+
+    /**
+     * Tells the mirror listeners when other sidecars now reach the registry at another address than
+     * the one handed out before. The first start has nothing to compare with: whatever needs the
+     * mirror asks for it, and so gets the current address, once the registry is up.
+     */
+    private void announceIfMoved() {
+        String previous = lastSidecarEndpoint;
+        lastSidecarEndpoint = sidecarEndpoint();
+        if (previous == null || Objects.equals(previous, lastSidecarEndpoint)) {
+            return;
+        }
+        LOG.infov("OCIR registry moved from {0} to {1}; refreshing registry mirrors", previous, lastSidecarEndpoint);
+        for (RegistryMirrorListener listener : mirrorListeners) {
+            try {
+                listener.registryMirrorMoved();
+            } catch (RuntimeException e) {
+                LOG.warnv(e, "Registry mirror listener {0} failed", listener.getClass().getName());
+            }
+        }
     }
 
     /**
