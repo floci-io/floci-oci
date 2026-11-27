@@ -33,6 +33,7 @@ import java.util.function.Function;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -1164,7 +1165,7 @@ class OkeClusterManagerTest {
         doAnswer(invocation -> {
             recreating.countDown();
             assertTrue(finishRecreate.await(5, TimeUnit.SECONDS));
-            return "recreated";
+            return new ContainerLifecycleManager.ContainerInfo("c-recreated", Map.of());
         }).when(lifecycleManager).createAndStart(any());
         Thread refresher = new Thread(mirrored::refreshRegistryMirrors);
         refresher.start();
@@ -1176,6 +1177,7 @@ class OkeClusterManagerTest {
         refresher.join(5000);
         resetter.join(5000);
 
+        assertNotEquals("FAILED", cluster.getLifecycleState(), "the recreate itself succeeded");
         assertFalse(mirrored.isActive(cluster.getId()), "the recreated sidecar is not left registered");
         InOrder order = inOrder(lifecycleManager);
         order.verify(lifecycleManager).createAndStart(any());
