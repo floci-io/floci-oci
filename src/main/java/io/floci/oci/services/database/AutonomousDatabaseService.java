@@ -4,7 +4,9 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import io.floci.oci.config.EmulatorConfig;
 import io.floci.oci.core.common.CompartmentUsage;
 import io.floci.oci.core.common.Etags;
+import io.floci.oci.core.common.NetworkClaims;
 import io.floci.oci.core.common.NetworkReferences;
+import io.floci.oci.core.common.NetworkUsage;
 import io.floci.oci.core.common.OciContext;
 import io.floci.oci.core.common.OciException;
 import io.floci.oci.core.common.Ocids;
@@ -45,7 +47,7 @@ import java.util.regex.Pattern;
  * Free sidecar is not part of floci-oci yet.
  */
 @ApplicationScoped
-public class AutonomousDatabaseService implements Resettable, CompartmentUsage {
+public class AutonomousDatabaseService implements Resettable, CompartmentUsage, NetworkUsage {
 
     private static final Logger LOG = Logger.getLogger(AutonomousDatabaseService.class);
 
@@ -162,9 +164,30 @@ public class AutonomousDatabaseService implements Resettable, CompartmentUsage {
                 .toList();
     }
 
+    @Override
+    public List<String> resourcesUsing(String networkId) {
+        return NetworkUsage.using(databases.scan(k -> true), networkId, StoredAutonomousDatabase::getLifecycleState,
+                database -> NetworkUsage.ids(database.getAttributes().get("subnetId"),
+                        database.getAttributes().get("nsgIds")),
+                database -> "Autonomous Database " + database.getId()).toList();
+    }
+
+    /** The network ids a create or update body names, whether or not they are well formed. */
+    private static Set<String> networkIds(Map<String, Object> details) {
+        return details == null ? Set.of()
+                : NetworkUsage.ids(details.get("subnetId"), details.get("nsgIds"));
+    }
+
     // ── Lifecycle ──────────────────────────────────────────────────────────────
 
-    public synchronized Result create(Map<String, Object> details) {
+    /** The subnet and NSGs are claimed from their check until the database is stored. */
+    public Result create(Map<String, Object> details) {
+        try (NetworkClaims.Claim claim = NetworkClaims.claim(networkIds(details))) {
+            return createDatabase(details);
+        }
+    }
+
+    private synchronized Result createDatabase(Map<String, Object> details) {
         String compartmentId = DatabaseRequests.requireString(details, "compartmentId");
         String source = DatabaseRequests.string(details, "source");
         if (source != null && !"NONE".equals(source)) {
@@ -278,7 +301,15 @@ public class AutonomousDatabaseService implements Resettable, CompartmentUsage {
                              String sortOrder) {
     }
 
-    public synchronized Result update(String autonomousDatabaseId, Map<String, Object> details, String ifMatch) {
+    /** The subnet and NSGs are claimed from their check until the update is stored. */
+    public Result update(String autonomousDatabaseId, Map<String, Object> details, String ifMatch) {
+        try (NetworkClaims.Claim claim = NetworkClaims.claim(networkIds(details))) {
+            return updateDatabase(autonomousDatabaseId, details, ifMatch);
+        }
+    }
+
+    private synchronized Result updateDatabase(String autonomousDatabaseId, Map<String, Object> details,
+                                               String ifMatch) {
         StoredAutonomousDatabase database = mutable(autonomousDatabaseId, ifMatch, "AVAILABLE", "STOPPED");
         // Everything that can be rejected is checked before anything changes: the store hands out
         // the stored object itself, so a half-applied update would stick.

@@ -218,6 +218,24 @@ class AutonomousDatabaseServiceTest {
     }
 
     @Test
+    void aDatabaseReportsItsSubnetAndNsgsUntilItIsTerminated() {
+        String subnet = "ocid1.subnet.oc1.iad.adbsubnet";
+        String nsg = "ocid1.networksecuritygroup.oc1.iad.adbnsg";
+        Map<String, Object> details = details("private");
+        details.put("subnetId", subnet);
+        details.put("nsgIds", List.of(nsg));
+        StoredAutonomousDatabase database = service.create(details).database();
+        service.create(details("public"));
+
+        List<String> using = List.of("Autonomous Database " + database.getId());
+        assertEquals(using, service.resourcesUsing(subnet));
+        assertEquals(using, service.resourcesUsing(nsg));
+
+        service.delete(database.getId(), null);
+        assertEquals(List.of(), service.resourcesUsing(subnet));
+    }
+
+    @Test
     void listSortsNewestFirstByDefaultAndByNameWhenAsked() {
         String older = service.create(details("bravo")).database().getId();
         clock.advance(Duration.ofSeconds(5));
