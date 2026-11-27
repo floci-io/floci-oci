@@ -270,4 +270,20 @@ class ArtifactsServiceTest {
         assertEquals("/v2/ns/app/blobs/uploads/123?_state=x", OcirRegistryResource.clientLocation(
                 "http://localhost:5200/v2/iad/ns/app/blobs/uploads/123?_state=x", "iad/ns/app", "ns/app"));
     }
+
+    @Test
+    void anAllowedMountSourceIsTranslatedToTheBackendRepository() {
+        assertEquals("mount=sha256%3Aabc&from=iad%2Fns%2Fapp", OcirRegistryResource.mountQuery(
+                "mount=sha256:abc&from=ns/app", from -> Optional.of("iad/" + from)));
+        assertEquals("x=1&mount=sha256%3Aabc&from=iad%2Fns%2Fapp", OcirRegistryResource.mountQuery(
+                "x=1&from=ns%2Fapp&mount=sha256:abc&from=other/app", from -> Optional.of("iad/" + from)));
+    }
+
+    @Test
+    void aRefusedMountSourceLeavesAPlainUploadSession() {
+        assertNull(OcirRegistryResource.mountQuery("mount=sha256:abc&from=iad/other/app", from -> Optional.empty()));
+        assertEquals("x=1", OcirRegistryResource.mountQuery("x=1&mount=sha256:abc", from -> Optional.of(from)));
+        assertEquals("digest=sha256:abc", OcirRegistryResource.mountQuery("digest=sha256:abc",
+                from -> Optional.of(from)));
+    }
 }

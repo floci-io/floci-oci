@@ -72,8 +72,9 @@ oci iam compartment list --endpoint http://localhost:4599 --compartment-id "$TEN
   `404 NotAuthorizedOrNotFound` in a query. Create the compartment first, or use the tenancy
   OCID. The check is skipped only when Identity is disabled, since nothing could then create a
   compartment.
-- As on real OCI, compartments, users, groups, group memberships and policies can only be
-  created, updated or deleted through the home region's endpoint. A write sent with another
+- As on real OCI, compartments, users, groups, group memberships, policies and user credentials
+  (API keys, auth tokens and customer secret keys) can only be created, updated or deleted
+  through the home region's endpoint. A write sent with another
   region in the `Host` header returns `403 NotAllowed` ("This operation must be directed at the
   home region."). Reads work in every region, and changes are visible everywhere at once (real
   OCI takes a few minutes to propagate them). Clients that never set a region host reach

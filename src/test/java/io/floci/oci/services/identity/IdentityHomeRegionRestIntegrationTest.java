@@ -27,7 +27,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * IAM writes are only accepted at the tenancy's home region. The routes are read from
- * {@link IdentityController} and {@link CustomerSecretKeyController} themselves, so a write added
+ * {@link IdentityController} and the credential controllers themselves, so a write added
  * there is checked without touching this test.
  */
 @QuarkusTest
@@ -88,6 +88,34 @@ class IdentityHomeRegionRestIntegrationTest {
     }
 
     @Test
+    void authTokenWritesOutsideTheHomeRegionAreNotAllowed() {
+        String userId = given().contentType("application/json")
+                .body(Map.of("compartmentId", TENANCY, "name", "home-token-" + System.nanoTime(), "description", "t"))
+            .when().post("/20160918/users")
+            .then().statusCode(200).extract().path("id");
+        String tokens = "/20160918/users/" + userId + "/authTokens";
+
+        given().header("Host", PHOENIX_IDENTITY).contentType("application/json").body(Map.of("description", "t"))
+            .when().post(tokens)
+            .then().statusCode(403)
+                .header("opc-request-id", notNullValue())
+                .body("code", equalTo("NotAllowed"))
+                .body("message", equalTo("This operation must be directed at the home region."));
+        String tokenId = given().contentType("application/json").body(Map.of("description", "t"))
+            .when().post(tokens)
+            .then().statusCode(200).extract().path("id");
+        given().header("Host", PHOENIX_IDENTITY).contentType("application/json").body(Map.of("description", "u"))
+            .when().put(tokens + "/" + tokenId)
+            .then().statusCode(403).body("code", equalTo("NotAllowed"));
+        given().header("Host", PHOENIX_IDENTITY)
+            .when().delete(tokens + "/" + tokenId)
+            .then().statusCode(403).body("code", equalTo("NotAllowed"));
+        given().header("Host", PHOENIX_IDENTITY)
+            .when().get(tokens)
+            .then().statusCode(200).body("[0].id", equalTo(tokenId));
+    }
+
+    @Test
     void aSignedReadRegistersTheTenancy() {
         String tenancy = "ocid1.tenancy.oc1..itfirstseen" + System.nanoTime();
         assertTrue(tenancies.find(tenancy).isEmpty());
@@ -118,6 +146,7 @@ class IdentityHomeRegionRestIntegrationTest {
         List<Method> methods = new ArrayList<>(List.of(IdentityController.class.getDeclaredMethods()));
         methods.addAll(List.of(CustomerSecretKeyController.class.getDeclaredMethods()));
         methods.addAll(List.of(ApiKeyController.class.getDeclaredMethods()));
+        methods.addAll(List.of(AuthTokenController.class.getDeclaredMethods()));
         for (Method method : methods) {
             boolean write = method.isAnnotationPresent(POST.class) || method.isAnnotationPresent(PUT.class)
                     || method.isAnnotationPresent(DELETE.class);

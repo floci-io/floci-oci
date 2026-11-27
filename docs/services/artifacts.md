@@ -61,6 +61,13 @@ docker push iad.ocir.localhost.floci.io:4599/floci-local/project/app:v1
   tenancy's container configuration has `isRepositoryCreatedOnFirstPush: true`. Then a
   private repository is created in the root compartment.
 - An immutable repository refuses manifest pushes with `DENIED`.
+- A cross-repository blob mount (`POST .../blobs/uploads/?mount=<digest>&from=<namespace>/<repository>`)
+  is performed when the login may read `from`'s namespace, which in `strict` mode means the same
+  tenancy as the destination. Otherwise the mount is ignored and a plain upload session is opened
+  (`202` with a `Location`), the fallback the
+  [Registry HTTP API V2](https://distribution.github.io/distribution/spec/api/#cross-repository-blob-mount)
+  defines, so `docker push` uploads the layer instead. `from` is always read as an OCIR repository
+  in the request's region.
 - A namespace is known to the data plane once its tenancy has used the management API
   (created a repository or read the container configuration).
 - The data plane only answers on a Host with an `ocir` label. Hosts of the form
@@ -87,7 +94,8 @@ docker login iad.ocir.localhost.floci.io:4599 -u "floci-local/jdoe" -p "$token"
   (`{"errors":[{"code":"UNAUTHORIZED",...}]}`), which Docker reports as a failed login.
 - The registry then accepts only the Bearer tokens it issued, for one hour. Any other token gets
   the login challenge again. A token issued to one tenancy's user is refused with `DENIED` on
-  another tenancy's namespace. Issued tokens live in memory, so after a restart Docker logs in
+  another tenancy's namespace, and a blob mount from another tenancy's repository falls back to
+  an upload. Issued tokens live in memory, so after a restart Docker logs in
   again with the credentials it saved.
 - Real OCIR's error bodies for a failed login are not public: the code and messages are
   floci-oci's, in the Registry HTTP API V2 error format.

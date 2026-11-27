@@ -25,14 +25,19 @@ import org.jboss.logging.Logger;
 
 import java.io.InputStream;
 import java.net.URI;
+import java.net.URLDecoder;
+import java.net.URLEncoder;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Function;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -201,7 +206,7 @@ public class OcirRegistryResource {
         registry.ensureReady();
         String backendName = service.backendRepository(repo);
         String backendPath = "/v2/" + backendName + "/" + operation.kind() + operation.suffix();
-        String query = uri.getRequestUri().getRawQuery();
+        String query = backendQuery(method, operation, uri.getRequestUri().getRawQuery(), bearer);
         URI target = URI.create("http://" + registry.endpoint() + backendPath + (query == null ? "" : "?" + query));
         try {
             Response response = forward(registry, method, target, headers, body, backendName, fullName);
@@ -213,6 +218,73 @@ public class OcirRegistryResource {
             LOG.warnv("OCIR request to {0} failed: {1}", target, e.getMessage());
             return registryError(502, "UNAVAILABLE", "the registry is unavailable: " + e.getMessage());
         }
+    }
+
+    /**
+     * The query sent to the sidecar. A cross-repository blob mount names its source as an OCIR
+     * repository, {@code from=<namespace>/<repository>}, which is translated to the sidecar path the
+     * way the request path is, when the login may read that namespace. Otherwise the mount is left
+     * out and the sidecar opens a plain upload session (202 with a Location), the fallback the
+     * Registry HTTP API V2 gives a mount the registry will not perform, which docker push follows.
+     */
+    private String backendQuery(String method, RepositoryOperation operation, String rawQuery, String bearer) {
+        if (rawQuery == null || !"POST".equals(method) || !"blobs".equals(operation.kind())) {
+            return rawQuery;
+        }
+        return mountQuery(rawQuery, from -> mountSource(from, bearer));
+    }
+
+    private Optional<String> mountSource(String from, String bearer) {
+        int slash = from.indexOf('/');
+        if (slash <= 0 || slash == from.length() - 1) {
+            return Optional.empty();
+        }
+        String namespace = from.substring(0, slash);
+        Optional<String> tenancy = service.tenancyOfNamespace(namespace);
+        if (tenancy.isEmpty() || !login.allows(bearer, tenancy.get())) {
+            return Optional.empty();
+        }
+        return Optional.of(service.backendRepository(namespace, from.substring(slash + 1)));
+    }
+
+    /**
+     * {@code rawQuery} with its {@code mount} and {@code from} parameters replaced: kept with
+     * {@code from} set to the backend repository {@code source} maps it to, or both left out when it
+     * maps to none. As Docker Distribution reads them, only the first of each counts.
+     */
+    static String mountQuery(String rawQuery, Function<String, Optional<String>> source) {
+        List<String> kept = new ArrayList<>();
+        String mount = null;
+        String from = null;
+        for (String pair : rawQuery.split("&")) {
+            int equals = pair.indexOf('=');
+            String name = decode(equals < 0 ? pair : pair.substring(0, equals));
+            String value = equals < 0 ? "" : decode(pair.substring(equals + 1));
+            if ("mount".equals(name)) {
+                mount = mount == null ? value : mount;
+            } else if ("from".equals(name)) {
+                from = from == null ? value : from;
+            } else {
+                kept.add(pair);
+            }
+        }
+        if (mount == null && from == null) {
+            return rawQuery;
+        }
+        Optional<String> backend = mount == null || from == null ? Optional.empty() : source.apply(from);
+        if (backend.isPresent()) {
+            kept.add("mount=" + encode(mount));
+            kept.add("from=" + encode(backend.get()));
+        }
+        return kept.isEmpty() ? null : String.join("&", kept);
+    }
+
+    private static String decode(String value) {
+        return URLDecoder.decode(value, StandardCharsets.UTF_8);
+    }
+
+    private static String encode(String value) {
+        return URLEncoder.encode(value, StandardCharsets.UTF_8);
     }
 
     private Response forward(ArtifactsRegistryManager registry, String method, URI target, HttpHeaders headers,
