@@ -8,7 +8,9 @@ import io.floci.oci.config.EmulatorConfig;
 import io.floci.oci.core.common.CompartmentUsage;
 import io.floci.oci.core.common.ContainerImageResolver;
 import io.floci.oci.core.common.Etags;
+import io.floci.oci.core.common.NetworkClaims;
 import io.floci.oci.core.common.NetworkReferences;
+import io.floci.oci.core.common.NetworkUsage;
 import io.floci.oci.core.common.OciContext;
 import io.floci.oci.core.common.OciException;
 import io.floci.oci.core.common.Ocids;
@@ -56,7 +58,7 @@ import java.util.stream.Stream;
  * invocations return a synthetic body.
  */
 @ApplicationScoped
-public class FunctionsService implements Resettable, CompartmentUsage {
+public class FunctionsService implements Resettable, CompartmentUsage, NetworkUsage {
 
     private static final Logger LOG = Logger.getLogger(FunctionsService.class);
     private static final ObjectMapper MAPPER = new ObjectMapper();
@@ -179,13 +181,30 @@ public class FunctionsService implements Resettable, CompartmentUsage {
                 null);
     }
 
-    /** @param settings the optional Application fields returned as sent; null for none */
+    /**
+     * @param settings the optional Application fields returned as sent; null for none. The subnets
+     *                 and NSGs are claimed from their check until the application is stored, so a
+     *                 network delete in between is refused.
+     */
     public StoredApplication createApplication(String compartmentId, String displayName,
                                                List<String> subnetIds, Map<String, String> appConfig,
                                                String shape,
                                                Map<String, String> freeformTags,
                                                Map<String, Map<String, Object>> definedTags,
                                                Map<String, Object> settings) {
+        try (NetworkClaims.Claim claim = NetworkClaims.claim(NetworkUsage.ids(subnetIds,
+                NetworkUsage.field(settings, "networkSecurityGroupIds")))) {
+            return createClaimedApplication(compartmentId, displayName, subnetIds, appConfig, shape, freeformTags,
+                    definedTags, settings);
+        }
+    }
+
+    private StoredApplication createClaimedApplication(String compartmentId, String displayName,
+                                                       List<String> subnetIds, Map<String, String> appConfig,
+                                                       String shape,
+                                                       Map<String, String> freeformTags,
+                                                       Map<String, Map<String, Object>> definedTags,
+                                                       Map<String, Object> settings) {
         require(compartmentId, "compartmentId");
         require(displayName, "displayName");
         if (subnetIds == null || subnetIds.isEmpty()) {
@@ -258,6 +277,16 @@ public class FunctionsService implements Resettable, CompartmentUsage {
                                                Map<String, String> freeformTags,
                                                Map<String, Map<String, Object>> definedTags,
                                                Map<String, Object> settings, String ifMatch) {
+        try (NetworkClaims.Claim claim = NetworkClaims.claim(
+                NetworkUsage.ids(NetworkUsage.field(settings, "networkSecurityGroupIds")))) {
+            return updateClaimedApplication(applicationId, appConfig, freeformTags, definedTags, settings, ifMatch);
+        }
+    }
+
+    private StoredApplication updateClaimedApplication(String applicationId, Map<String, String> appConfig,
+                                                       Map<String, String> freeformTags,
+                                                       Map<String, Map<String, Object>> definedTags,
+                                                       Map<String, Object> settings, String ifMatch) {
         StoredApplication app = getApplication(applicationId);
         Etags.checkIfMatch(ifMatch, app.getEtag());
         requireNsgs(settings);
@@ -716,5 +745,14 @@ public class FunctionsService implements Resettable, CompartmentUsage {
                         StoredApplication::getLifecycleState, a -> "application " + a.getId()),
                 CompartmentUsage.live(functions, tenancyId, compartmentId, StoredFunction::getCompartmentId,
                         StoredFunction::getLifecycleState, f -> "function " + f.getId())).toList();
+    }
+
+    /** An application holds its subnets and its network security groups. */
+    @Override
+    public List<String> resourcesUsing(String networkId) {
+        return NetworkUsage.using(applications.scan(k -> true), networkId, StoredApplication::getLifecycleState,
+                app -> NetworkUsage.ids(app.getSubnetIds(),
+                        NetworkUsage.field(app.getSettings(), "networkSecurityGroupIds")),
+                app -> "application " + app.getId()).toList();
     }
 }

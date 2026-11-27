@@ -4,7 +4,9 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import io.floci.oci.config.EmulatorConfig;
 import io.floci.oci.core.common.CompartmentUsage;
 import io.floci.oci.core.common.Etags;
+import io.floci.oci.core.common.NetworkClaims;
 import io.floci.oci.core.common.NetworkReferences;
+import io.floci.oci.core.common.NetworkUsage;
 import io.floci.oci.core.common.OciContext;
 import io.floci.oci.core.common.OciException;
 import io.floci.oci.core.common.Ocids;
@@ -68,7 +70,7 @@ import java.util.regex.Pattern;
  * With {@code mock} on, the same transitions complete at once and no container exists.
  */
 @ApplicationScoped
-public class PsqlService implements Resettable, CompartmentUsage {
+public class PsqlService implements Resettable, CompartmentUsage, NetworkUsage {
 
     private static final Logger LOG = Logger.getLogger(PsqlService.class);
 
@@ -244,10 +246,29 @@ public class PsqlService implements Resettable, CompartmentUsage {
                 StoredDbSystem::getLifecycleState, system -> "DB system " + system.getId()).toList();
     }
 
+    /** The network ids a create or update body names, whether or not they are well formed. */
+    @SuppressWarnings("unchecked")
+    private static Set<String> networkIds(Map<String, Object> details) {
+        Map<String, Object> network = details != null && details.get("networkDetails") instanceof Map<?, ?> map
+                ? (Map<String, Object>) map : null;
+        return NetworkUsage.ids(NetworkUsage.field(network, "subnetId"), NetworkUsage.field(network, "nsgIds"));
+    }
+
+    @Override
+    public List<String> resourcesUsing(String networkId) {
+        return NetworkUsage.using(systems.scan(k -> true), networkId, StoredDbSystem::getLifecycleState,
+                system -> NetworkUsage.ids(NetworkUsage.field(system.getNetworkDetails(), "subnetId"),
+                        NetworkUsage.field(system.getNetworkDetails(), "nsgIds")),
+                system -> "DB system " + system.getId()).toList();
+    }
+
     // ── DB systems ─────────────────────────────────────────────────────────────
 
+    /** The subnet and NSGs are claimed from their check until the DB system is stored. */
     public Created createDbSystem(Map<String, Object> details) {
-        return configurations.attachingConfiguration(() -> create(details));
+        try (NetworkClaims.Claim claim = NetworkClaims.claim(networkIds(details))) {
+            return configurations.attachingConfiguration(() -> create(details));
+        }
     }
 
     private Created create(Map<String, Object> details) {
@@ -399,7 +420,9 @@ public class PsqlService implements Resettable, CompartmentUsage {
      * and policy are management-plane facts here), so the work request is already finished.
      */
     public String updateDbSystem(String dbSystemId, Map<String, Object> details, String ifMatch) {
-        return configurations.attachingConfiguration(() -> update(dbSystemId, details, ifMatch));
+        try (NetworkClaims.Claim claim = NetworkClaims.claim(networkIds(details))) {
+            return configurations.attachingConfiguration(() -> update(dbSystemId, details, ifMatch));
+        }
     }
 
     private String update(String dbSystemId, Map<String, Object> details, String ifMatch) {

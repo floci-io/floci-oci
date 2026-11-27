@@ -204,4 +204,27 @@ class NetworkReferencesRestIntegrationTest {
                 "passwordDetails", Map.of("passwordType", "PLAIN_TEXT", "password", "BEstrO0ng_#11")));
         return details;
     }
+
+    @Test
+    void aSubnetAnApplicationStillUsesCannotBeDeletedUntilTheApplicationIs() {
+        TestNetworks.Network own = TestNetworks.create(compartment);
+        String appId = given().contentType("application/json")
+                .body(Map.of("compartmentId", compartment, "displayName", "refs-holds-subnet",
+                        "subnetIds", List.of(own.subnetId())))
+            .when().post("/20181201/applications")
+            .then().statusCode(200)
+                .extract().path("id");
+
+        given().when().delete("/20160918/subnets/" + own.subnetId())
+            .then().statusCode(409)
+                .header("opc-request-id", notNullValue())
+                .body("code", equalTo("Conflict"))
+                .body("message", equalTo("The subnet " + own.subnetId()
+                        + " is still used by other resources and cannot be deleted: application " + appId));
+
+        given().when().delete("/20181201/applications/" + appId).then().statusCode(204);
+        given().when().delete("/20160918/subnets/" + own.subnetId()).then().statusCode(204);
+        given().when().delete("/20160918/networkSecurityGroups/" + own.nsgId()).then().statusCode(204);
+        given().when().delete("/20160918/vcns/" + own.vcnId()).then().statusCode(204);
+    }
 }

@@ -220,4 +220,15 @@ class FunctionsServiceTest {
         assertEquals("MissingParameter", e.getCode());
         assertNotNull(e.getMessage());
     }
+
+    @Test
+    void anApplicationReportsItsSubnetsUntilItIsDeleted() {
+        StoredApplication app = app("uses-subnet");
+
+        assertEquals(List.of("application " + app.getId()), service.resourcesUsing(SUBNET));
+        assertEquals(List.of(), service.resourcesUsing("ocid1.subnet.oc1.iad.other"));
+
+        service.deleteApplication(app.getId(), null);
+        assertEquals(List.of(), service.resourcesUsing(SUBNET));
+    }
 }

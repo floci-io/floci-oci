@@ -5,7 +5,9 @@ import io.floci.oci.config.EmulatorConfig;
 import io.floci.oci.core.common.CompartmentUsage;
 import io.floci.oci.core.common.OciContext;
 import io.floci.oci.core.common.Etags;
+import io.floci.oci.core.common.NetworkClaims;
 import io.floci.oci.core.common.NetworkReferences;
+import io.floci.oci.core.common.NetworkUsage;
 import io.floci.oci.core.common.OciException;
 import io.floci.oci.core.common.Ocids;
 import io.floci.oci.core.common.Resettable;
@@ -46,7 +48,7 @@ import java.util.stream.Stream;
  * Business logic service for OCI Container Engine for Kubernetes (OKE) API emulation.
  */
 @ApplicationScoped
-public class OkeService implements Resettable, CompartmentUsage {
+public class OkeService implements Resettable, CompartmentUsage, NetworkUsage {
 
     private static final Logger LOG = Logger.getLogger(OkeService.class);
     private static final SecureRandom RANDOM = new SecureRandom();
@@ -383,11 +385,29 @@ public class OkeService implements Resettable, CompartmentUsage {
                 ClusterSettings.NONE);
     }
 
+    /**
+     * The network ids are claimed from before they are checked until the cluster is stored, so a
+     * VCN, subnet or NSG delete in between (the sidecar starts in that window) is refused.
+     */
     public CreateClusterResult createCluster(String compartmentId, String name, String vcnId,
                                 String kubernetesVersion, String kmsKeyId,
                                 Map<String, String> freeformTags,
                                 Map<String, Map<String, Object>> definedTags,
                                 ClusterSettings settings) {
+        try (NetworkClaims.Claim claim = NetworkClaims.claim(NetworkUsage.ids(vcnId,
+                NetworkUsage.field(settings.endpointConfig(), "subnetId"),
+                NetworkUsage.field(settings.endpointConfig(), "nsgIds"),
+                NetworkUsage.field(settings.options(), "serviceLbSubnetIds")))) {
+            return createClaimedCluster(compartmentId, name, vcnId, kubernetesVersion, kmsKeyId, freeformTags,
+                    definedTags, settings);
+        }
+    }
+
+    private CreateClusterResult createClaimedCluster(String compartmentId, String name, String vcnId,
+                                                     String kubernetesVersion, String kmsKeyId,
+                                                     Map<String, String> freeformTags,
+                                                     Map<String, Map<String, Object>> definedTags,
+                                                     ClusterSettings settings) {
         if (compartmentId == null || compartmentId.isBlank()) {
             throw OciException.missingParameter("Missing required parameter: compartmentId");
         }
@@ -535,9 +555,11 @@ public class OkeService implements Resettable, CompartmentUsage {
         StoredOkeCluster cluster = getCluster(clusterId);
         Etags.checkIfMatch(ifMatch, cluster.getEtag());
         Map<String, Object> update = details != null ? details : Map.of();
-        networkReferences.requireNsgs(NetworkReferences.ids(update.get("nsgIds"), "nsgIds"));
-        cluster.setEndpointConfig(OkeClusterSettings.updatedEndpointConfig(cluster.getEndpointConfig(), update));
-        return clusterUpdated(cluster);
+        try (NetworkClaims.Claim claim = NetworkClaims.claim(NetworkUsage.ids(update.get("nsgIds")))) {
+            networkReferences.requireNsgs(NetworkReferences.ids(update.get("nsgIds"), "nsgIds"));
+            cluster.setEndpointConfig(OkeClusterSettings.updatedEndpointConfig(cluster.getEndpointConfig(), update));
+            return clusterUpdated(cluster);
+        }
     }
 
     /**
@@ -556,9 +578,12 @@ public class OkeService implements Resettable, CompartmentUsage {
         @SuppressWarnings("unchecked")
         Map<String, Object> requested = (Map<String, Object>) config;
         Map<String, Object> endpoint = OkeClusterSettings.endpointConfig(requested);
-        requireEndpointNetwork(endpoint, cluster.getVcnId());
-        cluster.setEndpointConfig(endpoint);
-        return clusterUpdated(cluster);
+        try (NetworkClaims.Claim claim = NetworkClaims.claim(NetworkUsage.ids(
+                NetworkUsage.field(endpoint, "subnetId"), NetworkUsage.field(endpoint, "nsgIds")))) {
+            requireEndpointNetwork(endpoint, cluster.getVcnId());
+            cluster.setEndpointConfig(endpoint);
+            return clusterUpdated(cluster);
+        }
     }
 
     private void requireEndpointNetwork(Map<String, Object> endpointConfig, String vcnId) {
@@ -694,5 +719,16 @@ public class OkeService implements Resettable, CompartmentUsage {
                         StoredOkeCluster::getLifecycleState, c -> "cluster " + c.getId()),
                 CompartmentUsage.live(nodePools, tenancyId, compartmentId, StoredNodePool::getCompartmentId,
                         StoredNodePool::getLifecycleState, p -> "node pool " + p.getId())).toList();
+    }
+
+    /** A cluster holds its VCN, its endpoint subnet and NSGs, and its service load balancer subnets. */
+    @Override
+    public List<String> resourcesUsing(String networkId) {
+        return NetworkUsage.using(clusters.scan(k -> true), networkId, StoredOkeCluster::getLifecycleState,
+                cluster -> NetworkUsage.ids(cluster.getVcnId(),
+                        NetworkUsage.field(cluster.getEndpointConfig(), "subnetId"),
+                        NetworkUsage.field(cluster.getEndpointConfig(), "nsgIds"),
+                        NetworkUsage.field(cluster.getOptions(), "serviceLbSubnetIds")),
+                cluster -> "cluster " + cluster.getId()).toList();
     }
 }

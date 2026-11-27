@@ -4,7 +4,9 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import io.floci.oci.config.EmulatorConfig;
 import io.floci.oci.core.common.CompartmentUsage;
 import io.floci.oci.core.common.Etags;
+import io.floci.oci.core.common.NetworkClaims;
 import io.floci.oci.core.common.NetworkReferences;
+import io.floci.oci.core.common.NetworkUsage;
 import io.floci.oci.core.common.OciContext;
 import io.floci.oci.core.common.OciException;
 import io.floci.oci.core.common.Ocids;
@@ -75,16 +77,19 @@ public class NetworkingService implements CompartmentUsage, NetworkReferences {
     private final ServiceRegistry serviceRegistry;
     private final WorkRequestService workRequests;
     private final Iterable<VcnLifecycleListener> vcnListeners;
+    private final Iterable<NetworkUsage> networkUsages;
 
     @Inject
     public NetworkingService(StorageFactory storageFactory, EmulatorConfig config,
                              ServiceRegistry serviceRegistry, WorkRequestService workRequests,
-                             OciContext ociContext, Instance<VcnLifecycleListener> vcnListeners) {
+                             OciContext ociContext, Instance<VcnLifecycleListener> vcnListeners,
+                             Instance<NetworkUsage> networkUsages) {
         this.config = config;
         this.ociContext = ociContext;
         this.serviceRegistry = serviceRegistry;
         this.workRequests = workRequests;
         this.vcnListeners = vcnListeners;
+        this.networkUsages = networkUsages;
         this.resources = storageFactory.create("networking", "networking-resources.json",
                 new TypeReference<Map<String, StoredNetworkResource>>() {});
     }
@@ -96,12 +101,19 @@ public class NetworkingService implements CompartmentUsage, NetworkReferences {
 
     NetworkingService(StorageBackend<String, StoredNetworkResource> resources, EmulatorConfig config,
                       WorkRequestService workRequests, Iterable<VcnLifecycleListener> vcnListeners) {
+        this(resources, config, workRequests, vcnListeners, List.of());
+    }
+
+    NetworkingService(StorageBackend<String, StoredNetworkResource> resources, EmulatorConfig config,
+                      WorkRequestService workRequests, Iterable<VcnLifecycleListener> vcnListeners,
+                      Iterable<NetworkUsage> networkUsages) {
         this.resources = resources;
         this.config = config;
         this.ociContext = OciContext.fromConfig(config);
         this.serviceRegistry = null;
         this.workRequests = workRequests;
         this.vcnListeners = vcnListeners;
+        this.networkUsages = networkUsages;
     }
 
     void onStart(@Observes StartupEvent ev) {
@@ -273,6 +285,9 @@ public class NetworkingService implements CompartmentUsage, NetworkReferences {
         if (r.isVcnDefault()) {
             throw OciException.conflict("The default " + kind.ocidType() + " of a VCN cannot be deleted: " + id);
         }
+        if (kind == NetworkKind.VCN || kind == NetworkKind.SUBNET || kind == NetworkKind.NETWORK_SECURITY_GROUP) {
+            requireUnused(kind, id);
+        }
         switch (kind) {
             case VCN -> deleteVcn(r);
             case ROUTE_TABLE -> requireUnreferenced(r, "routeTableId");
@@ -303,6 +318,27 @@ public class NetworkingService implements CompartmentUsage, NetworkReferences {
             resources.delete(id);
         }
         LOG.infov("delete {0} {1}", kind.ocidType(), id);
+    }
+
+    /**
+     * Refuses the delete while another service's live resource still references the VCN, subnet or
+     * network security group: OCI answers DeleteSubnet with 409 Conflict while resources remain in
+     * the subnet, and the Terraform provider retries a subnet delete on Conflict while dependants
+     * are torn down. The message wording is floci-oci's own.
+     */
+    private void requireUnused(NetworkKind kind, String id) {
+        List<String> users = new ArrayList<>();
+        int pending = NetworkClaims.pending(id);
+        if (pending > 0) {
+            users.add(pending + " resource(s) being created or updated with it");
+        }
+        for (NetworkUsage usage : networkUsages) {
+            users.addAll(usage.resourcesUsing(id));
+        }
+        if (!users.isEmpty()) {
+            throw OciException.conflict("The " + kind.ocidType() + " " + id
+                    + " is still used by other resources and cannot be deleted: " + String.join(", ", users));
+        }
     }
 
     public record CompartmentMove(StoredNetworkResource resource, String workRequestId) {
@@ -932,25 +968,29 @@ public class NetworkingService implements CompartmentUsage, NetworkReferences {
 
     // ── References between resources ───────────────────────────────────────────
 
+    // The checks hold the Networking lock, as delete does: a create that claimed its ids with
+    // NetworkClaims before checking them either sees a delete that already finished (and fails
+    // its check) or is seen by a later delete through its claim.
+
     @Override
-    public void requireVcn(String vcnId) {
+    public synchronized void requireVcn(String vcnId) {
         if (vcnId != null && checksReferences()) {
             requireVcnInBody(vcnId);
         }
     }
 
     @Override
-    public void requireSubnets(Collection<String> subnetIds) {
+    public synchronized void requireSubnets(Collection<String> subnetIds) {
         requireAll(subnetIds, NetworkKind.SUBNET);
     }
 
     @Override
-    public void requireNsgs(Collection<String> nsgIds) {
+    public synchronized void requireNsgs(Collection<String> nsgIds) {
         requireAll(nsgIds, NetworkKind.NETWORK_SECURITY_GROUP);
     }
 
     @Override
-    public void requireSubnetsInVcn(Collection<String> subnetIds, String vcnId, String field) {
+    public synchronized void requireSubnetsInVcn(Collection<String> subnetIds, String vcnId, String field) {
         requireSubnets(subnetIds);
         if (subnetIds == null || vcnId == null || !checksReferences()) {
             return;

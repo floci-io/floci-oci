@@ -2,6 +2,7 @@ package io.floci.oci.services.oke;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.floci.oci.config.EmulatorConfig;
+import io.floci.oci.core.common.NetworkClaims;
 import io.floci.oci.core.common.OciContext;
 import io.floci.oci.core.common.OciException;
 import io.floci.oci.core.storage.InMemoryStorage;
@@ -37,6 +38,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -710,5 +712,46 @@ class OkeServiceTest {
         public Instant instant() {
             return now;
         }
+    }
+
+    @Test
+    void aClusterReportsItsVcnSubnetsAndNsgsUntilItIsDeleted() {
+        OkeService.ClusterSettings settings = new OkeService.ClusterSettings(null,
+                Map.of("subnetId", "ocid1.subnet.oc1.iad.api", "nsgIds", List.of("ocid1.networksecuritygroup.oc1.iad.n")),
+                Map.of("serviceLbSubnetIds", List.of("ocid1.subnet.oc1.iad.lb")), null, null);
+        StoredOkeCluster cluster = service.createCluster(COMPARTMENT, "uses-network", VCN, "v1.30.1", null, null, null,
+                settings).cluster();
+        List<String> expected = List.of("cluster " + cluster.getId());
+
+        assertEquals(expected, service.resourcesUsing(VCN));
+        assertEquals(expected, service.resourcesUsing("ocid1.subnet.oc1.iad.api"));
+        assertEquals(expected, service.resourcesUsing("ocid1.subnet.oc1.iad.lb"));
+        assertEquals(expected, service.resourcesUsing("ocid1.networksecuritygroup.oc1.iad.n"));
+        assertEquals(List.of(), service.resourcesUsing("ocid1.subnet.oc1.iad.other"));
+
+        service.deleteCluster(cluster.getId());
+        assertEquals(List.of(), service.resourcesUsing(VCN));
+    }
+
+    @Test
+    void createHoldsItsNetworkClaimsWhileTheSidecarStartsAndReleasesThemOnceStored() {
+        OkeClusterManager slowManager = mock(OkeClusterManager.class);
+        List<Integer> pendingDuringStart = new ArrayList<>();
+        doAnswer(call -> {
+            pendingDuringStart.add(NetworkClaims.pending(VCN));
+            pendingDuringStart.add(NetworkClaims.pending("ocid1.subnet.oc1.iad.api"));
+            return null;
+        }).when(slowManager).startCluster(any());
+        EmulatorConfig config = mock(EmulatorConfig.class);
+        lenient().when(config.defaultRealm()).thenReturn("oc1");
+        lenient().when(config.defaultRegion()).thenReturn("us-ashburn-1");
+        OkeService withSidecar = new OkeService(new InMemoryStorage<>(), new InMemoryStorage<>(), config, null,
+                mock(WorkRequestService.class), slowManager);
+
+        withSidecar.createCluster(COMPARTMENT, "claims", VCN, "v1.30.1", null, null, null, fullSettings());
+
+        assertEquals(List.of(1, 1), pendingDuringStart);
+        assertEquals(0, NetworkClaims.pending(VCN));
+        assertEquals(0, NetworkClaims.pending("ocid1.subnet.oc1.iad.api"));
     }
 }
