@@ -5,6 +5,7 @@ import io.floci.oci.config.EmulatorConfig;
 import io.floci.oci.core.common.CompartmentUsage;
 import io.floci.oci.core.common.Etags;
 import io.floci.oci.core.common.NetworkReferences;
+import io.floci.oci.core.common.NetworkUsage;
 import io.floci.oci.core.common.OciContext;
 import io.floci.oci.core.common.OciException;
 import io.floci.oci.core.common.Ocids;
@@ -56,7 +57,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * exits or the ready timeout passes. Every outcome finishes the work request the CLI waits on.
  */
 @ApplicationScoped
-public class MysqlService implements Resettable, CompartmentUsage {
+public class MysqlService implements Resettable, CompartmentUsage, NetworkUsage {
 
     private static final Logger LOG = Logger.getLogger(MysqlService.class);
 
@@ -206,6 +207,13 @@ public class MysqlService implements Resettable, CompartmentUsage {
     public List<String> resourcesIn(String tenancyId, String compartmentId) {
         return CompartmentUsage.live(systems, tenancyId, compartmentId, StoredMysqlDbSystem::getCompartmentId,
                 StoredMysqlDbSystem::getLifecycleState, system -> "MySQL DB system " + system.getId()).toList();
+    }
+
+    @Override
+    public List<String> resourcesUsing(String networkId) {
+        return NetworkUsage.using(systems.scan(k -> true), networkId, StoredMysqlDbSystem::getLifecycleState,
+                system -> NetworkUsage.ids(system.getSubnetId(), system.getNsgIds()),
+                system -> "MySQL DB system " + system.getId()).toList();
     }
 
     // ── DB systems ─────────────────────────────────────────────────────────────

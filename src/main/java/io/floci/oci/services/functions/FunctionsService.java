@@ -9,6 +9,7 @@ import io.floci.oci.core.common.CompartmentUsage;
 import io.floci.oci.core.common.ContainerImageResolver;
 import io.floci.oci.core.common.Etags;
 import io.floci.oci.core.common.NetworkReferences;
+import io.floci.oci.core.common.NetworkUsage;
 import io.floci.oci.core.common.OciContext;
 import io.floci.oci.core.common.OciException;
 import io.floci.oci.core.common.Ocids;
@@ -56,7 +57,7 @@ import java.util.stream.Stream;
  * invocations return a synthetic body.
  */
 @ApplicationScoped
-public class FunctionsService implements Resettable, CompartmentUsage {
+public class FunctionsService implements Resettable, CompartmentUsage, NetworkUsage {
 
     private static final Logger LOG = Logger.getLogger(FunctionsService.class);
     private static final ObjectMapper MAPPER = new ObjectMapper();
@@ -716,5 +717,14 @@ public class FunctionsService implements Resettable, CompartmentUsage {
                         StoredApplication::getLifecycleState, a -> "application " + a.getId()),
                 CompartmentUsage.live(functions, tenancyId, compartmentId, StoredFunction::getCompartmentId,
                         StoredFunction::getLifecycleState, f -> "function " + f.getId())).toList();
+    }
+
+    /** An application holds its subnets and its network security groups. */
+    @Override
+    public List<String> resourcesUsing(String networkId) {
+        return NetworkUsage.using(applications.scan(k -> true), networkId, StoredApplication::getLifecycleState,
+                app -> NetworkUsage.ids(app.getSubnetIds(),
+                        NetworkUsage.field(app.getSettings(), "networkSecurityGroupIds")),
+                app -> "application " + app.getId()).toList();
     }
 }

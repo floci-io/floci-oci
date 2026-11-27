@@ -5,6 +5,7 @@ import io.floci.oci.config.EmulatorConfig;
 import io.floci.oci.core.common.CompartmentUsage;
 import io.floci.oci.core.common.Etags;
 import io.floci.oci.core.common.NetworkReferences;
+import io.floci.oci.core.common.NetworkUsage;
 import io.floci.oci.core.common.OciContext;
 import io.floci.oci.core.common.OciException;
 import io.floci.oci.core.common.Ocids;
@@ -68,7 +69,7 @@ import java.util.regex.Pattern;
  * With {@code mock} on, the same transitions complete at once and no container exists.
  */
 @ApplicationScoped
-public class PsqlService implements Resettable, CompartmentUsage {
+public class PsqlService implements Resettable, CompartmentUsage, NetworkUsage {
 
     private static final Logger LOG = Logger.getLogger(PsqlService.class);
 
@@ -241,6 +242,14 @@ public class PsqlService implements Resettable, CompartmentUsage {
     public List<String> resourcesIn(String tenancyId, String compartmentId) {
         return CompartmentUsage.live(systems, tenancyId, compartmentId, StoredDbSystem::getCompartmentId,
                 StoredDbSystem::getLifecycleState, system -> "DB system " + system.getId()).toList();
+    }
+
+    @Override
+    public List<String> resourcesUsing(String networkId) {
+        return NetworkUsage.using(systems.scan(k -> true), networkId, StoredDbSystem::getLifecycleState,
+                system -> NetworkUsage.ids(NetworkUsage.field(system.getNetworkDetails(), "subnetId"),
+                        NetworkUsage.field(system.getNetworkDetails(), "nsgIds")),
+                system -> "DB system " + system.getId()).toList();
     }
 
     // ── DB systems ─────────────────────────────────────────────────────────────

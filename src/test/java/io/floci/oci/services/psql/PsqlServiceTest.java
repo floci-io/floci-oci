@@ -1310,4 +1310,15 @@ class PsqlServiceTest {
         mock.deleteDbSystem(created.getFirst().getId(), null);
         mock.createDbSystem(createDetails());
     }
+
+    @Test
+    void aDbSystemReportsItsSubnetUntilItIsDeleted() {
+        StoredDbSystem system = mock.createDbSystem(createDetails()).system();
+        String subnet = "ocid1.subnet.oc1.iad.psqltestsubnet";
+
+        assertEquals(List.of("DB system " + system.getId()), mock.resourcesUsing(subnet));
+
+        mock.deleteDbSystem(system.getId(), null);
+        assertEquals(List.of(), mock.resourcesUsing(subnet));
+    }
 }

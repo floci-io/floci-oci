@@ -675,4 +675,14 @@ class MysqlServiceTest {
                 workRequest(interrupted.workRequestId()).getErrors().getFirst().getMessage());
         assertEquals("ACTIVE", real.getDbSystem(active.getId()).getLifecycleState());
     }
+
+    @Test
+    void aDbSystemReportsItsSubnetUntilItIsDeleted() {
+        StoredMysqlDbSystem system = mock.createDbSystem(createDetails()).system();
+
+        assertEquals(List.of("MySQL DB system " + system.getId()), mock.resourcesUsing(SUBNET));
+
+        mock.deleteDbSystem(system.getId(), null);
+        assertEquals(List.of(), mock.resourcesUsing(SUBNET));
+    }
 }

@@ -6,6 +6,7 @@ import io.floci.oci.core.common.CompartmentUsage;
 import io.floci.oci.core.common.OciContext;
 import io.floci.oci.core.common.Etags;
 import io.floci.oci.core.common.NetworkReferences;
+import io.floci.oci.core.common.NetworkUsage;
 import io.floci.oci.core.common.OciException;
 import io.floci.oci.core.common.Ocids;
 import io.floci.oci.core.common.Resettable;
@@ -46,7 +47,7 @@ import java.util.stream.Stream;
  * Business logic service for OCI Container Engine for Kubernetes (OKE) API emulation.
  */
 @ApplicationScoped
-public class OkeService implements Resettable, CompartmentUsage {
+public class OkeService implements Resettable, CompartmentUsage, NetworkUsage {
 
     private static final Logger LOG = Logger.getLogger(OkeService.class);
     private static final SecureRandom RANDOM = new SecureRandom();
@@ -694,5 +695,16 @@ public class OkeService implements Resettable, CompartmentUsage {
                         StoredOkeCluster::getLifecycleState, c -> "cluster " + c.getId()),
                 CompartmentUsage.live(nodePools, tenancyId, compartmentId, StoredNodePool::getCompartmentId,
                         StoredNodePool::getLifecycleState, p -> "node pool " + p.getId())).toList();
+    }
+
+    /** A cluster holds its VCN, its endpoint subnet and NSGs, and its service load balancer subnets. */
+    @Override
+    public List<String> resourcesUsing(String networkId) {
+        return NetworkUsage.using(clusters.scan(k -> true), networkId, StoredOkeCluster::getLifecycleState,
+                cluster -> NetworkUsage.ids(cluster.getVcnId(),
+                        NetworkUsage.field(cluster.getEndpointConfig(), "subnetId"),
+                        NetworkUsage.field(cluster.getEndpointConfig(), "nsgIds"),
+                        NetworkUsage.field(cluster.getOptions(), "serviceLbSubnetIds")),
+                cluster -> "cluster " + cluster.getId()).toList();
     }
 }

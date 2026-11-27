@@ -711,4 +711,23 @@ class OkeServiceTest {
             return now;
         }
     }
+
+    @Test
+    void aClusterReportsItsVcnSubnetsAndNsgsUntilItIsDeleted() {
+        OkeService.ClusterSettings settings = new OkeService.ClusterSettings(null,
+                Map.of("subnetId", "ocid1.subnet.oc1.iad.api", "nsgIds", List.of("ocid1.networksecuritygroup.oc1.iad.n")),
+                Map.of("serviceLbSubnetIds", List.of("ocid1.subnet.oc1.iad.lb")), null, null);
+        StoredOkeCluster cluster = service.createCluster(COMPARTMENT, "uses-network", VCN, "v1.30.1", null, null, null,
+                settings).cluster();
+        List<String> expected = List.of("cluster " + cluster.getId());
+
+        assertEquals(expected, service.resourcesUsing(VCN));
+        assertEquals(expected, service.resourcesUsing("ocid1.subnet.oc1.iad.api"));
+        assertEquals(expected, service.resourcesUsing("ocid1.subnet.oc1.iad.lb"));
+        assertEquals(expected, service.resourcesUsing("ocid1.networksecuritygroup.oc1.iad.n"));
+        assertEquals(List.of(), service.resourcesUsing("ocid1.subnet.oc1.iad.other"));
+
+        service.deleteCluster(cluster.getId());
+        assertEquals(List.of(), service.resourcesUsing(VCN));
+    }
 }

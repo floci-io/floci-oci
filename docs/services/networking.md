@@ -62,6 +62,13 @@ resolver the first time the association is read; with DNS disabled the associati
 | Unknown `vcnId`, route table, security list, DHCP options, gateway or service in a body | `400 RelatedResourceNotAuthorizedOrNotFound` |
 | Delete a VCN that still has subnets, gateways or non-default resources | `409 Conflict` |
 | Delete a route table, security list or DHCP options a subnet uses, or a gateway a route rule targets | `409 Conflict` |
+| Delete a VCN, subnet or network security group another service's resource still uses (an OKE cluster, a function application, a PostgreSQL or MySQL DB system, a container instance's VNIC) | `409 Conflict` |
+
+A resource that another service holds a reference to stays until that resource is deleted: the
+`409 Conflict` names each one (`application ocid1.fnapp...`). A deleted resource no longer
+counts, but one that is still `DELETING` does, as in OCI, where the Terraform provider retries a
+subnet delete on `Conflict` while its dependants are torn down. The status and code follow OCI;
+the message wording is floci-oci's own (inferred, no source shows OCI's text).
 
 ## Quickstart
 
