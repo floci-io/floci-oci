@@ -81,7 +81,9 @@ These defaults are floci-oci's own; no Oracle source in the reference corpus sta
 - `CancelWorkRequest` answers `409 Conflict`: operations are not cancellable.
 - An operation the DB system's state does not allow is refused with `409`. A refusal while the system is `CREATING`, `UPDATING` or `DELETING` is
   `409 IncorrectState`, which OCI SDKs retry until the operation finishes; in any other state a retry
-  cannot succeed, so it is `409 Conflict`, which they do not retry.
+  cannot succeed, so it is `409 Conflict`, which they do not retry. Two operations that arrive
+  together are decided one at a time: the first moves the system on, and the second is refused
+  as if it had come after it, so no work request is left `IN_PROGRESS`.
 - `dataStorageSizeInGBs` may grow, never shrink (`400 InvalidParameter`). Storage limits, backup
   policies and maintenance windows are recorded, not acted on.
 
