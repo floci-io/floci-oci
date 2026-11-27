@@ -385,4 +385,132 @@ class OkeRestIntegrationTest {
 
         given().when().delete("/20180222/clusters/{id}", clusterId).then().statusCode(202);
     }
+
+    @Test
+    void nodePoolEchoesNodeConfigDetailsAndHoldsItsNetworkUntilDeleted() {
+        TestNetworks.Network own = TestNetworks.create(compartment);
+        String clusterId = OkeWorkRequests.createdId(given()
+            .contentType(ContentType.JSON)
+            .body(Map.of("compartmentId", compartment, "name", "pool-network-cluster", "vcnId", own.vcnId()))
+            .when().post("/20180222/clusters")
+            .then().statusCode(202)
+            .extract().header("opc-work-request-id"));
+        Map<String, Object> placement = Map.of("availabilityDomain", "Uocm:US-ASHBURN-AD-1",
+                "subnetId", own.subnetId(), "faultDomains", List.of("FAULT-DOMAIN-1"));
+        Map<String, Object> details = new HashMap<>();
+        details.put("compartmentId", compartment);
+        details.put("clusterId", clusterId);
+        details.put("name", "pool-network");
+        details.put("nodeShape", "VM.Standard.E4.Flex");
+        details.put("nodeConfigDetails", Map.of("size", 3, "placementConfigs", List.of(placement),
+                "nsgIds", List.of(own.nsgId()), "isPvEncryptionInTransitEnabled", false,
+                "nodePoolPodNetworkOptionDetails", Map.of("cniType", "FLANNEL_OVERLAY")));
+        String nodePoolId = OkeWorkRequests.createdId(given()
+            .contentType(ContentType.JSON)
+            .body(details)
+            .when().post("/20180222/nodePools")
+            .then().statusCode(202)
+            .extract().header("opc-work-request-id"));
+
+        given()
+            .when().get("/20180222/nodePools/{id}", nodePoolId)
+            .then()
+                .statusCode(200)
+                .header("opc-request-id", notNullValue())
+                .body("nodeConfigDetails.size", equalTo(3))
+                .body("nodeConfigDetails.placementConfigs[0].availabilityDomain", equalTo("Uocm:US-ASHBURN-AD-1"))
+                .body("nodeConfigDetails.placementConfigs[0].subnetId", equalTo(own.subnetId()))
+                .body("nodeConfigDetails.placementConfigs[0].faultDomains", equalTo(List.of("FAULT-DOMAIN-1")))
+                .body("nodeConfigDetails.nsgIds", equalTo(List.of(own.nsgId())))
+                .body("nodeConfigDetails.isPvEncryptionInTransitEnabled", equalTo(false))
+                .body("nodeConfigDetails.nodePoolPodNetworkOptionDetails", equalTo(Map.of("cniType", "FLANNEL_OVERLAY")))
+                .body("$", not(hasKey("subnetIds")));
+        given()
+            .queryParam("compartmentId", compartment)
+            .queryParam("clusterId", clusterId)
+            .when().get("/20180222/nodePools")
+            .then()
+                .statusCode(200)
+                .body("[0].nodeConfigDetails.placementConfigs[0].subnetId", equalTo(own.subnetId()));
+
+        given().when().delete("/20160918/subnets/" + own.subnetId())
+            .then().statusCode(409)
+                .header("opc-request-id", notNullValue())
+                .body("code", equalTo("Conflict"))
+                .body("message", equalTo("The subnet " + own.subnetId()
+                        + " is still used by other resources and cannot be deleted: node pool " + nodePoolId));
+        given().when().delete("/20160918/networkSecurityGroups/" + own.nsgId())
+            .then().statusCode(409)
+                .body("code", equalTo("Conflict"));
+
+        given()
+            .contentType(ContentType.JSON)
+            .body(Map.of("nodeConfigDetails", Map.of("size", 5, "nsgIds", List.of())))
+            .when().put("/20180222/nodePools/{id}", nodePoolId)
+            .then().statusCode(202);
+        given()
+            .when().get("/20180222/nodePools/{id}", nodePoolId)
+            .then()
+                .statusCode(200)
+                .body("nodeConfigDetails.size", equalTo(5))
+                .body("nodeConfigDetails.nsgIds", equalTo(List.of()))
+                .body("nodeConfigDetails.placementConfigs[0].subnetId", equalTo(own.subnetId()));
+        given().when().delete("/20160918/networkSecurityGroups/" + own.nsgId()).then().statusCode(204);
+
+        given().when().delete("/20180222/nodePools/{id}", nodePoolId).then().statusCode(202);
+        given().when().delete("/20160918/subnets/" + own.subnetId()).then().statusCode(204);
+        given().when().delete("/20180222/clusters/{id}", clusterId).then().statusCode(202);
+        given().when().delete("/20160918/vcns/" + own.vcnId()).then().statusCode(204);
+    }
+
+    @Test
+    void nodePoolEchoesTheDeprecatedSubnetIds() {
+        String clusterId = createCluster("pool-subnets-cluster");
+        String nodePoolId = OkeWorkRequests.createdId(given()
+            .contentType(ContentType.JSON)
+            .body(Map.of("compartmentId", compartment, "clusterId", clusterId, "name", "pool-subnets",
+                    "nodeShape", "VM.Standard.E4.Flex", "quantityPerSubnet", 1,
+                    "subnetIds", List.of(network.subnetId())))
+            .when().post("/20180222/nodePools")
+            .then().statusCode(202)
+            .extract().header("opc-work-request-id"));
+
+        given()
+            .when().get("/20180222/nodePools/{id}", nodePoolId)
+            .then()
+                .statusCode(200)
+                .body("subnetIds", equalTo(List.of(network.subnetId())))
+                .body("$", not(hasKey("nodeConfigDetails")));
+
+        given().when().delete("/20180222/nodePools/{id}", nodePoolId).then().statusCode(202);
+        given().when().delete("/20180222/clusters/{id}", clusterId).then().statusCode(202);
+    }
+
+    @Test
+    void nodeConfigDetailsWithoutItsMandatoryFieldsIsRejected() {
+        String clusterId = createCluster("pool-missing-cluster");
+        Map<String, Object> details = new HashMap<>();
+        details.put("compartmentId", compartment);
+        details.put("clusterId", clusterId);
+        details.put("name", "pool-missing");
+        details.put("nodeShape", "VM.Standard.E4.Flex");
+
+        details.put("nodeConfigDetails", Map.of("placementConfigs", List.of()));
+        given().contentType(ContentType.JSON).body(details)
+            .when().post("/20180222/nodePools")
+            .then().statusCode(400)
+                .body("code", equalTo("MissingParameter"))
+                .body("message", equalTo("Missing required parameter: nodeConfigDetails.size"));
+
+        details.put("nodeConfigDetails", Map.of("size", 1,
+                "placementConfigs", List.of(Map.of("subnetId", network.subnetId()))));
+        given().contentType(ContentType.JSON).body(details)
+            .when().post("/20180222/nodePools")
+            .then().statusCode(400)
+                .body("code", equalTo("MissingParameter"))
+                .body("message", equalTo(
+                        "Missing required parameter: nodeConfigDetails.placementConfigs.availabilityDomain"));
+
+        given().when().delete("/20180222/clusters/{id}", clusterId).then().statusCode(202);
+    }
 }

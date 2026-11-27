@@ -734,6 +734,45 @@ class OkeServiceTest {
     }
 
     @Test
+    void resourcesUsingListsNodePoolsByEveryNetworkTheyName() {
+        String clusterId = service.createCluster(COMPARTMENT, "pool-network", VCN, "v1.30.1", null, null, null)
+                .cluster().getId();
+        Map<String, Object> nodeConfig = Map.of("size", 1, "nsgIds", List.of("ocid1.networksecuritygroup.oc1.iad.node"),
+                "placementConfigs", List.of(Map.of("availabilityDomain", "AD-1", "subnetId", "ocid1.subnet.oc1.iad.node")),
+                "nodePoolPodNetworkOptionDetails", Map.of("cniType", "OCI_VCN_IP_NATIVE",
+                        "podSubnetIds", List.of("ocid1.subnet.oc1.iad.pod"),
+                        "podNsgIds", List.of("ocid1.networksecuritygroup.oc1.iad.pod")));
+        StoredNodePool pool = service.createNodePool(COMPARTMENT, clusterId, "pool", "v1.30.1", "VM.Standard.E4.Flex",
+                0, null, null, new OkeService.NodePoolNetwork(null, nodeConfig)).nodePool();
+        StoredNodePool legacy = service.createNodePool(COMPARTMENT, clusterId, "legacy", "v1.30.1",
+                "VM.Standard.E4.Flex", 1, null, null,
+                new OkeService.NodePoolNetwork(List.of("ocid1.subnet.oc1.iad.legacy"), null)).nodePool();
+
+        for (String id : List.of("ocid1.subnet.oc1.iad.node", "ocid1.networksecuritygroup.oc1.iad.node",
+                "ocid1.subnet.oc1.iad.pod", "ocid1.networksecuritygroup.oc1.iad.pod")) {
+            assertEquals(List.of("node pool " + pool.getId()), service.resourcesUsing(id), id);
+        }
+        assertEquals(List.of("node pool " + legacy.getId()), service.resourcesUsing("ocid1.subnet.oc1.iad.legacy"));
+
+        service.deleteNodePool(pool.getId());
+        assertEquals(List.of(), service.resourcesUsing("ocid1.subnet.oc1.iad.node"));
+    }
+
+    @Test
+    void nodePoolNetworkClaimsAreReleasedOnceTheNodePoolIsStoredOrRejected() {
+        String clusterId = service.createCluster(COMPARTMENT, "pool-claims", VCN, "v1.30.1", null, null, null)
+                .cluster().getId();
+        service.createNodePool(COMPARTMENT, clusterId, "pool", "v1.30.1", "VM.Standard.E4.Flex", 1, null, null,
+                new OkeService.NodePoolNetwork(List.of("ocid1.subnet.oc1.iad.claimed"), null));
+        assertThrows(OciException.class, () -> service.createNodePool(COMPARTMENT, clusterId, "bad", "v1.30.1",
+                "VM.Standard.E4.Flex", 1, null, null,
+                new OkeService.NodePoolNetwork(List.of("ocid1.subnet.oc1.iad.rejected"), Map.of("size", 1))));
+
+        assertEquals(0, NetworkClaims.pending("ocid1.subnet.oc1.iad.claimed"));
+        assertEquals(0, NetworkClaims.pending("ocid1.subnet.oc1.iad.rejected"));
+    }
+
+    @Test
     void createHoldsItsNetworkClaimsWhileTheSidecarStartsAndReleasesThemOnceStored() {
         OkeClusterManager slowManager = mock(OkeClusterManager.class);
         List<Integer> pendingDuringStart = new ArrayList<>();
