@@ -167,12 +167,26 @@ class PsqlContainerManagerTest {
     void stopReleasesThePortAndKeepsTheVolume() {
         StoredDbSystem system = system("16");
         system.setHostPort(15440);
+        when(lifecycleManager.removeIfExists("floci-oci-psql-abcdefghijklmnop")).thenReturn(true);
 
         manager.stop(system);
 
         verify(lifecycleManager).removeIfExists("floci-oci-psql-abcdefghijklmnop");
         verify(portAllocator).release(15440);
         verify(lifecycleManager, never()).removeVolume(any());
+    }
+
+    @Test
+    void aStopThatFindsNoContainerLeavesThePortToWhoeverHoldsItNow() {
+        // A delete removed the container and released the port, another DB system reserved it,
+        // and a stale failure then stops the deleted system again.
+        StoredDbSystem system = system("16");
+        system.setHostPort(15440);
+        when(lifecycleManager.removeIfExists("floci-oci-psql-abcdefghijklmnop")).thenReturn(false);
+
+        manager.stop(system);
+
+        verify(portAllocator, never()).release(anyInt());
     }
 
     @Test

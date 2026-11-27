@@ -290,8 +290,10 @@ public class PsqlContainerManager {
 
     /** Removes the container and releases its port. The data volume stays. */
     public void stop(StoredDbSystem system) {
-        lifecycleManager.removeIfExists(system.getContainerName());
-        if (system.getHostPort() > 0) {
+        // Only the call that actually removed the container gives its port back. A delete and a
+        // stale failure can both stop the same system, and by the second call the port may
+        // already be reserved for another one.
+        if (lifecycleManager.removeIfExists(system.getContainerName()) && system.getHostPort() > 0) {
             portAllocator.release(system.getHostPort());
         }
     }
