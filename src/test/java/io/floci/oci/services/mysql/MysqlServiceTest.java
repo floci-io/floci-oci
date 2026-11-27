@@ -550,14 +550,19 @@ class MysqlServiceTest {
         mock.createDbSystem(second);
 
         assertEquals(List.of("analytics-db", "orders-db"), mock.listDbSystems(COMPARTMENT, null, null, null, null,
-                null, List.of(), null, null).stream().map(StoredMysqlDbSystem::getDisplayName).toList());
+                null, null, List.of(), null, null).stream().map(StoredMysqlDbSystem::getDisplayName).toList());
         assertEquals(List.of("analytics-db", "orders-db"), mock.listDbSystems(COMPARTMENT, null, null, null, null,
-                null, List.of(), "displayName", null).stream().map(StoredMysqlDbSystem::getDisplayName).toList());
-        assertEquals(1, mock.listDbSystems(COMPARTMENT, null, null, "orders-db", null, null, List.of(), null, null)
+                null, null, List.of(), "displayName", null).stream().map(StoredMysqlDbSystem::getDisplayName).toList());
+        assertEquals(1, mock.listDbSystems(COMPARTMENT, null, null, "orders-db", null, null, null, List.of(), null,
+                null).size());
+        assertTrue(mock.listDbSystems(COMPARTMENT, true, null, null, null, null, null, List.of(), null, null)
+                .isEmpty());
+        assertEquals(2, mock.listDbSystems(COMPARTMENT, null, null, null, null, null, true, List.of(), null, null)
                 .size());
-        assertTrue(mock.listDbSystems(COMPARTMENT, true, null, null, null, null, List.of(), null, null).isEmpty());
+        assertTrue(mock.listDbSystems(COMPARTMENT, null, null, null, null, null, false, List.of(), null, null)
+                .isEmpty());
         assertEquals("InvalidParameter", assertThrows(OciException.class, () -> mock.listDbSystems(COMPARTMENT,
-                null, null, null, "SLEEPING", null, List.of(), null, null)).getCode());
+                null, null, null, "SLEEPING", null, null, List.of(), null, null)).getCode());
     }
 
     @Test

@@ -326,7 +326,8 @@ public class MysqlService implements Resettable, CompartmentUsage, NetworkUsage 
 
     public List<StoredMysqlDbSystem> listDbSystems(String compartmentId, Boolean heatWaveAttached, String dbSystemId,
                                                    String displayName, String lifecycleState, String configurationId,
-                                                   List<String> databaseManagement, String sortBy, String sortOrder) {
+                                                   Boolean upToDate, List<String> databaseManagement, String sortBy,
+                                                   String sortOrder) {
         MysqlRequests.requireEnum(lifecycleState, LIFECYCLE_STATES, "lifecycleState");
         MysqlRequests.requireEnum(sortOrder, SORT_ORDERS, "sortOrder");
         MysqlRequests.requireEnum(sortBy, SORT_FIELDS, "sortBy");
@@ -351,6 +352,9 @@ public class MysqlService implements Resettable, CompartmentUsage, NetworkUsage 
                 .filter(s -> displayName == null || displayName.equals(s.getDisplayName()))
                 .filter(s -> lifecycleState == null || lifecycleState.equals(s.getLifecycleState()))
                 .filter(s -> configurationId == null || configurationId.equals(s.getConfigurationId()))
+                // A configuration's variables cannot be changed, so it has one revision, and every
+                // DB system uses it: asking for systems that are not up to date finds none.
+                .filter(s -> !Boolean.FALSE.equals(upToDate))
                 .filter(s -> databaseManagement.isEmpty() || databaseManagement.contains(s.getDatabaseManagement()))
                 .sorted(order)
                 .toList();
