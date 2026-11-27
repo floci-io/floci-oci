@@ -3,6 +3,7 @@ package io.floci.oci.services.oke;
 import io.floci.oci.config.EmulatorConfig;
 import io.floci.oci.core.common.ContainerImageResolver;
 import io.floci.oci.core.common.ContainerImageResolver.RegistryMirror;
+import io.floci.oci.core.common.RegistryMirrorListener;
 import io.floci.oci.core.common.Resettable;
 import io.floci.oci.core.common.docker.ContainerBuilder;
 import io.floci.oci.core.common.docker.ContainerDetector;
@@ -48,13 +49,15 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.function.Function;
 
 /**
  * Driver for real-mode rancher/k3s Docker sidecar containers managing local Kubernetes clusters.
  */
 @ApplicationScoped
-public class OkeClusterManager implements Resettable {
+public class OkeClusterManager implements Resettable, RegistryMirrorListener {
 
     private static final Logger LOG = Logger.getLogger(OkeClusterManager.class);
     private static final int K3S_CONTAINER_PORT = 6443;
@@ -72,6 +75,22 @@ public class OkeClusterManager implements Resettable {
     static final String WEBHOOK_FILE = TOKEN_DIR + "/token-webhook.yaml";
     static final String WEBHOOK_PATH_PREFIX = "/_floci-oci/oke/token-webhook/";
     private static final Duration PROBE_TIMEOUT = Duration.ofSeconds(3);
+    private static final Duration EXEC_TIMEOUT = Duration.ofSeconds(15);
+    private static final int RESTART_TIMEOUT_SECONDS = 10;
+
+    /** Rewrites {@link #REGISTRIES_FILE} from {@link #REGISTRIES_ENV} in a running sidecar. */
+    static final List<String> WRITE_REGISTRIES = List.of("sh", "-c",
+            "mkdir -p /etc/rancher/k3s && printf '%s\\n' \"$" + REGISTRIES_ENV + "\" > " + REGISTRIES_FILE);
+
+    /** What a running sidecar needs so its {@code registries.yaml} mirrors to the registry's current address. */
+    enum MirrorRefresh {
+        /** Nothing: it already mirrors there, is not running, or there is no registry to mirror to. */
+        NONE,
+        /** Rewrite the file and restart the container, which keeps its ID, hostname and so its node. */
+        RESTART,
+        /** Recreate it on the same volume: its entrypoint, from an older floci-oci, rewrites the file from the env. */
+        RECREATE
+    }
 
     /**
      * Writes the k3s static token file from {@link #API_TOKEN_ENV} and the token-webhook
@@ -84,7 +103,9 @@ public class OkeClusterManager implements Resettable {
      * and exits at once, so {@link #buildCmd} always supplies {@code server}. Values travel as env
      * vars so nothing from the cluster record is ever interpolated into the script. When
      * {@link #REGISTRIES_ENV} is set, its value becomes k3s's {@code registries.yaml}, which k3s
-     * reads at startup and which routes the local OCIR hosts to the registry sidecar.
+     * reads at startup and which routes the local OCIR hosts to the registry sidecar. Only the
+     * container's first start writes it: {@link #registryMirrorMoved()} rewrites the file in place
+     * and restarts the container, and the env, fixed at create, must not undo that.
      */
     static final List<String> K3S_ENTRYPOINT = List.of("sh", "-c",
             "umask 077 && mkdir -p " + TOKEN_DIR
@@ -92,11 +113,12 @@ public class OkeClusterManager implements Resettable {
                     + " > " + TOKEN_FILE
                     + " && printf '%s\\n' \"$" + WEBHOOK_KUBECONFIG_ENV + "\""
                     + " > " + WEBHOOK_FILE
-                    + " && if [ -n \"$" + REGISTRIES_ENV + "\" ]; then mkdir -p /etc/rancher/k3s"
+                    + " && if [ -n \"$" + REGISTRIES_ENV + "\" ] && [ ! -f " + REGISTRIES_FILE + " ]; then"
+                    + " mkdir -p /etc/rancher/k3s"
                     + " && printf '%s\\n' \"$" + REGISTRIES_ENV + "\" > " + REGISTRIES_FILE + "; fi"
                     + " && exec /bin/k3s \"$@\" --tls-san=\"$" + TLS_SAN_ENV + "\"");
 
-    public record ActiveClusterRef(String containerName, String volumeName, int hostPort) {}
+    public record ActiveClusterRef(String containerName, String volumeName, int hostPort, StoredOkeCluster cluster) {}
 
     private final ContainerBuilder containerBuilder;
     private final ContainerLifecycleManager lifecycleManager;
@@ -108,6 +130,12 @@ public class OkeClusterManager implements Resettable {
     private final Function<String, Optional<RegistryMirror>> registryMirrors;
 
     private final Map<String, ActiveClusterRef> activeClusters = new ConcurrentHashMap<>();
+    // No thread starts until the registry moves while a real-mode cluster runs.
+    private final ExecutorService mirrorRefresher = Executors.newSingleThreadExecutor(runnable -> {
+        Thread thread = new Thread(runnable, "oke-registry-mirror");
+        thread.setDaemon(true);
+        return thread;
+    });
 
     @Inject
     public OkeClusterManager(ContainerBuilder containerBuilder,
@@ -179,7 +207,7 @@ public class OkeClusterManager implements Resettable {
         String containerName = containerName(cluster);
         String volumeName = ContainerStorageHelper.dockerName(config, "oke-vol-" + cluster.getId());
 
-        activeClusters.put(cluster.getId(), new ActiveClusterRef(containerName, volumeName, hostPort));
+        activeClusters.put(cluster.getId(), new ActiveClusterRef(containerName, volumeName, hostPort, cluster));
 
         // A volume from an earlier start holds the cluster's data and CA: a failed start removes the
         // volume only when it was confirmed absent before this start created it.
@@ -605,7 +633,78 @@ public class OkeClusterManager implements Resettable {
     /** Stops every sidecar; volumes follow the delete policy, so persistent clusters come back. */
     @PreDestroy
     void shutdown() {
+        mirrorRefresher.shutdownNow();
         removeAll(false);
+    }
+
+    /**
+     * The OCIR registry moved, so the {@code registries.yaml} of every running sidecar may point at
+     * an address nothing serves any more. The refresh runs on a thread of its own: it inspects,
+     * execs into and restarts containers, and the caller may be serving a push. Mock mode starts
+     * no sidecar, so it has no active cluster to refresh.
+     */
+    @Override
+    public void registryMirrorMoved() {
+        if (activeClusters.isEmpty()) {
+            return;
+        }
+        mirrorRefresher.execute(this::refreshRegistryMirrors);
+    }
+
+    /** Brings each active cluster's sidecar to the registry's current address; one failure does not stop the rest. */
+    void refreshRegistryMirrors() {
+        for (ActiveClusterRef ref : activeClusters.values()) {
+            try {
+                refreshRegistryMirror(ref);
+            } catch (RuntimeException e) {
+                LOG.warnv(e, "Could not refresh the OCIR mirror of k3s sidecar {0}; it keeps the old one until"
+                        + " it is next recreated", ref.containerName());
+            }
+        }
+    }
+
+    private void refreshRegistryMirror(ActiveClusterRef ref) {
+        String registries = registriesYaml(clusterRegion(ref.cluster()));
+        switch (mirrorRefresh(ref.containerName(), registries)) {
+            case NONE -> LOG.debugv("k3s sidecar {0} needs no OCIR mirror refresh", ref.containerName());
+            case RESTART -> {
+                ContainerLifecycleManager.ExecResult write = lifecycleManager.exec(ref.containerName(),
+                        List.of(REGISTRIES_ENV + "=" + registries), WRITE_REGISTRIES, EXEC_TIMEOUT);
+                if (!write.succeeded()) {
+                    throw new IllegalStateException("writing " + REGISTRIES_FILE + " failed with exit code "
+                            + write.exitCode() + ": " + write.stderr());
+                }
+                lifecycleManager.restart(ref.containerName(), RESTART_TIMEOUT_SECONDS);
+                LOG.infov("Restarted k3s sidecar {0} with the moved OCIR mirror", ref.containerName());
+            }
+            case RECREATE -> {
+                startCluster(ref.cluster());
+                LOG.infov("Recreated k3s sidecar {0} with the moved OCIR mirror", ref.containerName());
+            }
+        }
+    }
+
+    /**
+     * Decides how a sidecar picks up {@code registries}, the file its cluster should have now. The
+     * file in the container, not the env, is what k3s read: an earlier refresh may have rewritten it.
+     * No registry ({@code null}) leaves the sidecar alone, as a failed start leaves a new cluster
+     * without a mirror; a stopped one is recreated with the current file when floci-oci next starts it.
+     */
+    MirrorRefresh mirrorRefresh(String containerName, String registries) {
+        if (registries == null || !lifecycleManager.isContainerRunning(containerName)) {
+            return MirrorRefresh.NONE;
+        }
+        ContainerLifecycleManager.ExecResult current = lifecycleManager.exec(containerName, List.of(),
+                List.of("cat", REGISTRIES_FILE), EXEC_TIMEOUT);
+        if (current.succeeded() && current.stdout().equals(registries + "\n")) {
+            return MirrorRefresh.NONE;
+        }
+        boolean keepsRewrittenFile = lifecycleManager.inspect(containerName)
+                .map(inspect -> inspect.getConfig())
+                .map(containerConfig -> containerConfig.getEntrypoint())
+                .map(entrypoint -> List.of(entrypoint).equals(K3S_ENTRYPOINT))
+                .orElse(false);
+        return keepsRewrittenFile ? MirrorRefresh.RESTART : MirrorRefresh.RECREATE;
     }
 
     /**
