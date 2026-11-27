@@ -76,6 +76,7 @@ public class MysqlService implements Resettable, CompartmentUsage {
      */
     private static final Set<String> FAILED_UPDATABLE = Set.of("deletionPolicy", "displayName", "description",
             "freeformTags", "definedTags");
+    private static final Set<String> TRANSIENT_STATES = Set.of("CREATING", "UPDATING", "DELETING");
     static final Set<String> SHUTDOWN_TYPES = Set.of("IMMEDIATE", "FAST", "SLOW");
     private static final Set<String> SORT_ORDERS = Set.of("ASC", "DESC");
     private static final Set<String> SORT_FIELDS = Set.of("displayName", "timeCreated");
@@ -349,9 +350,9 @@ public class MysqlService implements Resettable, CompartmentUsage {
     private synchronized String update(String dbSystemId, Map<String, Object> details, String ifMatch) {
         StoredMysqlDbSystem system = mutable(dbSystemId, ifMatch, "ACTIVE", "INACTIVE", "FAILED");
         if ("FAILED".equals(system.getLifecycleState()) && !FAILED_UPDATABLE.containsAll(details.keySet())) {
-            throw new OciException("IncorrectState", "DB system " + dbSystemId
+            throw OciException.conflict("DB system " + dbSystemId
                     + " is FAILED: only " + String.join(", ", FAILED_UPDATABLE.stream().sorted().toList())
-                    + " can be changed", 409);
+                    + " can be changed");
         }
         // Everything that can be rejected is checked before anything changes: the store hands out
         // the stored object itself, so a half-applied update would stick.
@@ -496,8 +497,8 @@ public class MysqlService implements Resettable, CompartmentUsage {
             throw incorrectState(system, "deleted");
         }
         if (Boolean.TRUE.equals(system.getDeletionPolicy().get("isDeleteProtected"))) {
-            throw new OciException("IncorrectState", "DB system " + dbSystemId
-                    + " is delete protected; turn deletionPolicy.isDeleteProtected off first", 409);
+            throw OciException.conflict("DB system " + dbSystemId
+                    + " is delete protected; turn deletionPolicy.isDeleteProtected off first");
         }
         // An operation still under way is abandoned: its work request ends CANCELED, and its step
         // is skipped, or its outcome dropped, because the system has moved on to another work
@@ -1059,9 +1060,16 @@ public class MysqlService implements Resettable, CompartmentUsage {
                 "Authorization failed or requested resource not found: DB system " + dbSystemId);
     }
 
+    /**
+     * A request the system's lifecycle state refuses. While the state is one an operation passes
+     * through, the refusal is {@code 409 IncorrectState}, which OCI SDKs retry; in a settled state
+     * a retry cannot succeed, so it is {@code 409 Conflict}, which they do not.
+     */
     private static OciException incorrectState(StoredMysqlDbSystem system, String action) {
-        return new OciException("IncorrectState", "DB system " + system.getId() + " is "
-                + system.getLifecycleState() + " and cannot be " + action, 409);
+        String message = "DB system " + system.getId() + " is " + system.getLifecycleState()
+                + " and cannot be " + action;
+        return TRANSIENT_STATES.contains(system.getLifecycleState())
+                ? new OciException("IncorrectState", message, 409) : OciException.conflict(message);
     }
 
     private static ThreadFactory daemon(String name) {

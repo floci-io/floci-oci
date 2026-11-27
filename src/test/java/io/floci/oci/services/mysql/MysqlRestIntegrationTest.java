@@ -176,7 +176,7 @@ class MysqlRestIntegrationTest {
         given().when().get("/20190415/workRequests/" + workRequestId + "/logs")
             .then().statusCode(200).body("size()", equalTo(0));
         given().when().delete("/20190415/workRequests/" + workRequestId)
-            .then().statusCode(409).body("code", equalTo("IncorrectState"));
+            .then().statusCode(409).body("code", equalTo("Conflict"));
     }
 
     @Test

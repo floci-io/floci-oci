@@ -152,14 +152,15 @@ public class MysqlController {
 
     /**
      * CancelWorkRequest. floci-oci finishes or abandons its operations itself and cannot cancel
-     * one from outside, so a known work request answers {@code 409 IncorrectState}.
+     * one from outside, so a known work request answers {@code 409 Conflict}: a retry cannot
+     * succeed, and OCI SDKs retry {@code IncorrectState}.
      */
     @DELETE
     @Path("/workRequests/{workRequestId}")
     public Response cancelWorkRequest(@PathParam("workRequestId") String workRequestId) {
         StoredWorkRequest workRequest = workRequests.get(MysqlService.WR_SERVICE, workRequestId);
-        throw new OciException("IncorrectState", "Work request " + workRequestId + " is "
-                + workRequest.getStatus() + " and cannot be canceled", 409);
+        throw OciException.conflict("Work request " + workRequestId + " is "
+                + workRequest.getStatus() + " and cannot be canceled");
     }
 
     @GET

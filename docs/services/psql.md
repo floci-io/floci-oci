@@ -73,7 +73,9 @@ port 4599 with the other services.
 - `storageDetails.availabilityDomain` is required when `isRegionallyDurable` is `false` and
   rejected when it is `true` (`400 InvalidParameter`).
 - Operations need the right state: `StartDbSystem` an `INACTIVE` system, the others an `ACTIVE`
-  one. Otherwise they return `409 IncorrectState`.
+  one. Otherwise they are refused with `409`. A refusal while the system is `CREATING`, `UPDATING` or `DELETING` is
+  `409 IncorrectState`, which OCI SDKs retry until the operation finishes; in any other state a retry
+  cannot succeed, so it is `409 Conflict`, which they do not retry.
 - `compartmentId` must be an existing compartment or the tenancy, and the request must be sent
   to a region the tenancy is subscribed to, like every other regional service.
 
