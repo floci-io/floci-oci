@@ -412,14 +412,14 @@ public interface EmulatorConfig {
 
             /**
              * When true, no Docker containers are started: Autonomous Databases are
-             * management-plane only and become AVAILABLE at once. Until the Autonomous Database
-             * Free sidecar lands, CreateAutonomousDatabase answers 501 MethodNotImplemented when
-             * this is false. Env: FLOCI_OCI_SERVICES_DATABASE_MOCK.
+             * management-plane only and become AVAILABLE at once. When false, each database runs
+             * in its own Autonomous Database Free container (about 12 GB image, about 4 GB of
+             * memory per database). Env: FLOCI_OCI_SERVICES_DATABASE_MOCK.
              */
             @WithDefault("false")
             boolean mock();
 
-            /** The Autonomous Database Free image a real database will run. */
+            /** The Autonomous Database Free image each real database runs. */
             @WithDefault("container-registry.oracle.com/database/adb-free:latest-26ai")
             String image();
 

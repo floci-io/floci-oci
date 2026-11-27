@@ -8,8 +8,9 @@ import java.util.Map;
 /**
  * An Autonomous Database (oci-go-sdk/database AutonomousDatabase). The identity and lifecycle
  * fields are typed; every other wire field the database carries, sent or defaulted, lives in
- * {@code attributes} under its wire name. {@code tenancyId} and {@code region} are emulator
- * internals that never reach the wire. The admin password is never stored.
+ * {@code attributes} under its wire name. {@code tenancyId}, {@code region}, {@code containerName},
+ * {@code hostPort} and {@code workRequestId} are emulator internals that never reach the wire.
+ * The admin password and the container's wallet password are never stored.
  */
 @RegisterForReflection
 public class StoredAutonomousDatabase {
@@ -26,6 +27,9 @@ public class StoredAutonomousDatabase {
 
     private String tenancyId;
     private String region;
+    private String containerName;
+    private int hostPort;
+    private String workRequestId;
 
     /**
      * The AutonomousDatabase body, which AutonomousDatabaseSummary shares field for field: the
@@ -136,5 +140,31 @@ public class StoredAutonomousDatabase {
 
     public void setRegion(String region) {
         this.region = region;
+    }
+
+    public String getContainerName() {
+        return containerName;
+    }
+
+    public void setContainerName(String containerName) {
+        this.containerName = containerName;
+    }
+
+    /** The host port the container's mTLS listener is published on; 0 before the first start. */
+    public int getHostPort() {
+        return hostPort;
+    }
+
+    public void setHostPort(int hostPort) {
+        this.hostPort = hostPort;
+    }
+
+    /** The work request of the operation under way on the container, or null when none is. */
+    public String getWorkRequestId() {
+        return workRequestId;
+    }
+
+    public void setWorkRequestId(String workRequestId) {
+        this.workRequestId = workRequestId;
     }
 }
