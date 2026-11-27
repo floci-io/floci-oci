@@ -220,6 +220,20 @@ class ContainerInstanceManagerTest {
     }
 
     @Test
+    void onlyThePauseContainerSetsTheEmbeddedDnsTheOthersJoin() {
+        ContainerBuilder.Builder pauseSpec = mock(ContainerBuilder.Builder.class, invocation ->
+                invocation.getMethod().getReturnType() == ContainerBuilder.Builder.class ? invocation.getMock() : null);
+        when(pauseSpec.build()).thenReturn(new ContainerSpec("registry.k8s.io/pause:3.10"));
+        when(builder.newContainer("registry.k8s.io/pause:3.10")).thenReturn(pauseSpec);
+
+        manager.startPod(instance(List.of()), List.of(container(Map.of())), image -> image);
+
+        verify(pauseSpec).withEmbeddedDns();
+        verify(spec, never()).withEmbeddedDns();
+        verify(spec).withNetworkMode("container:" + manager.podName(instance(List.of())));
+    }
+
+    @Test
     void aFailedStartRemovesWhatWasStarted() {
         StoredContainerInstance instance = instance(List.of());
         StoredContainer container = container(Map.of());
