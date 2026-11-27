@@ -32,13 +32,16 @@ teardown_file() {
 # floci-oci's port: the name a user tags images with, and one the k3s registries.yaml mirrors.
 OCIR_HOST="iad.ocir.localhost.floci.io:4599"
 SOURCE_IMAGE_TAG="1.36"
+# Every curl in this file fails within a deadline, so a registry that accepts a connection
+# and then stalls cannot hold the suite until the CI job's own timeout.
+CURL_LIMITS=(--connect-timeout 15 --max-time 120)
 
 # ocir_curl <curl args...>: curl against the OCIR data plane. *.localhost.floci.io names
 # 127.0.0.1, which in this container is this container, so the connection goes to floci-oci
 # while the URL, and so the Host header the data plane routes on, keeps the OCIR host.
 ocir_curl() {
     local emulator="${ENDPOINT#*://}"
-    curl -fsS --connect-to "$OCIR_HOST:$emulator" -H "Authorization: Bearer compat" "$@"
+    curl -fsS "${CURL_LIMITS[@]}" --connect-to "$OCIR_HOST:$emulator" -H "Authorization: Bearer compat" "$@"
 }
 
 # copy_busybox_to_ocir <namespace/repository> <tag> <architecture>: copies busybox for one
@@ -48,23 +51,23 @@ copy_busybox_to_ocir() {
     local target="$1" tag="$2" arch="$3" work="$BATS_FILE_TMPDIR/busybox" hub token digest media_type
     mkdir -p "$work"
     hub="https://registry-1.docker.io/v2/library/busybox"
-    token="$(curl -fsS "https://auth.docker.io/token?service=registry.docker.io&scope=repository:library/busybox:pull" \
+    token="$(curl -fsS "${CURL_LIMITS[@]}" "https://auth.docker.io/token?service=registry.docker.io&scope=repository:library/busybox:pull" \
         | jq -r '.token')" || return 1
-    curl -fsSL -H "Authorization: Bearer $token" \
+    curl -fsSL "${CURL_LIMITS[@]}" -H "Authorization: Bearer $token" \
         -H "Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json" \
         "$hub/manifests/$SOURCE_IMAGE_TAG" -o "$work/index.json" || return 1
     digest="$(jq -r --arg arch "$arch" \
         '[.manifests[] | select(.platform.os == "linux" and .platform.architecture == $arch)][0].digest' \
         "$work/index.json")"
     [ -n "$digest" ] && [ "$digest" != "null" ] || { echo "busybox has no linux/$arch image" >&2; return 1; }
-    curl -fsSL -H "Authorization: Bearer $token" \
+    curl -fsSL "${CURL_LIMITS[@]}" -H "Authorization: Bearer $token" \
         -H "Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json" \
         "$hub/manifests/$digest" -o "$work/manifest.json" || return 1
     media_type="$(jq -r '.mediaType' "$work/manifest.json")"
 
     local blob location
     for blob in $(jq -r '.config.digest, .layers[].digest' "$work/manifest.json"); do
-        curl -fsSL -H "Authorization: Bearer $token" "$hub/blobs/$blob" -o "$work/blob" || return 1
+        curl -fsSL "${CURL_LIMITS[@]}" -H "Authorization: Bearer $token" "$hub/blobs/$blob" -o "$work/blob" || return 1
         location="$(ocir_curl -X POST -o /dev/null -D - "http://$OCIR_HOST/v2/$target/blobs/uploads/" \
             | tr -d '\r' | sed -n 's/^[Ll]ocation: //p')"
         [ -n "$location" ] || { echo "no upload session for $blob" >&2; return 1; }
@@ -146,7 +149,7 @@ copy_busybox_to_ocir() {
     command -v kubectl > /dev/null || skip "kubectl is not installed"
     # Artifacts in mock mode (no Docker for its registry sidecar) answers the data plane with 503.
     local probe
-    probe="$(curl -s -o /dev/null -w '%{http_code}' --connect-to "$OCIR_HOST:${ENDPOINT#*://}" \
+    probe="$(curl -s "${CURL_LIMITS[@]}" -o /dev/null -w '%{http_code}' --connect-to "$OCIR_HOST:${ENDPOINT#*://}" \
         -H "Authorization: Bearer compat" "http://$OCIR_HOST/v2/")"
     [ "$probe" != "503" ] || skip "the OCIR data plane needs the registry sidecar (artifacts mock mode)"
     local kubeconfig="$BATS_FILE_TMPDIR/kubeconfig"
@@ -162,10 +165,16 @@ copy_busybox_to_ocir() {
     json_get '.data.id' > "$BATS_FILE_TMPDIR/ocir_repository_id"
 
     # Pods run on the k3s node, so the image is the node's architecture, not this container's.
-    local arch
-    arch="$(env KUBECONFIG="$kubeconfig" kubectl get nodes --request-timeout=60s \
-        -o jsonpath='{.items[0].status.nodeInfo.architecture}')"
-    [ -n "$arch" ]
+    # The cluster is ACTIVE once its API answers, which can be before the node has registered.
+    local arch="" attempt=0
+    until [ -n "$arch" ]; do
+        arch="$(env KUBECONFIG="$kubeconfig" kubectl get nodes --request-timeout=30s \
+            -o jsonpath='{.items[0].status.nodeInfo.architecture}' 2>/dev/null || true)"
+        [ -n "$arch" ] && break
+        attempt=$((attempt + 1))
+        [ "$attempt" -le 60 ] || { echo "no k3s node registered" >&2; return 1; }
+        sleep 2
+    done
     copy_busybox_to_ocir "$namespace/$repository" 1 "$arch"
 
     # The controllers create the default service account a pod needs a little after the API answers.
