@@ -149,6 +149,33 @@ class AutonomousDatabaseServiceTest {
     }
 
     @Test
+    void anUpdateWithoutComputeFieldsKeepsTheOcpuCount() {
+        Map<String, Object> details = details("ocpukeep");
+        details.put("computeModel", "OCPU");
+        details.put("cpuCoreCount", 3);
+        String id = service.create(details).database().getId();
+
+        service.update(id, Map.of("displayName", "renamed"), null);
+
+        Map<String, Object> wire = service.get(id).toWire();
+        assertEquals(3, wire.get("computeCount"));
+        assertEquals(3, wire.get("cpuCoreCount"));
+    }
+
+    @Test
+    void listFiltersByResourcePoolLeaderId() {
+        Map<String, Object> member = details("poolmember");
+        member.put("resourcePoolLeaderId", "ocid1.autonomousdatabase.oc1.iad.leader");
+        String memberId = service.create(member).database().getId();
+        service.create(details("loner"));
+
+        AutonomousDatabaseService.ListFilter byLeader = new AutonomousDatabaseService.ListFilter(null, null, null,
+                null, null, null, null, null, null, "ocid1.autonomousdatabase.oc1.iad.leader", null, null, null, null);
+        assertEquals(List.of(memberId), service.list(COMPARTMENT, byLeader).stream()
+                .map(StoredAutonomousDatabase::getId).toList());
+    }
+
+    @Test
     void aRejectedUpdateChangesNothing() {
         StoredAutonomousDatabase database = service.create(details("atomic")).database();
         String etag = database.getEtag();

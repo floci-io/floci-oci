@@ -208,7 +208,7 @@ public class AutonomousDatabaseService implements Resettable, CompartmentUsage {
         }
         validateEnums(attributes);
         reconcileStorage(attributes, details);
-        reconcileCompute(attributes, details);
+        reconcileCompute(attributes, details, 1);
         database.setAttributes(attributes);
         refreshEndpoints(database);
         database.setLifecycleState("AVAILABLE");
@@ -261,10 +261,11 @@ public class AutonomousDatabaseService implements Resettable, CompartmentUsage {
                         .equals(database.getAttributes().get("autonomousContainerDatabaseId")))
                 .filter(database -> filter.infrastructureType() == null
                         || filter.infrastructureType().equals(database.getAttributes().get("infrastructureType")))
-                // No database is a refreshable clone or a resource pool member.
+                // No database is a refreshable clone or a resource pool leader.
                 .filter(database -> !Boolean.TRUE.equals(filter.isRefreshableClone()))
                 .filter(database -> !Boolean.TRUE.equals(filter.isResourcePoolLeader()))
-                .filter(database -> filter.resourcePoolLeaderId() == null)
+                .filter(database -> filter.resourcePoolLeaderId() == null
+                        || filter.resourcePoolLeaderId().equals(database.getAttributes().get("resourcePoolLeaderId")))
                 .sorted(order)
                 .toList();
     }
@@ -300,7 +301,7 @@ public class AutonomousDatabaseService implements Resettable, CompartmentUsage {
         }
         validateEnums(attributes);
         reconcileStorage(attributes, details);
-        reconcileCompute(attributes, details);
+        reconcileCompute(attributes, details, database.getAttributes().get("computeCount"));
 
         if (dbName != null) {
             database.setDbName(dbName);
@@ -439,13 +440,19 @@ public class AutonomousDatabaseService implements Resettable, CompartmentUsage {
     }
 
     /** ECPU databases are sized by computeCount, OCPU ones by ocpuCount or cpuCoreCount. */
-    private static void reconcileCompute(Map<String, Object> attributes, Map<String, Object> details) {
+    /**
+     * An OCPU database's computeCount follows the OCPU fields of the request. A request that sends
+     * none keeps {@code unchanged}: 1 on create, the saved count on update, so a rename does not
+     * resize the database.
+     */
+    private static void reconcileCompute(Map<String, Object> attributes, Map<String, Object> details,
+                                         Object unchanged) {
         DatabaseRequests.positiveNumber(details, "computeCount");
         DatabaseRequests.positiveNumber(details, "ocpuCount");
         DatabaseRequests.positiveInteger(details, "cpuCoreCount");
         if ("OCPU".equals(attributes.get("computeModel")) && details.get("computeCount") == null) {
             Object ocpus = details.get("ocpuCount") != null ? details.get("ocpuCount") : details.get("cpuCoreCount");
-            attributes.put("computeCount", ocpus != null ? ocpus : 1);
+            attributes.put("computeCount", ocpus != null ? ocpus : unchanged);
         }
     }
 
