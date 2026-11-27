@@ -18,7 +18,7 @@ import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.notNullValue;
 
 /**
- * OKE, Functions and PostgreSQL reject a VCN, subnet or network security group that does not
+ * OKE clusters and node pools, Functions and PostgreSQL reject a VCN, subnet or network security group that does not
  * exist in the caller's tenancy and region, with the body-reference error of Oracle's catalog.
  */
 @QuarkusTest
@@ -142,6 +142,97 @@ class NetworkReferencesRestIntegrationTest {
         details.put("vcnId", network.vcnId());
         details.put("endpointConfig", endpointConfig);
         details.put("options", Map.of("serviceLbSubnetIds", lbSubnets));
+        return details;
+    }
+
+    @Test
+    void okeNodePoolRejectsAnUnknownSubnetOrNsg() {
+        String clusterId = activeCluster();
+
+        rejects("/20180222/nodePools", nodePool(clusterId, placedOn(MISSING_SUBNET, List.of())),
+                "subnet", MISSING_SUBNET);
+        rejects("/20180222/nodePools", nodePool(clusterId, placedOn(network.subnetId(), List.of(MISSING_NSG))),
+                "networksecuritygroup", MISSING_NSG);
+        Map<String, Object> legacy = nodePool(clusterId, null);
+        legacy.put("subnetIds", List.of(MISSING_SUBNET));
+        rejects("/20180222/nodePools", legacy, "subnet", MISSING_SUBNET);
+        Map<String, Object> podNetwork = new HashMap<>(placedOn(network.subnetId(), List.of()));
+        podNetwork.put("nodePoolPodNetworkOptionDetails",
+                Map.of("cniType", "OCI_VCN_IP_NATIVE", "podSubnetIds", List.of(MISSING_SUBNET)));
+        rejects("/20180222/nodePools", nodePool(clusterId, podNetwork), "subnet", MISSING_SUBNET);
+    }
+
+    @Test
+    void okeNodePoolRejectsSubnetsFromAnotherVcn() {
+        String clusterId = activeCluster();
+        TestNetworks.Network other = TestNetworks.create(compartment);
+
+        rejectsForeignNodeSubnet(nodePool(clusterId, placedOn(other.subnetId(), List.of())),
+                "nodeConfigDetails.placementConfigs.subnetId", other.subnetId());
+        Map<String, Object> legacy = nodePool(clusterId, null);
+        legacy.put("subnetIds", List.of(other.subnetId()));
+        rejectsForeignNodeSubnet(legacy, "subnetIds", other.subnetId());
+    }
+
+    @Test
+    void okeNodePoolRejectsAnUnknownNsgOnUpdate() {
+        String clusterId = activeCluster();
+        String workRequestId = given().contentType("application/json")
+                .body(nodePool(clusterId, placedOn(network.subnetId(), List.of(network.nsgId()))))
+            .when().post("/20180222/nodePools")
+            .then().statusCode(202)
+                .extract().header("opc-work-request-id");
+        String nodePoolId = given().when().get("/20180222/workRequests/" + workRequestId)
+            .then().statusCode(200)
+                .extract().path("resources[0].identifier");
+
+        given().contentType("application/json")
+                .body(Map.of("nodeConfigDetails", Map.of("nsgIds", List.of(MISSING_NSG))))
+            .when().put("/20180222/nodePools/" + nodePoolId)
+            .then().statusCode(400)
+                .header("opc-request-id", notNullValue())
+                .body("code", equalTo("RelatedResourceNotAuthorizedOrNotFound"));
+
+        given().when().get("/20180222/nodePools/" + nodePoolId)
+            .then().statusCode(200)
+                .body("nodeConfigDetails.nsgIds[0]", equalTo(network.nsgId()));
+        given().when().delete("/20180222/nodePools/" + nodePoolId).then().statusCode(202);
+    }
+
+    private static void rejectsForeignNodeSubnet(Object body, String field, String subnetId) {
+        given().contentType("application/json").body(body)
+            .when().post("/20180222/nodePools")
+            .then().statusCode(400)
+                .header("opc-request-id", notNullValue())
+                .body("code", equalTo("InvalidParameter"))
+                .body("message", equalTo(field + " " + subnetId + " belongs to another VCN"));
+    }
+
+    private static String activeCluster() {
+        String workRequestId = given().contentType("application/json")
+                .body(Map.of("compartmentId", compartment, "name", "refs-pool-cluster", "vcnId", network.vcnId()))
+            .when().post("/20180222/clusters")
+            .then().statusCode(202)
+                .extract().header("opc-work-request-id");
+        return given().when().get("/20180222/workRequests/" + workRequestId)
+            .then().statusCode(200)
+                .extract().path("resources[0].identifier");
+    }
+
+    private static Map<String, Object> placedOn(String subnetId, List<String> nsgIds) {
+        return Map.of("size", 1, "nsgIds", nsgIds,
+                "placementConfigs", List.of(Map.of("availabilityDomain", "Uocm:US-ASHBURN-AD-1", "subnetId", subnetId)));
+    }
+
+    private static Map<String, Object> nodePool(String clusterId, Map<String, Object> nodeConfigDetails) {
+        Map<String, Object> details = new HashMap<>();
+        details.put("compartmentId", compartment);
+        details.put("clusterId", clusterId);
+        details.put("name", "refs-pool");
+        details.put("nodeShape", "VM.Standard.E4.Flex");
+        if (nodeConfigDetails != null) {
+            details.put("nodeConfigDetails", nodeConfigDetails);
+        }
         return details;
     }
 

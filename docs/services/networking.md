@@ -62,7 +62,7 @@ resolver the first time the association is read; with DNS disabled the associati
 | Unknown `vcnId`, route table, security list, DHCP options, gateway or service in a body | `400 RelatedResourceNotAuthorizedOrNotFound` |
 | Delete a VCN that still has subnets, gateways or non-default resources | `409 Conflict` |
 | Delete a route table, security list or DHCP options a subnet uses, or a gateway a route rule targets | `409 Conflict` |
-| Delete a VCN, subnet or network security group another service's resource still uses (an OKE cluster, a function application, a PostgreSQL or MySQL DB system, an Autonomous Database, a container instance's VNIC) | `409 Conflict` |
+| Delete a VCN, subnet or network security group another service's resource still uses (an OKE cluster or node pool, a function application, a PostgreSQL or MySQL DB system, an Autonomous Database, a container instance's VNIC) | `409 Conflict` |
 
 A resource that another service holds a reference to stays until that resource is deleted: the
 `409 Conflict` names each one (`application ocid1.fnapp...`). A deleted resource no longer
@@ -116,7 +116,7 @@ with VNICs cannot be deleted (`409 Conflict`).
 VCN and subnet CIDR changes (add, modify and remove CIDR, IPv6), VLANs, DRGs, local peering
 gateways, and private and public IP objects are not implemented.
 
-OKE, Functions and Database with PostgreSQL check every VCN, subnet and network security group
-OCID they receive against this service: one that does not exist in the caller's tenancy and region
-is rejected with `400 RelatedResourceNotAuthorizedOrNotFound`. With Networking disabled
+OKE (clusters and node pools), Functions and Database with PostgreSQL check every VCN, subnet and
+network security group OCID they receive against this service: one that does not exist in the
+caller's tenancy and region is rejected with `400 RelatedResourceNotAuthorizedOrNotFound`. With Networking disabled
 (`FLOCI_OCI_SERVICES_NETWORKING_ENABLED=false`) they accept any OCID.

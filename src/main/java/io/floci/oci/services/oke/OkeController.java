@@ -171,7 +171,8 @@ public class OkeController {
                 req.nodeShape,
                 req.quantityPerSubnet,
                 req.freeformTags,
-                req.definedTags
+                req.definedTags,
+                new OkeService.NodePoolNetwork(req.subnetIds, req.nodeConfigDetails)
             );
 
             // CreateNodePool has no response body either.
@@ -200,11 +201,13 @@ public class OkeController {
     @PUT
     @Path("/nodePools/{nodePoolId}")
     public Response updateNodePool(@PathParam("nodePoolId") String nodePoolId, UpdateNodePoolDetails details) {
+        UpdateNodePoolDetails req = details != null ? details : new UpdateNodePoolDetails();
         String workRequestId = service.updateNodePool(
             nodePoolId,
-            details != null ? details.name : null,
-            details != null ? details.kubernetesVersion : null,
-            details != null ? details.quantityPerSubnet : null
+            req.name,
+            req.kubernetesVersion,
+            req.quantityPerSubnet,
+            new OkeService.NodePoolNetwork(req.subnetIds, req.nodeConfigDetails)
         );
         return Response.status(Response.Status.ACCEPTED)
                 .header("opc-work-request-id", workRequestId)
@@ -341,6 +344,9 @@ public class OkeController {
         public String kubernetesVersion;
         public String nodeShape;
         public int quantityPerSubnet;
+        /** Deprecated in favour of {@code nodeConfigDetails}; a list of subnet OCIDs. */
+        public Object subnetIds;
+        public Map<String, Object> nodeConfigDetails;
         public Map<String, String> freeformTags;
         public Map<String, Map<String, Object>> definedTags;
     }
@@ -349,5 +355,7 @@ public class OkeController {
         public String name;
         public String kubernetesVersion;
         public Integer quantityPerSubnet;
+        public Object subnetIds;
+        public Map<String, Object> nodeConfigDetails;
     }
 }

@@ -375,6 +375,14 @@ public class OkeService implements Resettable, CompartmentUsage, NetworkUsage {
     }
     public record CreateNodePoolResult(String workRequestId, StoredNodePool nodePool) {}
 
+    /**
+     * Where a node pool's nodes go: the deprecated {@code subnetIds} (as the request carried it,
+     * checked to be a list of OCIDs here) and {@code nodeConfigDetails}. Either may be null.
+     */
+    public record NodePoolNetwork(Object subnetIds, Map<String, Object> nodeConfigDetails) {
+        static final NodePoolNetwork NONE = new NodePoolNetwork(null, null);
+    }
+
     // ── Clusters ─────────────────────────────────────────────────────────────
 
     public CreateClusterResult createCluster(String compartmentId, String name, String vcnId,
@@ -636,16 +644,48 @@ public class OkeService implements Resettable, CompartmentUsage, NetworkUsage {
                                  int quantityPerSubnet,
                                  Map<String, String> freeformTags,
                                  Map<String, Map<String, Object>> definedTags) {
+        return createNodePool(compartmentId, clusterId, name, kubernetesVersion, nodeShape, quantityPerSubnet,
+                freeformTags, definedTags, NodePoolNetwork.NONE);
+    }
+
+    /**
+     * Each subnet the node pool names must be in the cluster's VCN. The network ids are claimed
+     * from before they are checked until the node pool is stored, as on CreateCluster.
+     */
+    public CreateNodePoolResult createNodePool(String compartmentId, String clusterId, String name,
+                                 String kubernetesVersion, String nodeShape,
+                                 int quantityPerSubnet,
+                                 Map<String, String> freeformTags,
+                                 Map<String, Map<String, Object>> definedTags,
+                                 NodePoolNetwork network) {
+        List<String> subnetIds = OkeNodePoolSettings.subnetIds(network.subnetIds());
+        try (NetworkClaims.Claim claim = NetworkClaims.claim(
+                OkeNodePoolSettings.networkIds(subnetIds, network.nodeConfigDetails()))) {
+            return createClaimedNodePool(compartmentId, clusterId, name, kubernetesVersion, nodeShape,
+                    quantityPerSubnet, freeformTags, definedTags, subnetIds, network.nodeConfigDetails());
+        }
+    }
+
+    private CreateNodePoolResult createClaimedNodePool(String compartmentId, String clusterId, String name,
+                                                       String kubernetesVersion, String nodeShape,
+                                                       int quantityPerSubnet,
+                                                       Map<String, String> freeformTags,
+                                                       Map<String, Map<String, Object>> definedTags,
+                                                       List<String> subnetIds,
+                                                       Map<String, Object> requestedNodeConfig) {
         if (compartmentId == null || compartmentId.isBlank()) {
             throw OciException.missingParameter("Missing required parameter: compartmentId");
         }
         if (clusterId == null || clusterId.isBlank()) {
             throw OciException.missingParameter("Missing required parameter: clusterId");
         }
-        requireClusterTakesNodePools(getCluster(clusterId));
+        StoredOkeCluster cluster = getCluster(clusterId);
+        requireClusterTakesNodePools(cluster);
         if (name == null || name.isBlank()) {
             throw OciException.missingParameter("Missing required parameter: name");
         }
+        Map<String, Object> nodeConfig = OkeNodePoolSettings.createNodeConfig(requestedNodeConfig);
+        OkeNodePoolSettings.requireNetwork(networkReferences, cluster.getVcnId(), subnetIds, nodeConfig);
 
         String nodePoolId = Ocids.generate("nodepool", ociContext.realm(), ociContext.regionCode());
         StoredNodePool pool = new StoredNodePool();
@@ -656,6 +696,8 @@ public class OkeService implements Resettable, CompartmentUsage, NetworkUsage {
         pool.setKubernetesVersion(kubernetesVersion != null ? kubernetesVersion : "v1.30.1");
         pool.setNodeShape(nodeShape != null ? nodeShape : "VM.Standard.E4.Flex");
         pool.setQuantityPerSubnet(quantityPerSubnet > 0 ? quantityPerSubnet : 1);
+        pool.setSubnetIds(subnetIds);
+        pool.setNodeConfigDetails(nodeConfig);
         pool.setLifecycleState("ACTIVE");
         pool.setTimeCreated(Instant.now());
         pool.setFreeformTags(freeformTags);
@@ -683,7 +725,38 @@ public class OkeService implements Resettable, CompartmentUsage, NetworkUsage {
     }
 
     public String updateNodePool(String nodePoolId, String name, String kubernetesVersion, Integer quantityPerSubnet) {
+        return updateNodePool(nodePoolId, name, kubernetesVersion, quantityPerSubnet, NodePoolNetwork.NONE);
+    }
+
+    /**
+     * UpdateNodePool. A new {@code subnetIds} replaces the old one, and a {@code nodeConfigDetails}
+     * replaces the fields it carries; both are checked like on CreateNodePool before anything
+     * changes, under a claim held until the node pool is stored.
+     */
+    public synchronized String updateNodePool(String nodePoolId, String name, String kubernetesVersion,
+                                              Integer quantityPerSubnet, NodePoolNetwork network) {
         StoredNodePool pool = getNodePool(nodePoolId);
+        List<String> subnetIds = OkeNodePoolSettings.subnetIds(network.subnetIds());
+        Map<String, Object> nodeConfig =
+                OkeNodePoolSettings.updatedNodeConfig(pool.getNodeConfigDetails(), network.nodeConfigDetails());
+        try (NetworkClaims.Claim claim = NetworkClaims.claim(
+                OkeNodePoolSettings.networkIds(subnetIds, network.nodeConfigDetails()))) {
+            if (subnetIds != null || network.nodeConfigDetails() != null) {
+                String vcnId = clusters.get(pool.getClusterId()).map(StoredOkeCluster::getVcnId).orElse(null);
+                OkeNodePoolSettings.requireNetwork(networkReferences, vcnId, subnetIds,
+                        network.nodeConfigDetails() != null ? nodeConfig : null);
+            }
+            if (subnetIds != null) {
+                pool.setSubnetIds(subnetIds);
+            }
+            pool.setNodeConfigDetails(nodeConfig);
+            return nodePoolUpdated(pool, name, kubernetesVersion, quantityPerSubnet);
+        }
+    }
+
+    private String nodePoolUpdated(StoredNodePool pool, String name, String kubernetesVersion,
+                                   Integer quantityPerSubnet) {
+        String nodePoolId = pool.getId();
         if (name != null && !name.isBlank()) {
             pool.setName(name);
         }
@@ -721,14 +794,21 @@ public class OkeService implements Resettable, CompartmentUsage, NetworkUsage {
                         StoredNodePool::getLifecycleState, p -> "node pool " + p.getId())).toList();
     }
 
-    /** A cluster holds its VCN, its endpoint subnet and NSGs, and its service load balancer subnets. */
+    /**
+     * A cluster holds its VCN, its endpoint subnet and NSGs, and its service load balancer
+     * subnets; a node pool holds its node subnets, NSGs, pod subnets and pod NSGs.
+     */
     @Override
     public List<String> resourcesUsing(String networkId) {
-        return NetworkUsage.using(clusters.scan(k -> true), networkId, StoredOkeCluster::getLifecycleState,
-                cluster -> NetworkUsage.ids(cluster.getVcnId(),
-                        NetworkUsage.field(cluster.getEndpointConfig(), "subnetId"),
-                        NetworkUsage.field(cluster.getEndpointConfig(), "nsgIds"),
-                        NetworkUsage.field(cluster.getOptions(), "serviceLbSubnetIds")),
-                cluster -> "cluster " + cluster.getId()).toList();
+        return Stream.concat(
+                NetworkUsage.using(clusters.scan(k -> true), networkId, StoredOkeCluster::getLifecycleState,
+                        cluster -> NetworkUsage.ids(cluster.getVcnId(),
+                                NetworkUsage.field(cluster.getEndpointConfig(), "subnetId"),
+                                NetworkUsage.field(cluster.getEndpointConfig(), "nsgIds"),
+                                NetworkUsage.field(cluster.getOptions(), "serviceLbSubnetIds")),
+                        cluster -> "cluster " + cluster.getId()),
+                NetworkUsage.using(nodePools.scan(k -> true), networkId, StoredNodePool::getLifecycleState,
+                        pool -> OkeNodePoolSettings.networkIds(pool.getSubnetIds(), pool.getNodeConfigDetails()),
+                        pool -> "node pool " + pool.getId())).toList();
     }
 }

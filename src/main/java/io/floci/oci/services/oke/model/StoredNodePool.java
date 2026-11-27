@@ -1,10 +1,12 @@
 package io.floci.oci.services.oke.model;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import io.quarkus.runtime.annotations.RegisterForReflection;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -20,6 +22,10 @@ public class StoredNodePool {
     private String kubernetesVersion;
     private String nodeShape;
     private int quantityPerSubnet;
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    private List<String> subnetIds;
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    private Map<String, Object> nodeConfigDetails;
     private String lifecycleState;
     @JsonIgnore
     private Instant timeCreated;
@@ -80,6 +86,24 @@ public class StoredNodePool {
 
     public void setQuantityPerSubnet(int quantityPerSubnet) {
         this.quantityPerSubnet = quantityPerSubnet;
+    }
+
+    /** The deprecated placement: the subnets CreateNodePool or UpdateNodePool named, as sent. */
+    public List<String> getSubnetIds() {
+        return subnetIds;
+    }
+
+    public void setSubnetIds(List<String> subnetIds) {
+        this.subnetIds = subnetIds;
+    }
+
+    /** NodePoolNodeConfigDetails: the placement configs, NSGs and pod networking, as sent. */
+    public Map<String, Object> getNodeConfigDetails() {
+        return nodeConfigDetails;
+    }
+
+    public void setNodeConfigDetails(Map<String, Object> nodeConfigDetails) {
+        this.nodeConfigDetails = nodeConfigDetails;
     }
 
     public String getLifecycleState() {
