@@ -108,7 +108,7 @@ allocated one never does. A public IP, when asked for, comes from
 routable. `UpdateVnic` changes the display name, hostname label, NSGs, `skipSourceDestCheck` and
 tags, and checks `if-match`. On attach and on update every NSG must be in the subnet's VCN, or the
 request is `400 InvalidParameter` (`nsgIds <id> belongs to another VCN`, the rule subnets already
-apply to route tables and security lists; inferred, as no source states the error). `ListNetworkSecurityGroupVnics` lists the VNICs in a group. A subnet
+apply to route tables and security lists; inferred, as no source states the error). `ListNetworkSecurityGroupVnics` lists the VNICs in a group, each with the `resourceId` of the container instance it is attached to. VNIC OCIDs are regional. A subnet
 with VNICs cannot be deleted (`409 Conflict`).
 
 ## Notes and limitations

@@ -3,6 +3,7 @@ package io.floci.oci.services.networking;
 import io.floci.oci.config.EmulatorConfig;
 import io.floci.oci.core.common.NetworkReferences;
 import io.floci.oci.core.common.OciException;
+import io.floci.oci.core.common.Ocids;
 import io.floci.oci.core.storage.InMemoryStorage;
 import io.floci.oci.core.workrequest.WorkRequestService;
 import io.floci.oci.services.networking.model.StoredNetworkResource;
@@ -18,6 +19,7 @@ import static org.mockito.Mockito.*;
 class NetworkingVnicTest {
 
     private static final String COMPARTMENT = "ocid1.compartment.oc1..vnictest";
+    private static final String INSTANCE = "ocid1.computecontainerinstance.oc1.iad.vnictest";
 
     private EmulatorConfig config;
     private NetworkingService service;
@@ -41,12 +43,43 @@ class NetworkingVnicTest {
     }
 
     private String attach(String privateIp, boolean allocate) {
-        return service.attachVnic(new NetworkReferences.VnicRequest(COMPARTMENT, "Floc:US-ASHBURN-AD-1", subnetId,
+        return service.attachVnic(new NetworkReferences.VnicRequest(INSTANCE, COMPARTMENT, "Floc:US-ASHBURN-AD-1", subnetId,
                 null, "web", List.of(nsgId), null, privateIp, allocate, false, null, null));
     }
 
     private Object privateIp(String vnicId) {
         return service.get(NetworkKind.VNIC, vnicId).getAttributes().get("privateIp");
+    }
+
+    @Test
+    void aVnicRemembersTheResourceItIsAttachedTo() {
+        String vnicId = attach(null, true);
+
+        assertEquals(INSTANCE, service.get(NetworkKind.VNIC, vnicId).getResourceId());
+        assertEquals(List.of(vnicId), service.vnicsInNsg(nsgId).stream().map(StoredNetworkResource::getId).toList());
+        assertFalse(service.get(NetworkKind.VNIC, vnicId).getAttributes().containsKey("resourceId"),
+                "resourceId is not part of the Vnic model");
+    }
+
+    @Test
+    void withoutNetworkingAVnicIsRegionalInTheRegionOfItsResource() {
+        String vnicId = NetworkReferences.NONE.attachVnic(new NetworkReferences.VnicRequest(
+                "ocid1.computecontainerinstance.oc1.phx.instance", COMPARTMENT, null, "ocid1.subnet.oc1.phx.subnet",
+                null, null, null, null, null, true, false, null, null));
+
+        Ocids.Ocid ocid = Ocids.parse(vnicId).orElseThrow();
+        assertEquals("vnic", ocid.resourceType());
+        assertEquals("oc1", ocid.realm());
+        assertEquals("phx", ocid.region());
+    }
+
+    @Test
+    void withoutNetworkingAVnicWithoutAResourceTakesTheRegionOfItsSubnet() {
+        String vnicId = NetworkReferences.NONE.attachVnic(new NetworkReferences.VnicRequest(
+                null, COMPARTMENT, null, "ocid1.subnet.oc1.fra.subnet", null, null, null, null, null, true, false,
+                null, null));
+
+        assertEquals("fra", Ocids.parse(vnicId).orElseThrow().region());
     }
 
     @Test
@@ -102,7 +135,7 @@ class NetworkingVnicTest {
                 "vcnId", otherVcn)).getId();
 
         OciException onAttach = assertThrows(OciException.class, () -> service.attachVnic(
-                new NetworkReferences.VnicRequest(COMPARTMENT, null, subnetId, null, null, List.of(foreignNsg),
+                new NetworkReferences.VnicRequest(INSTANCE, COMPARTMENT, null, subnetId, null, null, List.of(foreignNsg),
                         null, null, true, false, null, null)));
         assertEquals("InvalidParameter", onAttach.getCode());
         assertEquals("nsgIds " + foreignNsg + " belongs to another VCN", onAttach.getMessage());
@@ -150,11 +183,11 @@ class NetworkingVnicTest {
     @Test
     void anUnknownSubnetOrNsgIsRejected() {
         OciException e = assertThrows(OciException.class, () -> service.attachVnic(new NetworkReferences.VnicRequest(
-                COMPARTMENT, null, "ocid1.subnet.oc1.iad.missing", null, null, null, null, null, true, false,
+                INSTANCE, COMPARTMENT, null, "ocid1.subnet.oc1.iad.missing", null, null, null, null, null, true, false,
                 null, null)));
         assertEquals("RelatedResourceNotAuthorizedOrNotFound", e.getCode());
         assertThrows(OciException.class, () -> service.attachVnic(new NetworkReferences.VnicRequest(
-                COMPARTMENT, null, subnetId, null, null, List.of("ocid1.networksecuritygroup.oc1.iad.missing"),
+                INSTANCE, COMPARTMENT, null, subnetId, null, null, List.of("ocid1.networksecuritygroup.oc1.iad.missing"),
                 null, null, true, false, null, null)));
     }
 

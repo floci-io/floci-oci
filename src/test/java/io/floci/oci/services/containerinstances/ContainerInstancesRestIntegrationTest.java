@@ -117,11 +117,24 @@ class ContainerInstancesRestIntegrationTest {
                 .body("skipSourceDestCheck", equalTo(false))
                 .body("lifecycleState", equalTo("AVAILABLE"))
                 .body("$", not(hasKey("publicIp")))
-                .body("$", not(hasKey("vcnId")));
+                .body("$", not(hasKey("vcnId")))
+                .body("$", not(hasKey("resourceId")));
 
         given().when().get("/20160918/networkSecurityGroups/" + network.nsgId() + "/vnics")
             .then().statusCode(200)
                 .body("vnicId", hasItem(vnicId));
+    }
+
+    @Test
+    void theNsgListsTheInstanceVnicWithTheInstanceAsItsResource() {
+        Response created = create("it-nsg-vnic");
+        String vnicId = created.path("vnics[0].vnicId");
+
+        given().when().get("/20160918/networkSecurityGroups/" + network.nsgId() + "/vnics")
+            .then().statusCode(200)
+                .header("opc-request-id", notNullValue())
+                .body("find { it.vnicId == '" + vnicId + "' }.resourceId", equalTo(created.path("id")))
+                .body("find { it.vnicId == '" + vnicId + "' }.timeAssociated", notNullValue());
     }
 
     @Test

@@ -121,6 +121,7 @@ class ContainerInstancesServiceTest {
         ArgumentCaptor<NetworkReferences.VnicRequest> vnic = ArgumentCaptor.forClass(NetworkReferences.VnicRequest.class);
         verify(network).attachVnic(vnic.capture());
         assertEquals(SUBNET, vnic.getValue().subnetId());
+        assertEquals(instance.getId(), vnic.getValue().resourceId());
         assertTrue(vnic.getValue().allocatePrivateIp(), "mock mode takes an address from the subnet");
         verifyNoInteractions(manager);
     }

@@ -28,6 +28,7 @@ public class StoredNetworkResource {
     private String etag;
     private boolean vcnDefault;
     private boolean addressFromWorkload;
+    private String resourceId;
     private Map<String, String> freeformTags = new LinkedHashMap<>();
     private Map<String, Map<String, Object>> definedTags = new LinkedHashMap<>();
     private Map<String, Object> attributes = new LinkedHashMap<>();
@@ -49,6 +50,7 @@ public class StoredNetworkResource {
         copy.etag = etag;
         copy.vcnDefault = vcnDefault;
         copy.addressFromWorkload = addressFromWorkload;
+        copy.resourceId = resourceId;
         copy.freeformTags = new LinkedHashMap<>(freeformTags);
         copy.definedTags = deepCopyMap(definedTags);
         copy.attributes = deepCopyMap(attributes);
@@ -166,6 +168,18 @@ public class StoredNetworkResource {
 
     public void setAddressFromWorkload(boolean addressFromWorkload) {
         this.addressFromWorkload = addressFromWorkload;
+    }
+
+    /**
+     * For a VNIC, the OCID of the resource it is attached to (a container instance), which
+     * ListNetworkSecurityGroupVnics returns as {@code resourceId}. Not part of the Vnic model.
+     */
+    public String getResourceId() {
+        return resourceId;
+    }
+
+    public void setResourceId(String resourceId) {
+        this.resourceId = resourceId;
     }
 
     public Map<String, String> getFreeformTags() {

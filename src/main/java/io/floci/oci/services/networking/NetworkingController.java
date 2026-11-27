@@ -207,7 +207,10 @@ public class NetworkingController {
         return Response.ok(json).header("etag", vcn.getEtag()).build();
     }
 
-    /** The VNICs in the group (NetworkSecurityGroupVnic: vnicId and timeAssociated), a bare array. */
+    /**
+     * The VNICs in the group (NetworkSecurityGroupVnic: vnicId, the resourceId of the resource
+     * each is attached to, and timeAssociated), a bare array.
+     */
     @GET
     @Path("/networkSecurityGroups/{id}/vnics")
     public Response listNetworkSecurityGroupVnics(@PathParam("id") String id,
@@ -216,6 +219,9 @@ public class NetworkingController {
         List<Map<String, Object>> vnics = service.vnicsInNsg(id).stream().map(vnic -> {
             Map<String, Object> json = new LinkedHashMap<>();
             json.put("vnicId", vnic.getId());
+            if (vnic.getResourceId() != null) {
+                json.put("resourceId", vnic.getResourceId());
+            }
             json.put("timeAssociated", vnic.getTimeCreated());
             return json;
         }).toList();
