@@ -98,7 +98,7 @@ public class MysqlController {
                                   @QueryParam("page") String page) {
         requireCompartment(compartmentId);
         return MysqlRequests.list(service.listDbSystems(compartmentId, isHeatWaveClusterAttached, dbSystemId,
-                        displayName, lifecycleState, configurationId, databaseManagement, sortBy, sortOrder)
+                        displayName, lifecycleState, configurationId, isUpToDate, databaseManagement, sortBy, sortOrder)
                 .stream().map(StoredMysqlDbSystem::toSummaryWire).toList(), limit, page);
     }
 

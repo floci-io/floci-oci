@@ -53,6 +53,12 @@ connect to with the admin user it was created with. Real OCI serves the API on
   `[]VersionSummary`, `[]ConfigurationSummary`, `[]WorkRequestSummary`), paged with
   `opc-next-page` where the SDK pages it; `ListShapes` and `ListVersions` are not paged. Every
   list requires `compartmentId`.
+- `ListDbSystems` takes `isUpToDate`, which the SDKs describe as filtering DB systems on whether
+  they use the latest revision of their configuration. `UpdateConfiguration` cannot change a
+  configuration's variables (the SDK's `UpdateConfigurationDetails` carries only names and tags),
+  so each configuration has one revision and every DB system uses it: `isUpToDate=true` filters
+  nothing out and `isUpToDate=false` finds no DB system. That reading is inferred; OCI documents
+  no other way for a configuration to gain a revision.
 - `CreateDbSystem` answers `200` with the DbSystem, `etag`, `location` and `opc-work-request-id`.
   Update, delete, start, stop and restart answer `202` with only `opc-work-request-id`. The SDKs
   record no status codes; these follow the other floci-oci services with work requests.

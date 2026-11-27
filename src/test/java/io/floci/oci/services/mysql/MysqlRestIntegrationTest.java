@@ -92,6 +92,26 @@ class MysqlRestIntegrationTest {
     }
 
     @Test
+    void isUpToDateFindsEveryDbSystemWhenTrueAndNoneWhenFalse() {
+        String id = create("it-up-to-date").path("id");
+
+        given().queryParam("compartmentId", compartment).queryParam("displayName", "it-up-to-date")
+                .queryParam("isUpToDate", true)
+            .when().get("/20190415/dbSystems")
+            .then()
+                .statusCode(200)
+                .header("opc-request-id", notNullValue())
+                .body("id", contains(id));
+        given().queryParam("compartmentId", compartment).queryParam("displayName", "it-up-to-date")
+                .queryParam("isUpToDate", false)
+            .when().get("/20190415/dbSystems")
+            .then()
+                .statusCode(200)
+                .header("opc-request-id", notNullValue())
+                .body("$", empty());
+    }
+
+    @Test
     void anUnknownDbSystemIsNotAuthorizedOrNotFound() {
         given().when().get("/20190415/dbSystems/ocid1.mysqldbsystem.oc1.iad.missing")
             .then().statusCode(404)
