@@ -75,9 +75,10 @@ port 4599 with the other services.
 - Operations need the right state: `StartDbSystem` an `INACTIVE` system, the others an `ACTIVE`
   one. Otherwise they are refused with `409`. A refusal while the system is `CREATING`, `UPDATING` or `DELETING` is
   `409 IncorrectState`, which OCI SDKs retry until the operation finishes; in any other state a retry
-  cannot succeed, so it is `409 Conflict`, which they do not retry. Two operations that arrive
-  together are decided one at a time: the first moves the system on, and the second is refused
-  as if it had come after it, so no work request is left `IN_PROGRESS`.
+  cannot succeed, so it is `409 Conflict`, which they do not retry. Two requests that arrive
+  together are decided one at a time: each sees the state the one before it left. A second
+  lifecycle operation is then refused while the first is under way, except a delete, which
+  cancels the operation in progress. Either way no work request is left `IN_PROGRESS`.
 - `compartmentId` must be an existing compartment or the tenancy, and the request must be sent
   to a region the tenancy is subscribed to, like every other regional service.
 

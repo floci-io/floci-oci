@@ -578,7 +578,7 @@ public class PsqlService implements Resettable, CompartmentUsage, NetworkUsage {
         try {
             containers.applySettings(system);
         } catch (RuntimeException e) {
-            return () -> fail(system, "NEEDS_ATTENTION",
+            return failedOutcome(system, "NEEDS_ATTENTION",
                     reason + "; restoring the previous one failed too: " + e.getMessage());
         }
         return () -> {
@@ -1058,7 +1058,7 @@ public class PsqlService implements Resettable, CompartmentUsage, NetworkUsage {
             try {
                 containers.restore(current, dumpId);
             } catch (RuntimeException e) {
-                return () -> fail(current, "NEEDS_ATTENTION", "The backup could not be restored: " + e.getMessage());
+                return failedOutcome(current, "NEEDS_ATTENTION", "The backup could not be restored: " + e.getMessage());
             }
             return () -> {
                 current.setLifecycleState("ACTIVE");
@@ -1270,18 +1270,23 @@ public class PsqlService implements Resettable, CompartmentUsage, NetworkUsage {
                 outcome = step.run(current.get());
             } catch (RuntimeException e) {
                 LOG.warnv(e, "Lifecycle step failed for DB system {0}", id);
-                outcome = () -> fail(current.get(), "NEEDS_ATTENTION", e.getMessage());
+                outcome = failedOutcome(current.get(), "NEEDS_ATTENTION", e.getMessage());
             }
+            boolean wasReset = false;
             synchronized (this) {
                 if (owned(tenancyId, region, id, workRequestId).isPresent()) {
                     outcome.run();
                 } else if (findIn(tenancyId, region, id).isEmpty()) {
-                    // A reset forgot the system while its step ran: remove what the step started.
-                    LOG.debugv("DB system {0} was reset during its lifecycle step", id);
-                    purgeQuietly(current.get());
+                    wasReset = true;
                 } else {
                     LOG.debugv("DB system {0} moved on during its lifecycle step", id);
                 }
+            }
+            if (wasReset) {
+                // A reset forgot the system while its step ran: remove what the step started,
+                // outside the lock since it is Docker work.
+                LOG.debugv("DB system {0} was reset during its lifecycle step", id);
+                purgeQuietly(current.get());
             }
         });
     }
@@ -1305,7 +1310,7 @@ public class PsqlService implements Resettable, CompartmentUsage, NetworkUsage {
                 containers.stop(current);
                 containers.start(current, password);
             } catch (RuntimeException e) {
-                return () -> fail(current, failureState,
+                return failedOutcome(current, failureState,
                         "The PostgreSQL container could not be started: " + e.getMessage());
             }
             return () -> {
@@ -1352,23 +1357,26 @@ public class PsqlService implements Resettable, CompartmentUsage, NetworkUsage {
             try {
                 containers.applySettings(system);
             } catch (RuntimeException e) {
-                settle(system, () -> fail(system, waiting.failureState(),
-                        "The configuration could not be applied: " + e.getMessage()));
+                failPending(system, waiting.failureState(),
+                        "The configuration could not be applied: " + e.getMessage());
                 return;
             }
             if (system.getRestoreBackupId() != null) {
                 try {
                     containers.restore(system, system.getRestoreBackupId());
                 } catch (RuntimeException e) {
-                    settle(system, () -> fail(system, waiting.failureState(),
-                            "The backup could not be restored: " + e.getMessage()));
+                    failPending(system, waiting.failureState(),
+                            "The backup could not be restored: " + e.getMessage());
                     return;
                 }
                 system.setRestoreBackupId(null);
             }
+            // The Docker calls run before the service lock is taken, so a slow daemon holds up
+            // only this DB system's poll, not every other change.
+            Optional<String> version = containers.serverVersion(system);
+            EndpointInfo endpoint = containers.clientEndpoint(system);
             settle(system, () -> {
-                containers.serverVersion(system).ifPresent(system::setDbVersion);
-                EndpointInfo endpoint = containers.clientEndpoint(system);
+                version.ifPresent(system::setDbVersion);
                 system.setEndpointHost(endpoint.host());
                 system.setEndpointPort(endpoint.port());
                 system.setLifecycleState(waiting.targetState());
@@ -1380,11 +1388,11 @@ public class PsqlService implements Resettable, CompartmentUsage, NetworkUsage {
                 LOG.infov("DB system {0} is {1} at {2}", system.getId(), waiting.targetState(), endpoint);
             });
         } else if (!containers.isRunning(system)) {
-            settle(system, () -> fail(system, waiting.failureState(),
-                    "The PostgreSQL container exited before it accepted connections"));
+            failPending(system, waiting.failureState(),
+                    "The PostgreSQL container exited before it accepted connections");
         } else if (clock.instant().isAfter(waiting.since().plusSeconds(timeout))) {
-            settle(system, () -> fail(system, waiting.failureState(),
-                    "PostgreSQL did not accept connections after " + timeout + " seconds"));
+            failPending(system, waiting.failureState(),
+                    "PostgreSQL did not accept connections after " + timeout + " seconds");
         }
     }
 
@@ -1419,8 +1427,31 @@ public class PsqlService implements Resettable, CompartmentUsage, NetworkUsage {
         }
     }
 
+    /**
+     * Fails a pending operation. The container is stopped before the service lock is taken: while
+     * the system is pending every other change is refused except delete, which removes the
+     * container anyway, so stopping first cannot undo another request's work.
+     */
+    private void failPending(StoredDbSystem system, String state, String message) {
+        stopQuietly(system);
+        settle(system, () -> recordFailure(system, state, message));
+    }
+
     private void fail(StoredDbSystem system, String state, String message) {
         stopQuietly(system);
+        recordFailure(system, state, message);
+    }
+
+    /**
+     * For a lifecycle step on the worker: stops the container now, outside the service lock, and
+     * returns the outcome that records the failure under it.
+     */
+    private Runnable failedOutcome(StoredDbSystem system, String state, String message) {
+        stopQuietly(system);
+        return () -> recordFailure(system, state, message);
+    }
+
+    private void recordFailure(StoredDbSystem system, String state, String message) {
         system.setLifecycleState(state);
         system.setLifecycleDetails(message);
         setInstanceStates(system, "FAILED");
