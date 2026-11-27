@@ -53,6 +53,12 @@ class ApplicationDefaultsTest {
                 String.valueOf(config.services().streaming().kafkaMaxPort()));
         assertEquals(annotationDefault(EmulatorConfig.ServicesConfig.StreamingServiceConfig.class,
                 "readyTimeoutSeconds"), String.valueOf(config.services().streaming().readyTimeoutSeconds()));
+        assertEquals(annotationDefault(EmulatorConfig.ServicesConfig.DatabaseServiceConfig.class, "image"),
+                config.services().database().image());
+        assertEquals(annotationDefault(EmulatorConfig.ServicesConfig.DatabaseServiceConfig.class, "basePort"),
+                String.valueOf(config.services().database().basePort()));
+        assertEquals(annotationDefault(EmulatorConfig.ServicesConfig.DatabaseServiceConfig.class,
+                "readyTimeoutSeconds"), String.valueOf(config.services().database().readyTimeoutSeconds()));
         assertEquals(annotationDefault(EmulatorConfig.DockerConfig.class, "endpointMode"),
                 config.docker().endpointMode().name().toLowerCase(Locale.ROOT));
         assertEquals(annotationDefault(EmulatorConfig.DockerConfig.class, "imagePullTimeoutSeconds"),

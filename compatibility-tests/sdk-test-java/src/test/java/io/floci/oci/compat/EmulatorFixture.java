@@ -5,6 +5,7 @@ import com.oracle.bmc.auth.SimpleAuthenticationDetailsProvider;
 import com.oracle.bmc.containerengine.ContainerEngineClient;
 import com.oracle.bmc.containerinstances.ContainerInstanceClient;
 import com.oracle.bmc.core.VirtualNetworkClient;
+import com.oracle.bmc.database.DatabaseClient;
 import com.oracle.bmc.functions.FunctionsManagementClient;
 import com.oracle.bmc.functions.WorkRequestManagementClient;
 import com.oracle.bmc.governancerulescontrolplane.GovernanceRuleClient;
@@ -236,6 +237,24 @@ public final class EmulatorFixture {
 
     public static MysqlaasClient mysqlCatalog() {
         MysqlaasClient client = MysqlaasClient.builder()
+                .region(Region.US_ASHBURN_1).build(AUTH);
+        client.setEndpoint(ENDPOINT);
+        return client;
+    }
+
+    public static DatabaseClient database() {
+        DatabaseClient client = DatabaseClient.builder()
+                .region(Region.US_ASHBURN_1).build(AUTH);
+        client.setEndpoint(ENDPOINT);
+        return client;
+    }
+
+    /**
+     * The core work-request client (oci-java-sdk-workrequests), which Database work requests are
+     * polled on. Qualified because tenantmanagercontrolplane.WorkRequestClient is the imported one.
+     */
+    public static com.oracle.bmc.workrequests.WorkRequestClient coreWorkRequests() {
+        com.oracle.bmc.workrequests.WorkRequestClient client = com.oracle.bmc.workrequests.WorkRequestClient.builder()
                 .region(Region.US_ASHBURN_1).build(AUTH);
         client.setEndpoint(ENDPOINT);
         return client;

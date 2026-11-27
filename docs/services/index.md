@@ -20,6 +20,7 @@
 | [Container Instances](container-instances.md) | `/20210415/…` | Container instances on Docker (one pod per instance on the shared network), containers, logs, start/stop/restart, restart policies, EMPTYDIR and CONFIGFILE volumes, BASIC and VAULT image pull secrets, local OCIR images, shapes, work requests; one VNIC per instance served by Networking |
 | [Database with PostgreSQL](psql.md) | `/20220915/…` | DB systems CRUD, start/stop/restart, password reset, connection details with a CA certificate, shapes, custom configurations, default configurations, backups, restore and point-in-time recovery, instance patches, failover and replicas, Kerberos and insight settings, work requests, real PostgreSQL sidecar |
 | [MySQL HeatWave](mysql.md) | `/20190415/…` | DB systems CRUD, start/stop/restart, shapes, versions, default and custom configurations, work requests, real MySQL sidecar |
+| [Autonomous Database](autonomous-database.md) | `/20160918/autonomousDatabases…` | Autonomous Databases CRUD, start/stop/restart, wallet generation, work requests on the core work-request client; management plane only (mock mode) |
 | [Organizations](organizations.md) | `/20230401/…` | Child tenancies with their own home region and isolated storage, organizations, organization tenancies, transfer approval, links and link features, invitations, governance opt-in, domains and domain governance, subscriptions and subscription mappings, orders, work requests |
 | [Governance Rules](governance-rules.md) | `/20220504/…` | Governance rules (quota, tag, allowed regions), inclusion criteria, tenancy attachments, enforced rules, work requests; allowed regions enforced on region subscriptions |
 
@@ -66,6 +67,7 @@ FLOCI_OCI_SERVICES_OKE_ENABLED=false
 FLOCI_OCI_SERVICES_ARTIFACTS_ENABLED=false
 FLOCI_OCI_SERVICES_PSQL_ENABLED=false
 FLOCI_OCI_SERVICES_MYSQL_ENABLED=false
+FLOCI_OCI_SERVICES_DATABASE_ENABLED=false
 FLOCI_OCI_SERVICES_CONTAINERINSTANCES_ENABLED=false
 ```
 

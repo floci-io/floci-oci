@@ -177,4 +177,11 @@ floci-oci:
       base-port: 13306       # host ports published for MySQL endpoints, one per DB system
       max-port: 13405
       ready-timeout-seconds: 180
+    database:
+      enabled: true
+      mock: false            # true = no Docker; Autonomous Databases are management-plane only
+      image: "container-registry.oracle.com/database/adb-free:latest-26ai"
+      base-port: 11522       # host ports for each database's mTLS listener (container 1522)
+      max-port: 11621
+      ready-timeout-seconds: 600
 

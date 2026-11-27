@@ -40,6 +40,7 @@ It implements real OCI wire protocols so the official OCI SDKs, the OCI CLI, Ter
 | Container Instances | `/20210415/…` | Container instances running on Docker, containers, logs, start/stop/restart, volumes, image pull secrets, shapes, work requests |
 | Database with PostgreSQL | `/20220915/…` | DB systems, start/stop/restart, password reset, connection details, shapes, default and custom configurations, backups and restore, instances and replicas, Kerberos and insight settings, work requests, real PostgreSQL sidecar |
 | MySQL HeatWave | `/20190415/…` | DB systems, start/stop/restart, shapes, versions, default and custom configurations, work requests, real MySQL sidecar |
+| Autonomous Database | `/20160918/autonomousDatabases…` | Autonomous Databases, start/stop/restart, wallet generation, work requests (management plane, mock mode) |
 | Organizations | `/20230401/…` | Child tenancies, organizations, organization tenancies, links, invitations, domains, subscriptions, orders, work requests |
 | Governance Rules | `/20220504/…` | Governance rules, inclusion criteria, tenancy attachments, enforced rules, work requests |
 

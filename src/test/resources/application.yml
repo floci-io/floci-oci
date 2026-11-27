@@ -21,6 +21,8 @@ floci-oci:
       mock: true
     mysql:
       mock: true
+    database:
+      mock: true
     streaming:
       mock: true
     containerinstances:
