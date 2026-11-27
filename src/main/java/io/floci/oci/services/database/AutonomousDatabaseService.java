@@ -494,10 +494,18 @@ public class AutonomousDatabaseService implements Resettable, CompartmentUsage, 
         return workRequestId;
     }
 
-    /** Queues the removal of the container; the database then stays readable as TERMINATED. */
+    /**
+     * Queues the removal of the container; the database then stays readable as TERMINATED. When
+     * Docker cannot remove it the database is UNAVAILABLE with the error instead, keeps its
+     * container and port, and can be deleted again.
+     */
     private void runDelete(StoredAutonomousDatabase database) {
         runAsync(database, current -> {
-            containers.remove(current);
+            try {
+                containers.remove(current);
+            } catch (RuntimeException e) {
+                return () -> fail(current, "The container could not be removed: " + e.getMessage(), false);
+            }
             return () -> {
                 current.setLifecycleState("TERMINATED");
                 current.setLifecycleDetails(null);
@@ -917,8 +925,13 @@ public class AutonomousDatabaseService implements Resettable, CompartmentUsage, 
     }
 
     private boolean adopt(StoredAutonomousDatabase database) {
+        int hostPort = database.getHostPort();
         try {
-            return containers.adopt(database);
+            boolean adopted = containers.adopt(database);
+            if (database.getHostPort() != hostPort) {
+                saveIn(database);
+            }
+            return adopted;
         } catch (RuntimeException e) {
             LOG.warnv("Could not look up the container of Autonomous Database {0}: {1}", database.getId(),
                     e.getMessage());

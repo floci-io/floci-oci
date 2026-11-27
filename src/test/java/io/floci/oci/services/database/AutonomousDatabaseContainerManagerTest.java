@@ -2,8 +2,11 @@ package io.floci.oci.services.database;
 
 import com.github.dockerjava.api.command.HealthState;
 import com.github.dockerjava.api.command.InspectContainerResponse;
+import com.github.dockerjava.api.exception.DockerException;
 import com.github.dockerjava.api.exception.NotFoundException;
 import com.github.dockerjava.api.model.Container;
+import com.github.dockerjava.api.model.ExposedPort;
+import com.github.dockerjava.api.model.Ports;
 import io.floci.oci.config.EmulatorConfig;
 import io.floci.oci.core.common.docker.ContainerBuilder;
 import io.floci.oci.core.common.docker.ContainerLifecycleManager;
@@ -237,21 +240,92 @@ class AutonomousDatabaseContainerManagerTest {
 
         manager.remove(database);
 
-        verify(lifecycleManager).removeIfExists(NAME);
+        verify(lifecycleManager).forceRemove(NAME);
         verify(portAllocator).release(11530);
     }
 
     @Test
+    void aRemovalDockerRefusesPropagatesAndKeepsThePortReserved() {
+        doThrow(new DockerException("removal of container is already in progress", 409))
+                .when(lifecycleManager).forceRemove(NAME);
+        StoredAutonomousDatabase database = database("OLTP");
+        database.setHostPort(11530);
+
+        assertThrows(DockerException.class, () -> manager.remove(database));
+
+        verify(portAllocator, never()).release(anyInt());
+    }
+
+    @Test
     void adoptionFindsTheContainerByNameAndResourceLabelAndReservesItsPort() {
-        Container container = mock(Container.class);
-        when(container.getLabels()).thenReturn(Map.of(ContainerStorageHelper.RESOURCE_ID_LABEL, ID));
-        when(lifecycleManager.findByName(NAME)).thenReturn(Optional.of(container));
+        adoptable(11530);
         StoredAutonomousDatabase database = database("OLTP");
         database.setHostPort(11530);
 
         assertTrue(manager.adopt(database));
 
         verify(portAllocator).markReserved(11530);
+        assertEquals(11530, database.getHostPort());
+    }
+
+    @Test
+    void adoptionRecordsThePublishedPortOfACreateInterruptedBeforeItWasSaved() {
+        adoptable(11544);
+        StoredAutonomousDatabase database = database("OLTP");
+
+        assertTrue(manager.adopt(database));
+
+        assertEquals(11544, database.getHostPort());
+        verify(portAllocator).markReserved(11544);
+    }
+
+    @Test
+    void adoptionTrustsThePortTheContainerPublishesOverTheStoredOne() {
+        adoptable(11544);
+        StoredAutonomousDatabase database = database("OLTP");
+        database.setHostPort(11530);
+
+        assertTrue(manager.adopt(database));
+
+        assertEquals(11544, database.getHostPort());
+        verify(portAllocator).markReserved(11544);
+        verify(portAllocator, never()).markReserved(11530);
+    }
+
+    @Test
+    void theBoundPortIsTheFallbackWhenTheContainerHasNoConfiguredBinding() {
+        InspectContainerResponse inspect = mock(InspectContainerResponse.class, RETURNS_DEEP_STUBS);
+        when(inspect.getHostConfig().getPortBindings()).thenReturn(new Ports());
+        when(inspect.getNetworkSettings().getPorts()).thenReturn(bound(11550));
+
+        assertEquals(11550, AutonomousDatabaseContainerManager.publishedHostPort(inspect));
+    }
+
+    @Test
+    void aContainerThatVanishesBeforeItsInspectIsNotAdopted() {
+        Container container = mock(Container.class);
+        when(container.getLabels()).thenReturn(Map.of(ContainerStorageHelper.RESOURCE_ID_LABEL, ID));
+        when(lifecycleManager.findByName(NAME)).thenReturn(Optional.of(container));
+        when(lifecycleManager.inspect(NAME)).thenReturn(Optional.empty());
+
+        assertFalse(manager.adopt(database("OLTP")));
+
+        verify(portAllocator, never()).markReserved(anyInt());
+    }
+
+    private void adoptable(int publishedPort) {
+        Container container = mock(Container.class);
+        when(container.getLabels()).thenReturn(Map.of(ContainerStorageHelper.RESOURCE_ID_LABEL, ID));
+        when(lifecycleManager.findByName(NAME)).thenReturn(Optional.of(container));
+        InspectContainerResponse inspect = mock(InspectContainerResponse.class, RETURNS_DEEP_STUBS);
+        when(inspect.getHostConfig().getPortBindings()).thenReturn(bound(publishedPort));
+        when(lifecycleManager.inspect(NAME)).thenReturn(Optional.of(inspect));
+    }
+
+    private static Ports bound(int hostPort) {
+        Ports ports = new Ports();
+        ports.bind(ExposedPort.tcp(1522), Ports.Binding.bindPort(hostPort));
+        return ports;
     }
 
     @Test

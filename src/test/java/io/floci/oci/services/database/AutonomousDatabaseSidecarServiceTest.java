@@ -27,6 +27,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
+import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
@@ -302,6 +303,40 @@ class AutonomousDatabaseSidecarServiceTest {
         assertEquals("SUCCEEDED", workRequest(workRequestId).getStatus());
         assertEquals("DELETED", workRequest(workRequestId).getResources().getFirst().getActionType());
         verify(containers).remove(database);
+    }
+
+    @Test
+    void aDeleteDockerRefusesLeavesTheDatabaseUnavailableAndDeletableAgain() {
+        StoredAutonomousDatabase database = available();
+        doThrow(new IllegalStateException("Docker is unreachable")).when(containers).remove(any());
+
+        String failed = service.delete(database.getId(), null);
+
+        StoredAutonomousDatabase after = service.get(database.getId());
+        assertEquals("UNAVAILABLE", after.getLifecycleState());
+        assertEquals("The container could not be removed: Docker is unreachable", after.getLifecycleDetails());
+        assertEquals("FAILED", workRequest(failed).getStatus());
+        assertNull(after.getWorkRequestId());
+
+        doNothing().when(containers).remove(any());
+        String retried = service.delete(database.getId(), null);
+
+        assertEquals("TERMINATED", service.get(database.getId()).getLifecycleState());
+        assertEquals("SUCCEEDED", workRequest(retried).getStatus());
+    }
+
+    @Test
+    void adoptionSavesTheHostPortTheContainerPublishes() {
+        StoredAutonomousDatabase database = available();
+        databases.get(database.getId()).orElseThrow().setHostPort(0);
+        when(containers.adopt(any())).thenAnswer(call -> {
+            call.<StoredAutonomousDatabase>getArgument(0).setHostPort(11544);
+            return true;
+        });
+
+        service(Runnable::run).adoptPersistedDatabases();
+
+        assertEquals(11544, databases.get(database.getId()).orElseThrow().getHostPort());
     }
 
     @Test

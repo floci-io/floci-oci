@@ -97,7 +97,8 @@ floci-oci publishes only the container's mTLS listener (container port 1522) on 
   stop and start keep the container and its data, and its host port stays reserved while it is
   stopped. When floci-oci stops, it stops every container (with in-memory storage, where the
   databases are forgotten, it removes them); when it starts again it takes each container over,
-  found by name and its `io.floci.resource-id` label, and starts the ones whose database was
+  found by name and its `io.floci.resource-id` label, reserves the host port the container
+  publishes (which replaces the stored one if they differ), and starts the ones whose database was
   running. An operation the restart interrupted carries on under its own work request. A database
   whose container is gone is `UNAVAILABLE` with a `lifecycleDetails` saying so (inferred): delete
   it and create a new one. `POST /_floci-oci/state/reset` removes every container.
@@ -105,7 +106,10 @@ floci-oci publishes only the container's mTLS listener (container port 1522) on 
   `adminPassword` answers `501 MethodNotImplemented`: the container was created with them.
 - **Delete** answers `204` with `opc-work-request-id` and keeps the database readable as
   `TERMINATED`, which Terraform and `--wait-for-state` poll. Every other operation on a terminated
-  database answers `404 NotAuthorizedOrNotFound`.
+  database answers `404 NotAuthorizedOrNotFound`. In real mode a container that is already gone
+  counts as removed; when Docker cannot remove it, the database is `UNAVAILABLE` with the error in
+  `lifecycleDetails`, its work request `FAILED`, and it keeps its container and host port, so the
+  delete can be sent again (inferred).
 - **Work requests.** Every mutation records a work request on the core work-request client with
   one resource of `entityType` `autonomousDatabase` (action `CREATED`, `UPDATED` or `DELETED`);
   Terraform finds the new database's id there after a create. In mock mode it is `SUCCEEDED` at

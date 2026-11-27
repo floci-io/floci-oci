@@ -4,6 +4,10 @@ import com.github.dockerjava.api.command.HealthState;
 import com.github.dockerjava.api.command.InspectContainerResponse;
 import com.github.dockerjava.api.exception.NotFoundException;
 import com.github.dockerjava.api.model.Container;
+import com.github.dockerjava.api.model.ExposedPort;
+import com.github.dockerjava.api.model.HostConfig;
+import com.github.dockerjava.api.model.NetworkSettings;
+import com.github.dockerjava.api.model.Ports;
 import io.floci.oci.config.EmulatorConfig;
 import io.floci.oci.core.common.docker.ContainerBuilder;
 import io.floci.oci.core.common.docker.ContainerLifecycleManager;
@@ -157,7 +161,10 @@ public class AutonomousDatabaseContainerManager {
 
     /**
      * Takes over the container a previous run of floci-oci left, found by its name and confirmed
-     * by its resource label, and reserves its host port again.
+     * by its resource label, and reserves its host port again. The port is the one the container
+     * publishes, which Docker binds again when it starts: it replaces the stored one when they
+     * differ, or when floci-oci stopped after Docker created the container but before the port
+     * was recorded.
      *
      * @return false when the container is gone, and with it the database
      */
@@ -168,11 +175,62 @@ public class AutonomousDatabaseContainerManager {
         if (found.isEmpty()) {
             return false;
         }
+        Optional<InspectContainerResponse> inspect = lifecycleManager.inspect(database.getContainerName());
+        if (inspect.isEmpty()) {
+            return false;
+        }
+        int published = publishedHostPort(inspect.get());
+        if (published > 0 && published != database.getHostPort()) {
+            LOG.infov("The container of Autonomous Database {0} publishes host port {1}; recording it in place of {2}",
+                    database.getId(), published, database.getHostPort());
+            database.setHostPort(published);
+        }
         if (database.getHostPort() > 0) {
             portAllocator.markReserved(database.getHostPort());
+        } else {
+            LOG.warnv("The container of Autonomous Database {0} publishes no host port for {1}/tcp",
+                    database.getId(), MTLS_PORT);
         }
         LOG.infov("Adopted the container of Autonomous Database {0}", database.getId());
         return true;
+    }
+
+    /**
+     * The host port the container's mTLS listener is published on, or 0 when there is none. The
+     * container's own binding comes first, since a stopped container reports no bound ports; the
+     * ports Docker bound are the fallback.
+     */
+    static int publishedHostPort(InspectContainerResponse inspect) {
+        HostConfig hostConfig = inspect.getHostConfig();
+        int configured = hostPort(hostConfig != null ? hostConfig.getPortBindings() : null);
+        if (configured > 0) {
+            return configured;
+        }
+        NetworkSettings network = inspect.getNetworkSettings();
+        return hostPort(network != null ? network.getPorts() : null);
+    }
+
+    private static int hostPort(Ports ports) {
+        if (ports == null || ports.getBindings() == null) {
+            return 0;
+        }
+        Ports.Binding[] bindings = ports.getBindings().get(ExposedPort.tcp(MTLS_PORT));
+        if (bindings == null) {
+            return 0;
+        }
+        for (Ports.Binding binding : bindings) {
+            String spec = binding != null ? binding.getHostPortSpec() : null;
+            if (spec == null || spec.isBlank()) {
+                continue;
+            }
+            try {
+                return Integer.parseInt(spec.strip());
+            } catch (NumberFormatException e) {
+                LOG.debugv("Ignoring the host port binding {0} of {1}/tcp, which is not a single port", spec,
+                        MTLS_PORT);
+            }
+        }
+        return 0;
     }
 
     /** Starts the stopped container; a running one is left alone. */
@@ -210,9 +268,13 @@ public class AutonomousDatabaseContainerManager {
         }
     }
 
-    /** Removes the container, and the database with it, and releases its port. */
+    /**
+     * Removes the container, and the database with it, and releases its port. A container that is
+     * already gone counts as removed. Any other Docker error propagates and the port stays
+     * reserved, since the container may still hold it.
+     */
     public void remove(StoredAutonomousDatabase database) {
-        lifecycleManager.removeIfExists(database.getContainerName());
+        lifecycleManager.forceRemove(database.getContainerName());
         if (database.getHostPort() > 0) {
             portAllocator.release(database.getHostPort());
         }
