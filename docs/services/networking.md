@@ -69,6 +69,10 @@ A resource that another service holds a reference to stays until that resource i
 counts, but one that is still `DELETING` does, as in OCI, where the Terraform provider retries a
 subnet delete on `Conflict` while its dependants are torn down. The status and code follow OCI;
 the message wording is floci-oci's own (inferred, no source shows OCI's text).
+A resource that is still being created or updated with the VCN, subnet or NSG counts too, from
+the moment its references are checked until it is saved (an OKE cluster starts its k3s sidecar
+in between), so a delete in that window is refused rather than leaving it pointing at a deleted
+network.
 
 ## Quickstart
 

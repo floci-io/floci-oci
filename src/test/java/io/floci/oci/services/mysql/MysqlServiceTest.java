@@ -47,6 +47,7 @@ class MysqlServiceTest {
     private static final String COMPARTMENT = "ocid1.compartment.oc1..mysqltestcompartment";
     private static final String SUBNET = "ocid1.subnet.oc1.iad.mysqltestsubnet";
     private static final String MISSING_SUBNET = "ocid1.subnet.oc1.iad.missing";
+    private static final String NSG = "ocid1.networksecuritygroup.oc1.iad.mysqltestnsg";
 
     private EmulatorConfig config;
     private InMemoryStorage<String, StoredMysqlDbSystem> systems;
@@ -57,7 +58,7 @@ class MysqlServiceTest {
     private MysqlService mock;
     private MysqlService real;
 
-    /** Knows {@link #SUBNET} and nothing else, like Networking with one subnet. */
+    /** Knows {@link #SUBNET} and {@link #NSG} and nothing else, like Networking with one subnet. */
     private static final NetworkReferences ONE_SUBNET = new NetworkReferences() {
         @Override
         public void requireVcn(String vcnId) {
@@ -75,10 +76,11 @@ class MysqlServiceTest {
 
         @Override
         public void requireNsgs(Collection<String> nsgIds) {
-            if (nsgIds != null && !nsgIds.isEmpty()) {
-                throw OciException.relatedResourceNotAuthorizedOrNotFound(
-                        "Authorization failed or requested resource not found: networksecuritygroup "
-                                + nsgIds.iterator().next());
+            for (String id : nsgIds != null ? nsgIds : List.<String>of()) {
+                if (!NSG.equals(id)) {
+                    throw OciException.relatedResourceNotAuthorizedOrNotFound(
+                            "Authorization failed or requested resource not found: networksecuritygroup " + id);
+                }
             }
         }
 
@@ -684,5 +686,32 @@ class MysqlServiceTest {
 
         mock.deleteDbSystem(system.getId(), null);
         assertEquals(List.of(), mock.resourcesUsing(SUBNET));
+    }
+
+    @Test
+    void aDbSystemBeingDeletedStillReportsItsSubnetAndNsgUntilTheDeleteFinishes() {
+        Map<String, Object> details = createDetails();
+        details.put("nsgIds", List.of(NSG));
+        String id = real.createDbSystem(details).system().getId();
+        when(containers.probeReady(any())).thenReturn(true);
+        real.pollReadiness();
+        List<Runnable> queued = new ArrayList<>();
+        MysqlService deferred = new MysqlService(systems, config, null, workRequests, containers, configurations,
+                OciContext.fromConfig(config), ONE_SUBNET, clock, queued::add);
+        List<String> using = List.of("MySQL DB system " + id);
+
+        String delete = deferred.deleteDbSystem(id, null);
+
+        assertEquals("DELETING", deferred.getDbSystem(id).getLifecycleState());
+        assertEquals(1, queued.size());
+        assertEquals(using, deferred.resourcesUsing(SUBNET));
+        assertEquals(using, deferred.resourcesUsing(NSG));
+
+        queued.removeFirst().run();
+
+        assertEquals("DELETED", deferred.getDbSystem(id).getLifecycleState());
+        assertEquals("SUCCEEDED", workRequest(delete).getStatus());
+        assertEquals(List.of(), deferred.resourcesUsing(SUBNET));
+        assertEquals(List.of(), deferred.resourcesUsing(NSG));
     }
 }

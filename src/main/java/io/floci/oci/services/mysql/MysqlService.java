@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import io.floci.oci.config.EmulatorConfig;
 import io.floci.oci.core.common.CompartmentUsage;
 import io.floci.oci.core.common.Etags;
+import io.floci.oci.core.common.NetworkClaims;
 import io.floci.oci.core.common.NetworkReferences;
 import io.floci.oci.core.common.NetworkUsage;
 import io.floci.oci.core.common.OciContext;
@@ -209,6 +210,12 @@ public class MysqlService implements Resettable, CompartmentUsage, NetworkUsage 
                 StoredMysqlDbSystem::getLifecycleState, system -> "MySQL DB system " + system.getId()).toList();
     }
 
+    /** The network ids a create or update body names, whether or not they are well formed. */
+    private static Set<String> networkIds(Map<String, Object> details) {
+        return details == null ? Set.of()
+                : NetworkUsage.ids(details.get("subnetId"), details.get("nsgIds"));
+    }
+
     @Override
     public List<String> resourcesUsing(String networkId) {
         return NetworkUsage.using(systems.scan(k -> true), networkId, StoredMysqlDbSystem::getLifecycleState,
@@ -218,8 +225,11 @@ public class MysqlService implements Resettable, CompartmentUsage, NetworkUsage 
 
     // ── DB systems ─────────────────────────────────────────────────────────────
 
+    /** The subnet and NSGs are claimed from their check until the DB system is stored. */
     public Created createDbSystem(Map<String, Object> details) {
-        return configurations.attachingConfiguration(() -> create(details));
+        try (NetworkClaims.Claim claim = NetworkClaims.claim(networkIds(details))) {
+            return configurations.attachingConfiguration(() -> create(details));
+        }
     }
 
     private Created create(Map<String, Object> details) {
@@ -351,7 +361,9 @@ public class MysqlService implements Resettable, CompartmentUsage, NetworkUsage 
      * request is finished at once. A new admin password is not applied to the server.
      */
     public String updateDbSystem(String dbSystemId, Map<String, Object> details, String ifMatch) {
-        return configurations.attachingConfiguration(() -> update(dbSystemId, details, ifMatch));
+        try (NetworkClaims.Claim claim = NetworkClaims.claim(networkIds(details))) {
+            return configurations.attachingConfiguration(() -> update(dbSystemId, details, ifMatch));
+        }
     }
 
     private synchronized String update(String dbSystemId, Map<String, Object> details, String ifMatch) {

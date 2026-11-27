@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import io.floci.oci.config.EmulatorConfig;
 import io.floci.oci.core.common.CompartmentUsage;
 import io.floci.oci.core.common.Etags;
+import io.floci.oci.core.common.NetworkClaims;
 import io.floci.oci.core.common.NetworkReferences;
 import io.floci.oci.core.common.NetworkUsage;
 import io.floci.oci.core.common.OciContext;
@@ -244,6 +245,14 @@ public class PsqlService implements Resettable, CompartmentUsage, NetworkUsage {
                 StoredDbSystem::getLifecycleState, system -> "DB system " + system.getId()).toList();
     }
 
+    /** The network ids a create or update body names, whether or not they are well formed. */
+    @SuppressWarnings("unchecked")
+    private static Set<String> networkIds(Map<String, Object> details) {
+        Map<String, Object> network = details != null && details.get("networkDetails") instanceof Map<?, ?> map
+                ? (Map<String, Object>) map : null;
+        return NetworkUsage.ids(NetworkUsage.field(network, "subnetId"), NetworkUsage.field(network, "nsgIds"));
+    }
+
     @Override
     public List<String> resourcesUsing(String networkId) {
         return NetworkUsage.using(systems.scan(k -> true), networkId, StoredDbSystem::getLifecycleState,
@@ -254,8 +263,11 @@ public class PsqlService implements Resettable, CompartmentUsage, NetworkUsage {
 
     // ── DB systems ─────────────────────────────────────────────────────────────
 
+    /** The subnet and NSGs are claimed from their check until the DB system is stored. */
     public Created createDbSystem(Map<String, Object> details) {
-        return configurations.attachingConfiguration(() -> create(details));
+        try (NetworkClaims.Claim claim = NetworkClaims.claim(networkIds(details))) {
+            return configurations.attachingConfiguration(() -> create(details));
+        }
     }
 
     private Created create(Map<String, Object> details) {
@@ -407,7 +419,9 @@ public class PsqlService implements Resettable, CompartmentUsage, NetworkUsage {
      * and policy are management-plane facts here), so the work request is already finished.
      */
     public String updateDbSystem(String dbSystemId, Map<String, Object> details, String ifMatch) {
-        return configurations.attachingConfiguration(() -> update(dbSystemId, details, ifMatch));
+        try (NetworkClaims.Claim claim = NetworkClaims.claim(networkIds(details))) {
+            return configurations.attachingConfiguration(() -> update(dbSystemId, details, ifMatch));
+        }
     }
 
     private String update(String dbSystemId, Map<String, Object> details, String ifMatch) {

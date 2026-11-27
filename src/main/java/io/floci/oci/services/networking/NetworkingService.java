@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import io.floci.oci.config.EmulatorConfig;
 import io.floci.oci.core.common.CompartmentUsage;
 import io.floci.oci.core.common.Etags;
+import io.floci.oci.core.common.NetworkClaims;
 import io.floci.oci.core.common.NetworkReferences;
 import io.floci.oci.core.common.NetworkUsage;
 import io.floci.oci.core.common.OciContext;
@@ -327,6 +328,10 @@ public class NetworkingService implements CompartmentUsage, NetworkReferences {
      */
     private void requireUnused(NetworkKind kind, String id) {
         List<String> users = new ArrayList<>();
+        int pending = NetworkClaims.pending(id);
+        if (pending > 0) {
+            users.add(pending + " resource(s) being created or updated with it");
+        }
         for (NetworkUsage usage : networkUsages) {
             users.addAll(usage.resourcesUsing(id));
         }
@@ -963,25 +968,29 @@ public class NetworkingService implements CompartmentUsage, NetworkReferences {
 
     // ── References between resources ───────────────────────────────────────────
 
+    // The checks hold the Networking lock, as delete does: a create that claimed its ids with
+    // NetworkClaims before checking them either sees a delete that already finished (and fails
+    // its check) or is seen by a later delete through its claim.
+
     @Override
-    public void requireVcn(String vcnId) {
+    public synchronized void requireVcn(String vcnId) {
         if (vcnId != null && checksReferences()) {
             requireVcnInBody(vcnId);
         }
     }
 
     @Override
-    public void requireSubnets(Collection<String> subnetIds) {
+    public synchronized void requireSubnets(Collection<String> subnetIds) {
         requireAll(subnetIds, NetworkKind.SUBNET);
     }
 
     @Override
-    public void requireNsgs(Collection<String> nsgIds) {
+    public synchronized void requireNsgs(Collection<String> nsgIds) {
         requireAll(nsgIds, NetworkKind.NETWORK_SECURITY_GROUP);
     }
 
     @Override
-    public void requireSubnetsInVcn(Collection<String> subnetIds, String vcnId, String field) {
+    public synchronized void requireSubnetsInVcn(Collection<String> subnetIds, String vcnId, String field) {
         requireSubnets(subnetIds);
         if (subnetIds == null || vcnId == null || !checksReferences()) {
             return;

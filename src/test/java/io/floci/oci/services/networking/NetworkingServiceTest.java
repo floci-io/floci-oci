@@ -1,6 +1,7 @@
 package io.floci.oci.services.networking;
 
 import io.floci.oci.config.EmulatorConfig;
+import io.floci.oci.core.common.NetworkClaims;
 import io.floci.oci.core.common.NetworkUsage;
 import io.floci.oci.core.common.OciException;
 import io.floci.oci.core.storage.InMemoryStorage;
@@ -15,8 +16,15 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 
@@ -422,5 +430,73 @@ class NetworkingServiceTest {
         users.clear();
         guarded.delete(NetworkKind.VCN, vcn.getId(), null);
         assertThrows(OciException.class, () -> guarded.get(NetworkKind.VCN, vcn.getId()));
+    }
+
+    @Test
+    void aDeleteDuringACreateBetweenItsCheckAndItsSaveIsRefusedAndNothingDangles() throws Exception {
+        Map<String, List<String>> users = new ConcurrentHashMap<>();
+        NetworkUsage usage = networkId -> users.getOrDefault(networkId, List.of());
+        NetworkingService guarded = new NetworkingService(new InMemoryStorage<>(), checkingConfig(), workRequests,
+                List.of(), List.of(usage));
+        StoredNetworkResource vcn = guarded.create(NetworkKind.VCN,
+                Map.of("compartmentId", COMPARTMENT, "cidrBlock", "10.6.0.0/16", "displayName", "racing"));
+        String subnetId = guarded.create(NetworkKind.SUBNET,
+                Map.of("compartmentId", COMPARTMENT, "vcnId", vcn.getId(), "cidrBlock", "10.6.1.0/24")).getId();
+        CountDownLatch checked = new CountDownLatch(1);
+        CountDownLatch save = new CountDownLatch(1);
+        ExecutorService creator = Executors.newSingleThreadExecutor();
+        try {
+            // A create the way the services do it: claim, check, a slow step, save, release.
+            Future<?> create = creator.submit(() -> {
+                try (NetworkClaims.Claim claim = NetworkClaims.claim(List.of(subnetId))) {
+                    guarded.requireSubnets(List.of(subnetId));
+                    checked.countDown();
+                    save.await(10, TimeUnit.SECONDS);
+                    users.put(subnetId, List.of("application ocid1.fnapp.oc1.iad.racing"));
+                }
+                return null;
+            });
+            assertTrue(checked.await(10, TimeUnit.SECONDS));
+
+            OciException refused = assertThrows(OciException.class,
+                    () -> guarded.delete(NetworkKind.SUBNET, subnetId, null));
+            assertEquals("Conflict", refused.getCode());
+            assertTrue(refused.getMessage().contains("1 resource(s) being created or updated with it"),
+                    refused.getMessage());
+
+            save.countDown();
+            create.get(10, TimeUnit.SECONDS);
+        } finally {
+            creator.shutdownNow();
+        }
+        assertEquals(0, NetworkClaims.pending(subnetId));
+        assertNotNull(guarded.get(NetworkKind.SUBNET, subnetId));
+        assertTrue(assertThrows(OciException.class, () -> guarded.delete(NetworkKind.SUBNET, subnetId, null))
+                .getMessage().contains("application ocid1.fnapp.oc1.iad.racing"));
+    }
+
+    @Test
+    void aCreateThatChecksAfterTheDeleteFailsItsCheck() {
+        NetworkingService checking = new NetworkingService(new InMemoryStorage<>(), checkingConfig(), workRequests);
+        StoredNetworkResource vcn = checking.create(NetworkKind.VCN,
+                Map.of("compartmentId", COMPARTMENT, "cidrBlock", "10.5.0.0/16", "displayName", "late"));
+        String subnetId = checking.create(NetworkKind.SUBNET,
+                Map.of("compartmentId", COMPARTMENT, "vcnId", vcn.getId(), "cidrBlock", "10.5.1.0/24")).getId();
+        checking.delete(NetworkKind.SUBNET, subnetId, null);
+
+        try (NetworkClaims.Claim claim = NetworkClaims.claim(List.of(subnetId))) {
+            assertEquals("RelatedResourceNotAuthorizedOrNotFound", assertThrows(OciException.class,
+                    () -> checking.requireSubnets(List.of(subnetId))).getCode());
+        }
+        assertEquals(0, NetworkClaims.pending(subnetId));
+    }
+
+    /** A config with Networking enabled, so the reference checks run. */
+    private static EmulatorConfig checkingConfig() {
+        EmulatorConfig config = mock(EmulatorConfig.class, RETURNS_DEEP_STUBS);
+        lenient().when(config.defaultRealm()).thenReturn("oc1");
+        lenient().when(config.defaultRegion()).thenReturn("us-ashburn-1");
+        lenient().when(config.services().networking().enabled()).thenReturn(true);
+        return config;
     }
 }
