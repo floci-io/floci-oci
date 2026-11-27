@@ -41,14 +41,17 @@ public class IdentityController {
     private final WorkRequestService workRequests;
     private final CustomerSecretKeyService customerSecretKeys;
     private final ApiKeyService apiKeys;
+    private final AuthTokenService authTokens;
 
     @Inject
     public IdentityController(IdentityService service, WorkRequestService workRequests,
-                              CustomerSecretKeyService customerSecretKeys, ApiKeyService apiKeys) {
+                              CustomerSecretKeyService customerSecretKeys, ApiKeyService apiKeys,
+                              AuthTokenService authTokens) {
         this.service = service;
         this.workRequests = workRequests;
         this.customerSecretKeys = customerSecretKeys;
         this.apiKeys = apiKeys;
+        this.authTokens = authTokens;
     }
 
     // ── Compartments ───────────────────────────────────────────────────────────
@@ -164,6 +167,7 @@ public class IdentityController {
         service.deleteUser(userId, ifMatch);
         customerSecretKeys.deleteAllOf(userId);
         apiKeys.deleteAllOf(userId);
+        authTokens.deleteAllOf(userId);
         return Response.noContent().build();
     }
 

@@ -188,7 +188,7 @@ flowchart LR
 
 | Category | Services |
 |---|---|
-| Identity | Compartments, users, groups, user-group memberships, policies, availability domains, regions, region subscriptions, tenancies |
+| Identity | Compartments, users, groups, user-group memberships, policies, auth tokens, availability domains, regions, region subscriptions, tenancies |
 | Storage | Object Storage: namespaces, buckets, objects, versioning, listing, rename, copy, batch delete, multipart uploads, pre-authenticated requests |
 | Messaging | Queue (visibility timeouts, dead-letter queues, channels), Streaming (stream pools, partitioned log, cursors, consumer groups), Notifications (topics, subscriptions, HTTPS and Functions delivery) |
 | Security | Vault + KMS (vaults, keys, key versions, **real** AES-GCM / RSA / ECDSA crypto), Secrets and secret bundles |
@@ -234,7 +234,7 @@ For operation-level compatibility, see the [Services Overview](https://floci.io/
 | Governance Rules | In-process | Governance rules (`/20220504`) of type `QUOTA`, `TAG` and `ALLOWED_REGIONS`, inclusion criteria, tenancy attachments for children opted in to governance, enforced rules as the child sees them; `ALLOWED_REGIONS` refuses a governed child's region subscription outside the list |
 | Work Requests | In-process | `202` + `opc-work-request-id` responses, pollable per service (`/20160918`, `/20210201`, `/20180418`, `/20180222` and unversioned `/workRequests`) with errors/logs endpoints |
 
-Not implemented yet: identity domains, API keys/auth tokens, dynamic groups, tag namespaces, retention rules (stubbed empty for Terraform compatibility), lifecycle policies, queue consumer groups, Streaming connect harnesses and Kafka SASL authentication, KMS key backup and replication, secret rotation, and pre-built functions (PBF).
+Not implemented yet: identity domains, dynamic groups, tag namespaces, retention rules (stubbed empty for Terraform compatibility), lifecycle policies, queue consumer groups, Streaming connect harnesses and Kafka SASL authentication, KMS key backup and replication, secret rotation, and pre-built functions (PBF).
 
 </details>
 

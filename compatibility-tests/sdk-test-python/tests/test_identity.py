@@ -170,3 +170,43 @@ def test_api_key_upload_list_and_delete(identity):
     identity.delete_api_key(user.id, fingerprint)
     assert identity.list_api_keys(user.id).data == []
     identity.delete_user(user.id)
+
+
+def test_auth_token_create_list_update_and_delete(identity):
+    user = identity.create_user(
+        oci.identity.models.CreateUserDetails(
+            compartment_id=TENANCY, name=f"py-authtoken-{time.time_ns()}", description="auth tokens"
+        )
+    ).data
+
+    created = identity.create_auth_token(
+        oci.identity.models.CreateAuthTokenDetails(description="docker login"), user.id
+    )
+    assert created.headers["etag"]
+    token = created.data
+    assert token.token
+    assert token.id.startswith("ocid1.credential.")
+    assert token.user_id == user.id
+    assert token.description == "docker login"
+    assert token.lifecycle_state == "ACTIVE"
+    assert token.time_expires is None
+
+    listed = identity.list_auth_tokens(user.id).data
+    assert [t.id for t in listed] == [token.id]
+    assert listed[0].token is None
+
+    updated = identity.update_auth_token(
+        user.id, token.id, oci.identity.models.UpdateAuthTokenDetails(description="renamed")
+    ).data
+    assert updated.description == "renamed"
+    assert updated.token is None
+
+    identity.create_auth_token(oci.identity.models.CreateAuthTokenDetails(description="second"), user.id)
+    with pytest.raises(oci.exceptions.ServiceError) as excinfo:
+        identity.create_auth_token(oci.identity.models.CreateAuthTokenDetails(description="third"), user.id)
+    assert excinfo.value.status == 400
+    assert excinfo.value.code == "LimitExceeded"
+
+    identity.delete_auth_token(user.id, token.id)
+    assert [t.description for t in identity.list_auth_tokens(user.id).data] == ["second"]
+    identity.delete_user(user.id)

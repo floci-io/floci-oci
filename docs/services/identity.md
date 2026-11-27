@@ -11,6 +11,7 @@ OCI Identity and Access Management — API version `20160918`.
 | Groups | Create, Get, List, Update, Delete |
 | User group memberships | AddUserToGroup, Get, List (by user/group), RemoveUserFromGroup |
 | Policies | Create, Get, List, Update, Delete |
+| Auth tokens | Create, List, Update, Delete |
 | Availability domains | List (3 ADs) |
 | Fault domains | List (3 per AD) |
 | Regions | List (every region in the realm of the request's region) |
@@ -89,7 +90,13 @@ oci iam compartment list --endpoint http://localhost:4599 --compartment-id "$TEN
   three keys (`400 LimitExceeded`), list returns a bare array, and delete takes the fingerprint.
   Deleting a user deletes its keys. An uploaded key verifies requests only when signature
   verification is on: see [Request signing](#request-signing).
-- Identity domains, auth tokens, dynamic groups and tag namespaces are not implemented yet.
+- Auth tokens (`/20160918/users/{userId}/authTokens`): create returns the token ACTIVE with its
+  `token`, the only response that carries it. List (a bare array) and update return it without.
+  Tokens never expire (`timeExpires` is null). A user holds at most two tokens (`400 LimitExceeded`),
+  the limit `oci-go-sdk/identity/auth_token.go` documents. Only the token's SHA-256 is stored.
+  Deleting a user deletes its tokens. In `strict` mode an auth token is the password of
+  [OCIR `docker login`](artifacts.md#docker-login-in-strict-mode).
+- Identity domains, dynamic groups and tag namespaces are not implemented yet.
 
 ## Request signing
 
@@ -144,8 +151,9 @@ requests, the OCIR registry protocol and the Notifications subscription links) a
   tokens, which carry `res_tenant` instead of `tenant`, name no caller and are not verified.
 
 **Not covered:** SigV4 on the Amazon S3 Compatibility API is never verified, because a Customer
-Secret Key's secret is returned once and not stored. OCIR `docker login` takes any password, since
-Identity has no auth tokens.
+Secret Key's secret is returned once and not stored. OCIR `docker login` checks the password against
+the user's auth tokens in `strict` mode only, and takes any password otherwise. The Streaming Kafka
+endpoint has no SASL yet, so it takes no password in any mode.
 
 OKE's `generate-token` bearer tokens are verified the same way when the mode is not `off`: the
 signature over `date (request-target) host`, with the URL's `date`, `get /cluster_request/<cluster-ocid>`
@@ -164,6 +172,10 @@ and the Container Engine host.
 
 Behaviour that OCI's SDKs and documentation do not settle, and what floci-oci does:
 
+- **Auth token values are 20 characters** from letters, digits and `-_.:()+`. OCI documents no
+  format or length; this set needs no quoting in a shell, a Docker config or a Kafka JAAS line.
+- **Auth token OCIDs are `ocid1.credential.<realm>..<unique>`.** No source in `local/oracle` shows
+  an auth token OCID.
 - **Uploading a key the user already has is `409 Conflict`.** No Oracle source names the error,
   so floci-oci uses the catalog's code for a request that conflicts with existing state.
 - **Compartment names are unique per parent.** The SDK's `CreateCompartment` comment says a
