@@ -322,8 +322,8 @@ public class ContainerInstancesService implements Resettable, CompartmentUsage {
         instance.setVnicAddressFromWorkload(realMode() && requestedIp == null);
         Object publicIp = vnic.get("isPublicIpAssigned");
         Object skipCheck = vnic.get("skipSourceDestCheck");
-        String vnicId = networkReferences.attachVnic(new NetworkReferences.VnicRequest(compartmentId,
-                availabilityDomain, subnetId, ContainerInstancesRequests.string(vnic, "displayName"),
+        String vnicId = networkReferences.attachVnic(new NetworkReferences.VnicRequest(instance.getId(),
+                compartmentId, availabilityDomain, subnetId, ContainerInstancesRequests.string(vnic, "displayName"),
                 ContainerInstancesRequests.string(vnic, "hostnameLabel"), nsgIds,
                 skipCheck instanceof Boolean skip ? skip : null, requestedIp, !instance.isVnicAddressFromWorkload(),
                 Boolean.TRUE.equals(publicIp), ContainerInstancesRequests.stringMap(vnic, "freeformTags"),

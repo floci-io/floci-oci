@@ -33,9 +33,15 @@ public interface NetworkReferences {
         public void requireNsgs(Collection<String> nsgIds) {
         }
 
+        /** A VNIC is regional: it takes the realm and region of the resource it is attached to. */
         @Override
         public String attachVnic(VnicRequest request) {
-            return Ocids.generateGlobal("vnic", "oc1");
+            Ocids.Ocid owner = Ocids.parse(request.resourceId())
+                    .filter(ocid -> ocid.region() != null)
+                    .or(() -> Ocids.parse(request.subnetId()).filter(ocid -> ocid.region() != null))
+                    .orElseThrow(() -> new IllegalArgumentException(
+                            "A VNIC needs a regional resourceId or subnetId to take its region from"));
+            return Ocids.generate("vnic", owner.realm(), owner.region());
         }
 
         @Override
@@ -50,12 +56,13 @@ public interface NetworkReferences {
     /**
      * A VNIC to create on a subnet (CreateContainerVnicDetails in oci-go-sdk/containerinstances).
      *
+     * @param resourceId the OCID of the resource the VNIC is attached to (the container instance)
      * @param privateIp the requested address, or null for the next free one in the subnet
      * @param allocatePrivateIp false to leave the address unset until {@link #setVnicPrivateIp}
      *                          records the one the workload really got
      */
-    record VnicRequest(String compartmentId, String availabilityDomain, String subnetId, String displayName,
-                       String hostnameLabel, List<String> nsgIds, Boolean skipSourceDestCheck, String privateIp,
+    record VnicRequest(String resourceId, String compartmentId, String availabilityDomain, String subnetId,
+                       String displayName, String hostnameLabel, List<String> nsgIds, Boolean skipSourceDestCheck, String privateIp,
                        boolean allocatePrivateIp, boolean publicIpAssigned, Map<String, String> freeformTags,
                        Map<String, Map<String, Object>> definedTags) {
     }

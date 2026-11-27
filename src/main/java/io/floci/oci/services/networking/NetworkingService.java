@@ -1024,6 +1024,7 @@ public class NetworkingService implements CompartmentUsage, NetworkReferences {
         StoredNetworkResource subnet = get(NetworkKind.SUBNET, request.subnetId());
         requireNsgsInVcn(request.nsgIds(), subnet.getVcnId());
         StoredNetworkResource vnic = newResource(NetworkKind.VNIC, request.compartmentId(), request.displayName());
+        vnic.setResourceId(request.resourceId());
         vnic.setFreeformTags(request.freeformTags() != null ? request.freeformTags() : Map.of());
         vnic.setDefinedTags(request.definedTags() != null ? request.definedTags() : Map.of());
         Map<String, Object> a = vnic.getAttributes();
