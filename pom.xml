@@ -191,6 +191,20 @@
             <artifactId>mysql-connector-j</artifactId>
             <scope>test</scope>
         </dependency>
+        <!-- Test only: AutonomousDatabaseDockerTest connects through the generated wallet the way an
+             application would; oraclepki reads the wallet's keystores. -->
+        <dependency>
+            <groupId>com.oracle.database.jdbc</groupId>
+            <artifactId>ojdbc11</artifactId>
+            <version>23.26.4.0.0</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.oracle.database.security</groupId>
+            <artifactId>oraclepki</artifactId>
+            <version>23.26.4.0.0</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>

@@ -86,14 +86,10 @@ class AutonomousDatabaseServiceTest {
     }
 
     @Test
-    void withoutMockModeCreateIsNotImplementedRatherThanFaked() {
+    void aServiceWithoutContainersStaysInMockModeWhateverTheFlag() {
         when(config.services().database().mock()).thenReturn(false);
 
-        OciException e = assertThrows(OciException.class, () -> service.create(details("orders")));
-
-        assertEquals(501, e.getHttpStatus());
-        assertEquals("MethodNotImplemented", e.getCode());
-        assertTrue(databases.scan(k -> true).isEmpty());
+        assertEquals("AVAILABLE", service.create(details("orders")).database().getLifecycleState());
     }
 
     @Test

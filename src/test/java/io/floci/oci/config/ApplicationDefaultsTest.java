@@ -57,6 +57,8 @@ class ApplicationDefaultsTest {
                 config.services().database().image());
         assertEquals(annotationDefault(EmulatorConfig.ServicesConfig.DatabaseServiceConfig.class, "basePort"),
                 String.valueOf(config.services().database().basePort()));
+        assertEquals(annotationDefault(EmulatorConfig.ServicesConfig.DatabaseServiceConfig.class, "maxPort"),
+                String.valueOf(config.services().database().maxPort()));
         assertEquals(annotationDefault(EmulatorConfig.ServicesConfig.DatabaseServiceConfig.class,
                 "readyTimeoutSeconds"), String.valueOf(config.services().database().readyTimeoutSeconds()));
         assertEquals(annotationDefault(EmulatorConfig.DockerConfig.class, "endpointMode"),

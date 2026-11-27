@@ -179,7 +179,7 @@ floci-oci:
       ready-timeout-seconds: 180
     database:
       enabled: true
-      mock: false            # true = no Docker; Autonomous Databases are management-plane only
+      mock: false            # true = no Docker; false = one Autonomous Database Free container (~4 GB RAM) per database
       image: "container-registry.oracle.com/database/adb-free:latest-26ai"
       base-port: 11522       # host ports for each database's mTLS listener (container 1522)
       max-port: 11621

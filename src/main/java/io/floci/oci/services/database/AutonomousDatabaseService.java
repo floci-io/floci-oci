@@ -12,7 +12,9 @@ import io.floci.oci.core.common.OciException;
 import io.floci.oci.core.common.Ocids;
 import io.floci.oci.core.common.Resettable;
 import io.floci.oci.core.common.ServiceDescriptor;
+import io.floci.oci.core.common.ServiceConfigAccess;
 import io.floci.oci.core.common.ServiceRegistry;
+import io.floci.oci.core.common.docker.ContainerLifecycleManager.EndpointInfo;
 import io.floci.oci.core.storage.StorageBackend;
 import io.floci.oci.core.storage.StorageFactory;
 import io.floci.oci.core.storage.TenancyAwareStorageBackend;
@@ -20,6 +22,7 @@ import io.floci.oci.core.workrequest.StoredWorkRequest;
 import io.floci.oci.core.workrequest.WorkRequestService;
 import io.floci.oci.services.database.model.StoredAutonomousDatabase;
 import io.quarkus.runtime.StartupEvent;
+import jakarta.annotation.PreDestroy;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.Observes;
 import jakarta.enterprise.inject.Instance;
@@ -35,16 +38,32 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Pattern;
 
 /**
  * Autonomous Databases (Serverless) on the Database service, API version {@code 20160918}
- * (oci-go-sdk/database DatabaseClient). Every operation is synchronous here: in mock mode a
- * database is AVAILABLE as soon as it is created, and each mutation records a SUCCEEDED work
- * request with an {@code autonomousDatabase} resource, which Terraform reads to confirm the
- * create. Without mock mode CreateAutonomousDatabase answers 501, since the Autonomous Database
- * Free sidecar is not part of floci-oci yet.
+ * (oci-go-sdk/database DatabaseClient). Each mutation records a work request with an
+ * {@code autonomousDatabase} resource, which Terraform reads to confirm the create.
+ *
+ * <p>In mock mode every operation is synchronous: a database is AVAILABLE as soon as it is
+ * created and its work request SUCCEEDED. Otherwise each database runs in its own Autonomous
+ * Database Free container (local/oracle/oci-docs/adb-free-spike.md). Create, Start, Stop,
+ * Restart and Delete answer at once with PROVISIONING, STARTING, STOPPING, RESTARTING or
+ * TERMINATING and an IN_PROGRESS work request; the Docker work runs on one worker thread, and a
+ * poller moves a database to AVAILABLE once Docker reports the container healthy, or to
+ * UNAVAILABLE when it exits or the ready timeout passes. A container is never recreated: after a
+ * restart of floci-oci it is adopted, and a database whose container is gone is UNAVAILABLE.
  */
 @ApplicationScoped
 public class AutonomousDatabaseService implements Resettable, CompartmentUsage, NetworkUsage {
@@ -106,6 +125,21 @@ public class AutonomousDatabaseService implements Resettable, CompartmentUsage, 
             DateTimeFormatter.ofPattern("yyyyMMddHHmmss").withZone(ZoneOffset.UTC);
     static final int MTLS_PORT = 1522;
     static final String MOCK_HOST = "localhost";
+    private static final long READINESS_POLL_SECONDS = 5;
+    private static final int SHUTDOWN_STOP_SECONDS = 30;
+    private static final int LOG_TAIL_CHARS = 400;
+    static final String INTERRUPTED = "The operation was interrupted by a restart of floci-oci";
+    static final String SUPERSEDED = "The operation was superseded by another operation on the Autonomous Database";
+    static final String CONTAINER_GONE = "The Autonomous Database Free container of this database is gone, and"
+            + " the database with it: floci-oci never recreates a container, since a new one starts an empty"
+            + " database. Delete this Autonomous Database and create a new one";
+    /** The states an operation passes through; a request they refuse may succeed when retried. */
+    private static final Set<String> TRANSIENT_STATES = Set.of("PROVISIONING", "STARTING", "STOPPING",
+            "RESTARTING", "TERMINATING", "UPDATING");
+
+    /** A database whose container is coming up: who owns it, since when, and whether it is its first boot. */
+    record Pending(String tenancyId, String region, Instant since, boolean firstBoot) {
+    }
 
     /** What a mutation returns: the database and the work request recorded for it. */
     public record Result(StoredAutonomousDatabase database, String workRequestId) {
@@ -118,21 +152,40 @@ public class AutonomousDatabaseService implements Resettable, CompartmentUsage, 
     private final OciContext ociContext;
     private final NetworkReferences networkReferences;
     private final Clock clock;
+    private final AutonomousDatabaseContainerManager containers;
+    private final Executor lifecycle;
+    private final ExecutorService ownedLifecycle;
+    private final ScheduledExecutorService readinessPoller;
+    private final Map<String, Pending> pending = new ConcurrentHashMap<>();
 
     @Inject
     public AutonomousDatabaseService(StorageFactory storageFactory, EmulatorConfig config,
                                      ServiceRegistry serviceRegistry, WorkRequestService workRequests,
-                                     OciContext ociContext, Instance<NetworkReferences> networkReferences) {
+                                     OciContext ociContext, Instance<NetworkReferences> networkReferences,
+                                     AutonomousDatabaseContainerManager containers) {
         this(storageFactory.create(SERVICE, "database-autonomous-databases.json",
                         new TypeReference<Map<String, StoredAutonomousDatabase>>() {}),
                 config, serviceRegistry, workRequests, ociContext, NetworkReferences.of(networkReferences),
-                Clock.systemUTC());
+                Clock.systemUTC(), containers, null);
     }
 
-    /** Storage-injecting constructor for tests. */
+    /** Storage-injecting constructor for tests of the management plane: it never touches Docker. */
     AutonomousDatabaseService(StorageBackend<String, StoredAutonomousDatabase> databases, EmulatorConfig config,
                               ServiceRegistry serviceRegistry, WorkRequestService workRequests,
                               OciContext ociContext, NetworkReferences networkReferences, Clock clock) {
+        this(databases, config, serviceRegistry, workRequests, ociContext, networkReferences, clock, null, null);
+    }
+
+    /**
+     * Storage-injecting constructor for tests.
+     *
+     * @param containers null for a service that never touches Docker, whatever the mock flag says
+     * @param lifecycle  runs the Docker work; null for the service's own single worker thread
+     */
+    AutonomousDatabaseService(StorageBackend<String, StoredAutonomousDatabase> databases, EmulatorConfig config,
+                              ServiceRegistry serviceRegistry, WorkRequestService workRequests,
+                              OciContext ociContext, NetworkReferences networkReferences, Clock clock,
+                              AutonomousDatabaseContainerManager containers, Executor lifecycle) {
         this.databases = databases;
         this.config = config;
         this.serviceRegistry = serviceRegistry;
@@ -140,6 +193,11 @@ public class AutonomousDatabaseService implements Resettable, CompartmentUsage, 
         this.ociContext = ociContext;
         this.networkReferences = networkReferences;
         this.clock = clock;
+        this.containers = containers;
+        // No thread starts until the first task is submitted, which only real mode does.
+        this.ownedLifecycle = lifecycle != null ? null : Executors.newSingleThreadExecutor(daemon("adb-lifecycle"));
+        this.lifecycle = lifecycle != null ? lifecycle : ownedLifecycle;
+        this.readinessPoller = Executors.newSingleThreadScheduledExecutor(daemon("adb-readiness"));
     }
 
     void onStart(@Observes StartupEvent ev) {
@@ -148,10 +206,59 @@ public class AutonomousDatabaseService implements Resettable, CompartmentUsage, 
                 .storageKey("database")
                 .resourceClasses(AutonomousDatabaseController.class)
                 .build());
+        if (realMode() && config.services().database().enabled()) {
+            readinessPoller.scheduleWithFixedDelay(this::pollReadinessSafely,
+                    READINESS_POLL_SECONDS, READINESS_POLL_SECONDS, TimeUnit.SECONDS);
+            adoptPersistedDatabases();
+        }
     }
 
+    /**
+     * Stops every container, which keeps it and its data for the next run to adopt. With
+     * in-memory storage the databases die with the emulator, so their containers are removed.
+     */
+    @PreDestroy
+    void shutdown() {
+        readinessPoller.shutdownNow();
+        if (ownedLifecycle != null) {
+            ownedLifecycle.shutdownNow();
+        }
+        if (!realMode()) {
+            return;
+        }
+        boolean ephemeral = "memory".equalsIgnoreCase(new ServiceConfigAccess(config).storageMode(SERVICE));
+        for (StoredAutonomousDatabase database : allDatabases()) {
+            if (database.getContainerName() == null || "TERMINATED".equals(database.getLifecycleState())) {
+                continue;
+            }
+            try {
+                if (ephemeral) {
+                    containers.remove(database);
+                } else {
+                    containers.stopForShutdown(database, SHUTDOWN_STOP_SECONDS);
+                }
+            } catch (RuntimeException e) {
+                LOG.warnv("Could not stop the container of Autonomous Database {0}: {1}", database.getId(),
+                        e.getMessage());
+            }
+        }
+    }
+
+    /**
+     * Removes every container, then forgets every database. Holds the lock lifecycle steps
+     * record their outcome under, so a step still running finds its database gone and removes
+     * what it started.
+     */
     @Override
     public synchronized void clear() {
+        pending.clear();
+        if (realMode()) {
+            for (StoredAutonomousDatabase database : allDatabases()) {
+                if (database.getContainerName() != null) {
+                    removeQuietly(database);
+                }
+            }
+        }
         databases.clear();
     }
 
@@ -194,12 +301,12 @@ public class AutonomousDatabaseService implements Resettable, CompartmentUsage, 
             throw OciException.invalidParameter("source " + source
                     + " is not supported: floci-oci creates Autonomous Databases from scratch only (source NONE)");
         }
-        if (!config.services().database().mock()) {
-            throw OciException.notImplemented("Autonomous Databases need the Autonomous Database Free sidecar,"
-                    + " which floci-oci does not run yet. Set FLOCI_OCI_SERVICES_DATABASE_MOCK=true to emulate"
-                    + " the management plane only");
+        String adminPassword = DatabaseRequests.string(details, "adminPassword");
+        if (realMode() && adminPassword == null && DatabaseRequests.string(details, "secretId") != null) {
+            throw OciException.notImplemented("floci-oci cannot read the admin password of a real Autonomous"
+                    + " Database from a Vault secret yet: send adminPassword instead of secretId");
         }
-        if (DatabaseRequests.string(details, "secretId") == null) {
+        if (realMode() || DatabaseRequests.string(details, "secretId") == null) {
             requireAdminPassword(DatabaseRequests.requireString(details, "adminPassword"));
         }
         networkReferences.requireSubnet(DatabaseRequests.string(details, "subnetId"));
@@ -233,12 +340,25 @@ public class AutonomousDatabaseService implements Resettable, CompartmentUsage, 
         reconcileStorage(attributes, details);
         reconcileCompute(attributes, details, 1);
         database.setAttributes(attributes);
-        refreshEndpoints(database);
-        database.setLifecycleState("AVAILABLE");
+        database.setContainerName(containers != null ? containers.containerName(database.getId()) : null);
+        refreshUrls(database);
         database.setEtag(Etags.newEtag());
+        if (!realMode()) {
+            refreshConnectionStrings(database);
+            database.setLifecycleState("AVAILABLE");
+            databases.put(database.getId(), database);
+            LOG.infov("createAutonomousDatabase {0} ({1})", database.getId(), dbName);
+            return new Result(database, record("CREATE_AUTONOMOUS_DATABASE", database, "CREATED"));
+        }
+        database.setLifecycleState("PROVISIONING");
+        String workRequestId = workRequests.inProgress(SERVICE, "CREATE_AUTONOMOUS_DATABASE", compartmentId,
+                resources(database, "CREATED"));
+        database.setWorkRequestId(workRequestId);
+        // Stored before the create is queued: the worker looks the database up by its partition.
         databases.put(database.getId(), database);
-        LOG.infov("createAutonomousDatabase {0} ({1})", database.getId(), dbName);
-        return new Result(database, record("CREATE_AUTONOMOUS_DATABASE", database, "CREATED"));
+        launchCreate(database, adminPassword);
+        LOG.infov("createAutonomousDatabase {0} ({1}), provisioning its container", database.getId(), dbName);
+        return new Result(database, workRequestId);
     }
 
     /** A terminated database is still returned, as TERMINATED: Terraform polls it to see the delete finish. */
@@ -322,6 +442,11 @@ public class AutonomousDatabaseService implements Resettable, CompartmentUsage, 
             requireDbName(dbName);
             requireUniqueDbName(dbName, autonomousDatabaseId);
         }
+        if (realMode() && (adminPassword != null || (dbName != null && !dbName.equals(database.getDbName())))) {
+            throw OciException.notImplemented("floci-oci cannot change the "
+                    + (adminPassword != null ? "admin password" : "dbName")
+                    + " of a real Autonomous Database: its container was created with them");
+        }
         networkReferences.requireSubnet(DatabaseRequests.string(details, "subnetId"));
         networkReferences.requireNsgs(DatabaseRequests.stringList(details, "nsgIds"));
         Map<String, Object> attributes = new LinkedHashMap<>(database.getAttributes());
@@ -342,38 +467,109 @@ public class AutonomousDatabaseService implements Resettable, CompartmentUsage, 
             database.setDisplayName(displayName);
         }
         database.setAttributes(attributes);
-        refreshEndpoints(database);
+        refreshUrls(database);
+        if (!realMode()) {
+            refreshConnectionStrings(database);
+        }
         touch(database);
         return new Result(database, record("UPDATE_AUTONOMOUS_DATABASE", database, "UPDATED"));
     }
 
     public synchronized String delete(String autonomousDatabaseId, String ifMatch) {
-        StoredAutonomousDatabase database = mutable(autonomousDatabaseId, ifMatch, LIFECYCLE_STATES.toArray(String[]::new));
-        database.setLifecycleState("TERMINATED");
-        database.setLifecycleDetails(null);
-        touch(database);
-        LOG.infov("deleteAutonomousDatabase {0}", autonomousDatabaseId);
-        return record("DELETE_AUTONOMOUS_DATABASE", database, "DELETED");
+        StoredAutonomousDatabase database = mutable(autonomousDatabaseId, ifMatch, LIFECYCLE_STATES.stream()
+                .filter(state -> !"TERMINATING".equals(state)).toArray(String[]::new));
+        if (!realMode()) {
+            database.setLifecycleState("TERMINATED");
+            database.setLifecycleDetails(null);
+            touch(database);
+            LOG.infov("deleteAutonomousDatabase {0}", autonomousDatabaseId);
+            return record("DELETE_AUTONOMOUS_DATABASE", database, "DELETED");
+        }
+        // An operation under way is abandoned: its work request ends CANCELED, and its step is
+        // skipped, or its outcome dropped, since the database has moved on to another work request.
+        pending.remove(autonomousDatabaseId);
+        finishWorkRequest(database, "CANCELED", null);
+        String workRequestId = begin(database, "TERMINATING", "DELETE_AUTONOMOUS_DATABASE", "DELETED");
+        runDelete(database);
+        return workRequestId;
     }
 
+    /** Queues the removal of the container; the database then stays readable as TERMINATED. */
+    private void runDelete(StoredAutonomousDatabase database) {
+        runAsync(database, current -> {
+            containers.remove(current);
+            return () -> {
+                current.setLifecycleState("TERMINATED");
+                current.setLifecycleDetails(null);
+                touch(current);
+                finishWorkRequest(current, "SUCCEEDED", null);
+                LOG.infov("deleteAutonomousDatabase {0}", current.getId());
+            };
+        });
+    }
+
+    // Every mutation holds the service lock from its state check until its step is queued, so a
+    // second one sees the transient state and is refused with IncorrectState.
+
+    /** A start retried after a failed one finds the database UNAVAILABLE, which it may also start. */
     public synchronized Result start(String autonomousDatabaseId, String ifMatch) {
-        StoredAutonomousDatabase database = mutable(autonomousDatabaseId, ifMatch, "STOPPED");
-        database.setLifecycleState("AVAILABLE");
-        touch(database);
-        return new Result(database, record("START_AUTONOMOUS_DATABASE", database, "UPDATED"));
+        if (!realMode()) {
+            StoredAutonomousDatabase database = mutable(autonomousDatabaseId, ifMatch, "STOPPED");
+            database.setLifecycleState("AVAILABLE");
+            touch(database);
+            return new Result(database, record("START_AUTONOMOUS_DATABASE", database, "UPDATED"));
+        }
+        StoredAutonomousDatabase database = mutable(autonomousDatabaseId, ifMatch, "STOPPED", "UNAVAILABLE");
+        String workRequestId = begin(database, "STARTING", "START_AUTONOMOUS_DATABASE", "UPDATED");
+        launchStart(database, false);
+        return new Result(database, workRequestId);
     }
 
     public synchronized Result stop(String autonomousDatabaseId, String ifMatch) {
         StoredAutonomousDatabase database = mutable(autonomousDatabaseId, ifMatch, "AVAILABLE");
-        database.setLifecycleState("STOPPED");
-        touch(database);
-        return new Result(database, record("STOP_AUTONOMOUS_DATABASE", database, "UPDATED"));
+        if (!realMode()) {
+            database.setLifecycleState("STOPPED");
+            touch(database);
+            return new Result(database, record("STOP_AUTONOMOUS_DATABASE", database, "UPDATED"));
+        }
+        String workRequestId = begin(database, "STOPPING", "STOP_AUTONOMOUS_DATABASE", "UPDATED");
+        runStop(database);
+        return new Result(database, workRequestId);
+    }
+
+    private void runStop(StoredAutonomousDatabase database) {
+        runAsync(database, current -> {
+            try {
+                containers.stop(current);
+            } catch (RuntimeException e) {
+                return () -> fail(current, "The container could not be stopped: " + e.getMessage(), false);
+            }
+            return () -> {
+                current.setLifecycleState("STOPPED");
+                current.setLifecycleDetails(null);
+                touch(current);
+                finishWorkRequest(current, "SUCCEEDED", null);
+            };
+        });
     }
 
     public synchronized Result restart(String autonomousDatabaseId, String ifMatch) {
         StoredAutonomousDatabase database = mutable(autonomousDatabaseId, ifMatch, "AVAILABLE");
-        touch(database);
-        return new Result(database, record("RESTART_AUTONOMOUS_DATABASE", database, "UPDATED"));
+        if (!realMode()) {
+            touch(database);
+            return new Result(database, record("RESTART_AUTONOMOUS_DATABASE", database, "UPDATED"));
+        }
+        String workRequestId = begin(database, "RESTARTING", "RESTART_AUTONOMOUS_DATABASE", "UPDATED");
+        runAsync(database, current -> {
+            try {
+                containers.restart(current);
+            } catch (RuntimeException e) {
+                return () -> fail(current, "The container could not be restarted: " + e.getMessage(), false);
+            }
+            return () -> pending.put(current.getId(), new Pending(current.getTenancyId(), current.getRegion(),
+                    clock.instant(), false));
+        });
+        return new Result(database, workRequestId);
     }
 
     /**
@@ -386,10 +582,383 @@ public class AutonomousDatabaseService implements Resettable, CompartmentUsage, 
         if ("TERMINATED".equals(database.getLifecycleState())) {
             throw notFound(autonomousDatabaseId);
         }
-        requireWalletPassword(DatabaseRequests.requireString(details, "password"));
+        String password = DatabaseRequests.requireString(details, "password");
+        requireWalletPassword(password);
         DatabaseRequests.requireEnum(DatabaseRequests.string(details, "generateType"), Set.of("ALL", "SINGLE"),
                 "generateType");
-        return AutonomousDatabaseWallet.zip(database.getDbName(), MOCK_HOST, MTLS_PORT);
+        if (!realMode()) {
+            return AutonomousDatabaseWallet.zip(database.getDbName(), MOCK_HOST, MTLS_PORT);
+        }
+        // The container writes its wallet on its first start, which ends when it is first AVAILABLE.
+        if (database.getAttributes().get("connectionStrings") == null
+                || "TERMINATING".equals(database.getLifecycleState())) {
+            throw new OciException("IncorrectState", "Autonomous Database " + autonomousDatabaseId + " is "
+                    + database.getLifecycleState() + "; its wallet exists once it has been AVAILABLE", 409);
+        }
+        try {
+            return containers.wallet(database, password);
+        } catch (RuntimeException e) {
+            if (CONTAINER_GONE.equals(e.getMessage())) {
+                throw OciException.conflict(CONTAINER_GONE);
+            }
+            throw OciException.internalServerError("Could not generate the wallet of Autonomous Database "
+                    + autonomousDatabaseId + ": " + e.getMessage());
+        }
+    }
+
+    // ── Lifecycle engine ───────────────────────────────────────────────────────
+
+    boolean realMode() {
+        return containers != null && !config.services().database().mock();
+    }
+
+    /**
+     * Moves the database to {@code state} and opens the work request the operation is tracked
+     * by. Called under the service lock. A work request the database still carries is failed
+     * first, so replacing it never leaves it IN_PROGRESS.
+     */
+    private String begin(StoredAutonomousDatabase database, String state, String operationType, String actionType) {
+        finishWorkRequest(database, "FAILED", SUPERSEDED);
+        database.setLifecycleState(state);
+        database.setLifecycleDetails(null);
+        String workRequestId = workRequests.inProgress(SERVICE, operationType, database.getCompartmentId(),
+                resources(database, actionType));
+        database.setWorkRequestId(workRequestId);
+        touch(database);
+        return workRequestId;
+    }
+
+    /** The Docker work of an operation, returning what to record once it is done. */
+    private interface LifecycleStep {
+        Runnable run(StoredAutonomousDatabase current);
+    }
+
+    /**
+     * Runs {@code step} on the lifecycle worker against the database as stored at that moment,
+     * found in its own partition since the worker has no request scope. The step is skipped when
+     * the database has gone, or has moved on to another operation, which shows as a different
+     * work request. Ownership is checked again before the outcome is recorded, under the lock
+     * every mutation and reset take: an outcome that arrives too late is dropped. A skipped or
+     * dropped step still finishes its own work request, so no caller is left polling IN_PROGRESS.
+     */
+    private void runAsync(StoredAutonomousDatabase database, LifecycleStep step) {
+        String tenancyId = database.getTenancyId();
+        String region = database.getRegion();
+        String id = database.getId();
+        String workRequestId = database.getWorkRequestId();
+        lifecycle.execute(() -> {
+            Optional<StoredAutonomousDatabase> current;
+            synchronized (this) {
+                current = owned(tenancyId, region, id, workRequestId);
+                if (current.isEmpty()) {
+                    LOG.debugv("Autonomous Database {0} has moved on; skipping its queued lifecycle step", id);
+                    finishAbandoned(tenancyId, region, id, workRequestId);
+                    return;
+                }
+            }
+            Runnable outcome;
+            try {
+                outcome = step.run(current.get());
+            } catch (RuntimeException e) {
+                LOG.warnv(e, "Lifecycle step failed for Autonomous Database {0}", id);
+                outcome = () -> fail(current.get(), e.getMessage(), false);
+            }
+            synchronized (this) {
+                if (owned(tenancyId, region, id, workRequestId).isPresent()) {
+                    outcome.run();
+                } else if (findIn(tenancyId, region, id).isEmpty()) {
+                    // A reset forgot the database while its step ran: remove what the step started.
+                    LOG.debugv("Autonomous Database {0} was reset during its lifecycle step", id);
+                    removeQuietly(current.get());
+                } else {
+                    LOG.debugv("Autonomous Database {0} moved on during its lifecycle step", id);
+                    finishAbandoned(tenancyId, region, id, workRequestId);
+                }
+            }
+        });
+    }
+
+    /**
+     * Fails the work request of a step whose database moved on without finishing it. Whoever
+     * moved it on normally finished it already (a delete cancels it), and finishing a finished
+     * work request changes nothing. A database that is gone was reset, with its work requests.
+     */
+    private void finishAbandoned(String tenancyId, String region, String id, String workRequestId) {
+        if (workRequestId == null || findIn(tenancyId, region, id).isEmpty()) {
+            return;
+        }
+        workRequests.finish(tenancyId, region, workRequestId, "FAILED",
+                List.of(new StoredWorkRequest.ErrorEntry("InternalServerError", SUPERSEDED)));
+    }
+
+    /** The database, while {@code workRequestId} is still the operation it is running. */
+    private Optional<StoredAutonomousDatabase> owned(String tenancyId, String region, String id,
+                                                     String workRequestId) {
+        return findIn(tenancyId, region, id)
+                .filter(database -> Objects.equals(workRequestId, database.getWorkRequestId()));
+    }
+
+    /**
+     * Queues the first start: the image pull (about 12 GB the first time), then the container,
+     * which receives the admin password in its environment. The password is not kept anywhere
+     * else. The poller takes over once the container runs.
+     */
+    private void launchCreate(StoredAutonomousDatabase database, String adminPassword) {
+        runAsync(database, current -> {
+            try {
+                containers.create(current, adminPassword);
+            } catch (RuntimeException e) {
+                return () -> fail(current, "The Autonomous Database Free container could not be started: "
+                        + e.getMessage(), false);
+            }
+            return () -> {
+                saveIn(current);
+                pending.put(current.getId(), new Pending(current.getTenancyId(), current.getRegion(),
+                        clock.instant(), true));
+            };
+        });
+    }
+
+    /** Queues a start of the existing container; the poller takes over once it runs. */
+    private void launchStart(StoredAutonomousDatabase database, boolean firstBoot) {
+        runAsync(database, current -> {
+            try {
+                containers.start(current);
+            } catch (RuntimeException e) {
+                return () -> fail(current, "The container could not be started: " + e.getMessage(), false);
+            }
+            return () -> pending.put(current.getId(), new Pending(current.getTenancyId(), current.getRegion(),
+                    clock.instant(), firstBoot));
+        });
+    }
+
+    private void pollReadinessSafely() {
+        try {
+            pollReadiness();
+        } catch (RuntimeException e) {
+            LOG.warnv(e, "Autonomous Database readiness poll failed");
+        }
+    }
+
+    /**
+     * One pass over the databases whose container is coming up: AVAILABLE once Docker reports it
+     * healthy, UNAVAILABLE when it has exited or the ready timeout has passed.
+     */
+    void pollReadiness() {
+        for (Map.Entry<String, Pending> entry : pending.entrySet()) {
+            String id = entry.getKey();
+            Pending waiting = entry.getValue();
+            Optional<StoredAutonomousDatabase> found = findIn(waiting.tenancyId(), waiting.region(), id);
+            if (found.isEmpty()) {
+                pending.remove(id);
+                continue;
+            }
+            try {
+                pollOne(waiting, found.get());
+            } catch (RuntimeException e) {
+                LOG.warnv(e, "Readiness poll failed for Autonomous Database {0}", id);
+            }
+        }
+    }
+
+    private void pollOne(Pending waiting, StoredAutonomousDatabase database) {
+        int timeout = config.services().database().readyTimeoutSeconds();
+        AutonomousDatabaseContainerManager.Health health = health(database);
+        switch (health) {
+            case HEALTHY -> {
+                Map<String, Object> connectionStrings = connectionStrings(database);
+                settle(database, () -> {
+                    database.getAttributes().put("connectionStrings", connectionStrings);
+                    database.setLifecycleState("AVAILABLE");
+                    database.setLifecycleDetails(null);
+                    touch(database);
+                    finishWorkRequest(database, "SUCCEEDED", null);
+                    LOG.infov("Autonomous Database {0} is AVAILABLE", database.getId());
+                });
+            }
+            case MISSING -> settle(database, () -> fail(database, CONTAINER_GONE, false));
+            case EXITED -> {
+                String logs = waiting.firstBoot() ? logTail(database) : "";
+                settle(database, () -> fail(database, "The Autonomous Database Free container exited before it"
+                        + " was healthy" + (logs.isEmpty() ? "" : ": " + logs), waiting.firstBoot()));
+            }
+            case STARTING, UNHEALTHY -> {
+                if (clock.instant().isAfter(waiting.since().plusSeconds(timeout))) {
+                    settle(database, () -> fail(database, "The Autonomous Database Free container was not healthy"
+                            + " after " + timeout + " seconds (health: " + health.name().toLowerCase(Locale.ROOT)
+                            + "); raise floci-oci.services.database.ready-timeout-seconds on a slow host",
+                            waiting.firstBoot()));
+                }
+            }
+        }
+    }
+
+    /** A probe that throws means not ready yet; the timeout still applies. */
+    private AutonomousDatabaseContainerManager.Health health(StoredAutonomousDatabase database) {
+        try {
+            return containers.health(database);
+        } catch (RuntimeException e) {
+            LOG.debugv("Could not inspect Autonomous Database {0}: {1}", database.getId(), e.getMessage());
+            return AutonomousDatabaseContainerManager.Health.STARTING;
+        }
+    }
+
+    private String logTail(StoredAutonomousDatabase database) {
+        try {
+            return containers.logTail(database, LOG_TAIL_CHARS);
+        } catch (RuntimeException e) {
+            LOG.debugv("Could not read the log of Autonomous Database {0}: {1}", database.getId(), e.getMessage());
+            return "";
+        }
+    }
+
+    /**
+     * The connection strings the container's own tnsnames.ora names, at the address clients
+     * reach the container at. When the file cannot be read, the aliases dbName predicts.
+     */
+    private Map<String, Object> connectionStrings(StoredAutonomousDatabase database) {
+        EndpointInfo endpoint = containers.clientEndpoint(database);
+        try {
+            Map<String, String> entries = AutonomousDatabaseWallet.mtlsEntries(containers.tnsnames(database),
+                    endpoint.host(), endpoint.port());
+            if (!entries.isEmpty()) {
+                return AutonomousDatabaseWallet.connectionStrings(entries, endpoint.host(), endpoint.port());
+            }
+            LOG.warnv("The tnsnames.ora of Autonomous Database {0} names no alias", database.getId());
+        } catch (RuntimeException e) {
+            LOG.warnv("Could not read the tnsnames.ora of Autonomous Database {0}: {1}", database.getId(),
+                    e.getMessage());
+        }
+        return AutonomousDatabaseWallet.connectionStrings(database.getDbName(), endpoint.host(), endpoint.port());
+    }
+
+    /**
+     * Records an outcome only while the database is still pending, atomically with dropping it
+     * from {@link #pending}: a delete or reset that removed it during the probe wins. Holds the
+     * service lock, so no mutation sees the new state before its work request has finished.
+     */
+    private synchronized void settle(StoredAutonomousDatabase database, Runnable outcome) {
+        AtomicBoolean recorded = new AtomicBoolean();
+        pending.computeIfPresent(database.getId(), (id, waiting) -> {
+            outcome.run();
+            recorded.set(true);
+            return null;
+        });
+        if (!recorded.get()) {
+            LOG.debugv("Autonomous Database {0} left pending before its start was settled", database.getId());
+        }
+    }
+
+    /**
+     * The Autonomous Database API has no FAILED state: a failed operation leaves the database
+     * UNAVAILABLE, with the reason in lifecycleDetails, and fails its work request (inferred). The
+     * container stays, since it holds the data, unless {@code removeContainer}: a first start that
+     * failed has no data, and the admin password it would need again is gone.
+     */
+    private void fail(StoredAutonomousDatabase database, String message, boolean removeContainer) {
+        if (removeContainer) {
+            removeQuietly(database);
+        }
+        database.setLifecycleState("UNAVAILABLE");
+        database.setLifecycleDetails(message);
+        touch(database);
+        finishWorkRequest(database, "FAILED", message);
+        LOG.warnv("Autonomous Database {0} is UNAVAILABLE: {1}", database.getId(), message);
+    }
+
+    private void finishWorkRequest(StoredAutonomousDatabase database, String status, String error) {
+        if (database.getWorkRequestId() == null) {
+            return;
+        }
+        List<StoredWorkRequest.ErrorEntry> errors = error == null ? List.of()
+                : List.of(new StoredWorkRequest.ErrorEntry("InternalServerError", error));
+        workRequests.finish(database.getTenancyId(), database.getRegion(), database.getWorkRequestId(), status,
+                errors);
+        database.setWorkRequestId(null);
+    }
+
+    /**
+     * After a restart of floci-oci, takes over the container of every database instead of
+     * creating a new one, which would start an empty database. A database whose container is gone
+     * is UNAVAILABLE with {@link #CONTAINER_GONE}, unless it was being deleted, which then
+     * completes. Otherwise the operation the restart interrupted carries on under its own work
+     * request: a delete removes the container, a stop stops it, and anything else, including a
+     * database that was AVAILABLE, starts it and waits for it to be healthy again.
+     */
+    void adoptPersistedDatabases() {
+        for (StoredAutonomousDatabase database : allDatabases()) {
+            String state = database.getLifecycleState();
+            if ("TERMINATED".equals(state)) {
+                continue;
+            }
+            if (database.getContainerName() == null) {
+                database.setContainerName(containers.containerName(database.getId()));
+            }
+            boolean adopted = adopt(database);
+            if ("TERMINATING".equals(state)) {
+                runDelete(database);
+            } else if (!adopted) {
+                // A create interrupted before its container existed lost only the admin password.
+                fail(database, "PROVISIONING".equals(state) ? INTERRUPTED : CONTAINER_GONE, false);
+            } else if ("STOPPING".equals(state)) {
+                runStop(database);
+            } else if ("STOPPED".equals(state) || "UNAVAILABLE".equals(state)) {
+                finishWorkRequest(database, "FAILED", INTERRUPTED);
+                saveIn(database);
+            } else {
+                boolean firstBoot = "PROVISIONING".equals(state);
+                if (!firstBoot) {
+                    database.setLifecycleState("STARTING");
+                    touch(database);
+                }
+                launchStart(database, firstBoot);
+            }
+        }
+    }
+
+    private boolean adopt(StoredAutonomousDatabase database) {
+        try {
+            return containers.adopt(database);
+        } catch (RuntimeException e) {
+            LOG.warnv("Could not look up the container of Autonomous Database {0}: {1}", database.getId(),
+                    e.getMessage());
+            return false;
+        }
+    }
+
+    private void removeQuietly(StoredAutonomousDatabase database) {
+        try {
+            containers.remove(database);
+        } catch (RuntimeException e) {
+            LOG.warnv("Could not remove the container of Autonomous Database {0}: {1}", database.getId(),
+                    e.getMessage());
+        }
+    }
+
+    // ── Storage ────────────────────────────────────────────────────────────────
+
+    private Optional<StoredAutonomousDatabase> findIn(String tenancyId, String region, String id) {
+        return TenancyAwareStorageBackend.getIn(databases,
+                TenancyAwareStorageBackend.regionalPartition(tenancyId, region), id);
+    }
+
+    private void saveIn(StoredAutonomousDatabase database) {
+        TenancyAwareStorageBackend.putIn(databases,
+                TenancyAwareStorageBackend.regionalPartition(database.getTenancyId(), database.getRegion()),
+                database.getId(), database);
+    }
+
+    /** Every database of every tenancy and region, for startup, shutdown and reset. */
+    private List<StoredAutonomousDatabase> allDatabases() {
+        return TenancyAwareStorageBackend.scanAll(databases);
+    }
+
+    private static ThreadFactory daemon(String name) {
+        return runnable -> {
+            Thread thread = new Thread(runnable, name);
+            thread.setDaemon(true);
+            return thread;
+        };
     }
 
     // ── Helpers ────────────────────────────────────────────────────────────────
@@ -487,10 +1056,17 @@ public class AutonomousDatabaseService implements Resettable, CompartmentUsage, 
         }
     }
 
-    /** The connection strings and URLs follow dbName; in mock mode nothing listens on them. */
-    private static void refreshEndpoints(StoredAutonomousDatabase database) {
+    /** In mock mode the connection strings follow dbName, and nothing listens on them. */
+    private static void refreshConnectionStrings(StoredAutonomousDatabase database) {
         database.getAttributes().put("connectionStrings",
                 AutonomousDatabaseWallet.connectionStrings(database.getDbName(), MOCK_HOST, MTLS_PORT));
+    }
+
+    /**
+     * The tool URLs. They name the container's ORDS port, which floci-oci does not publish
+     * (only the mTLS listener is), so nothing answers on them in either mode.
+     */
+    private static void refreshUrls(StoredAutonomousDatabase database) {
         Map<String, Object> urls = new LinkedHashMap<>();
         String ords = "https://" + MOCK_HOST + ":8443/ords/";
         urls.put("sqlDevWebUrl", ords + "sql-developer");
@@ -573,23 +1149,30 @@ public class AutonomousDatabaseService implements Resettable, CompartmentUsage, 
         }
         Etags.checkIfMatch(ifMatch, database.getEtag());
         if (!List.of(states).contains(database.getLifecycleState())) {
-            // Nothing changes a mock database's state behind the caller's back, so the condition
-            // never clears by itself: Conflict, which SDKs do not retry, rather than IncorrectState.
-            throw OciException.conflict("Autonomous Database " + autonomousDatabaseId + " is "
-                    + database.getLifecycleState() + "; the operation needs it " + String.join(" or ", states));
+            // While an operation is under way the condition clears by itself: IncorrectState, which
+            // SDKs retry. In a settled state it never does: Conflict, which they do not.
+            String message = "Autonomous Database " + autonomousDatabaseId + " is "
+                    + database.getLifecycleState() + "; the operation needs it " + String.join(" or ", states);
+            throw TRANSIENT_STATES.contains(database.getLifecycleState())
+                    ? new OciException("IncorrectState", message, 409) : OciException.conflict(message);
         }
         return database;
     }
 
+    /** A new etag, and the database saved in its own partition, which a worker thread needs. */
     private void touch(StoredAutonomousDatabase database) {
         database.setEtag(Etags.newEtag());
-        databases.put(database.getId(), database);
+        saveIn(database);
     }
 
     private String record(String operationType, StoredAutonomousDatabase database, String actionType) {
-        List<StoredWorkRequest.Resource> resources = List.of(WorkRequestService.resource(ENTITY_TYPE, actionType,
-                database.getId(), BASE_PATH + database.getId()));
-        return workRequests.succeeded(SERVICE, operationType, database.getCompartmentId(), resources);
+        return workRequests.succeeded(SERVICE, operationType, database.getCompartmentId(),
+                resources(database, actionType));
+    }
+
+    private static List<StoredWorkRequest.Resource> resources(StoredAutonomousDatabase database, String actionType) {
+        return List.of(WorkRequestService.resource(ENTITY_TYPE, actionType, database.getId(),
+                BASE_PATH + database.getId()));
     }
 
     private static OciException notFound(String autonomousDatabaseId) {
