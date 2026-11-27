@@ -51,6 +51,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Function;
 
 /**
@@ -130,6 +131,15 @@ public class OkeClusterManager implements Resettable, RegistryMirrorListener {
     private final Function<String, Optional<RegistryMirror>> registryMirrors;
 
     private final Map<String, ActiveClusterRef> activeClusters = new ConcurrentHashMap<>();
+    /**
+     * One lock per cluster, held while its sidecar is started, stopped, reset or refreshed, so a
+     * refresh can never recreate or restart a sidecar that a delete or reset is removing. It is the
+     * only lock here, and no thread holds two at once (refresh, clear and shutdown take them one
+     * cluster at a time), so there is no ordering to get wrong; a RECREATE re-enters it through
+     * {@link #startCluster}. A refresh makes its decision outside it, so a request thread waits only
+     * while that same cluster's sidecar is being rewritten and restarted or recreated.
+     */
+    private final Map<String, ReentrantLock> clusterLocks = new ConcurrentHashMap<>();
     // No thread starts until the registry moves while a real-mode cluster runs.
     private final ExecutorService mirrorRefresher = Executors.newSingleThreadExecutor(runnable -> {
         Thread thread = new Thread(runnable, "oke-registry-mirror");
@@ -194,6 +204,15 @@ public class OkeClusterManager implements Resettable, RegistryMirrorListener {
             throw new IllegalStateException("OKE cluster " + cluster.getId() + " has no API token");
         }
 
+        ReentrantLock lock = lockCluster(cluster.getId());
+        try {
+            startClusterLocked(cluster);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    private void startClusterLocked(StoredOkeCluster cluster) {
         int hostPort = cluster.getHostPort();
         if (hostPort > 0) {
             portAllocator.markReserved(hostPort);
@@ -214,8 +233,10 @@ public class OkeClusterManager implements Resettable, RegistryMirrorListener {
         boolean createdVolume = false;
         try {
             String registries = registriesYaml(clusterRegion(cluster));
-            if (!lifecycleManager.isContainerRunning(containerName)
-                    || !createdForThisCluster(containerName, cluster, registries)) {
+            boolean adopted = lifecycleManager.isContainerRunning(containerName)
+                    && createdForThisCluster(containerName, cluster, registries)
+                    && mirrorsToCurrentRegistry(containerName, registries);
+            if (!adopted) {
                 createdVolume = lifecycleManager.volumeConfirmedAbsent(volumeName);
                 lifecycleManager.removeIfExists(containerName);
                 // Created up front so it carries the floci labels; a mount alone creates it bare.
@@ -341,6 +362,28 @@ public class OkeClusterManager implements Resettable, RegistryMirrorListener {
                 && env.contains(TLS_SAN_ENV + "=" + containerName)
                 && clusterRegion(cluster).equals(
                         lifecycleManager.containerLabels(containerName).get(ContainerStorageHelper.REGION_LABEL));
+    }
+
+    /**
+     * A sidecar about to be adopted was created with the current mirror in its env, but a refresh
+     * before floci-oci last stopped may have rewritten its file to another address, and the
+     * registry's first start in this process announces no move. So the live file is checked as a
+     * refresh checks it: rewritten and restarted in place when it differs, or {@code false}, to
+     * recreate the sidecar on its volume, when that is not possible.
+     */
+    private boolean mirrorsToCurrentRegistry(String containerName, String registries) {
+        try {
+            MirrorRefresh refresh = mirrorRefresh(containerName, registries);
+            if (refresh == MirrorRefresh.RESTART) {
+                rewriteRegistriesAndRestart(containerName, registries);
+                LOG.infov("Restarted adopted k3s sidecar {0} with the current OCIR mirror", containerName);
+            }
+            return refresh != MirrorRefresh.RECREATE;
+        } catch (RuntimeException e) {
+            LOG.warnv(e, "Could not bring the OCIR mirror of k3s sidecar {0} up to date; recreating it on its volume",
+                    containerName);
+            return false;
+        }
     }
 
     /**
@@ -609,8 +652,29 @@ public class OkeClusterManager implements Resettable, RegistryMirrorListener {
         startCluster(cluster);
     }
 
+    /**
+     * Retires the cluster before waiting for its lock, so a refresh that decided to restart or
+     * recreate the sidecar sees it gone and leaves it alone. A refresh already acting holds the
+     * lock: this waits for it, then removes what it left, including an entry a RECREATE put back.
+     * A failed removal restores the entry, so a reset or shutdown still cleans it up.
+     */
     public void stopCluster(StoredOkeCluster cluster) {
-        ActiveClusterRef ref = activeClusters.get(cluster.getId());
+        ActiveClusterRef ref = activeClusters.remove(cluster.getId());
+        ReentrantLock lock = lockCluster(cluster.getId());
+        try {
+            stopClusterLocked(cluster, ref);
+        } catch (RuntimeException e) {
+            if (ref != null) {
+                activeClusters.putIfAbsent(cluster.getId(), ref);
+            }
+            throw e;
+        } finally {
+            lock.unlock();
+        }
+        clusterLocks.remove(cluster.getId(), lock);
+    }
+
+    private void stopClusterLocked(StoredOkeCluster cluster, ActiveClusterRef ref) {
         String containerName = ref != null ? ref.containerName() : containerName(cluster);
         String volumeName = ref != null ? ref.volumeName() : ContainerStorageHelper.dockerName(config, "oke-vol-" + cluster.getId());
         int hostPort = ref != null && ref.hostPort() > 0 ? ref.hostPort() : cluster.getHostPort();
@@ -663,25 +727,57 @@ public class OkeClusterManager implements Resettable, RegistryMirrorListener {
         }
     }
 
+    /**
+     * Decides outside the cluster's lock, then acts under it only while {@code ref} is still the
+     * cluster's current entry: a delete or reset retires it first, and a start replaces it with a
+     * sidecar that already carries the current mirror.
+     */
     private void refreshRegistryMirror(ActiveClusterRef ref) {
+        String clusterId = ref.cluster().getId();
         String registries = registriesYaml(clusterRegion(ref.cluster()));
-        switch (mirrorRefresh(ref.containerName(), registries)) {
-            case NONE -> LOG.debugv("k3s sidecar {0} needs no OCIR mirror refresh", ref.containerName());
-            case RESTART -> {
-                ContainerLifecycleManager.ExecResult write = lifecycleManager.exec(ref.containerName(),
-                        List.of(REGISTRIES_ENV + "=" + registries), WRITE_REGISTRIES, EXEC_TIMEOUT);
-                if (!write.succeeded()) {
-                    throw new IllegalStateException("writing " + REGISTRIES_FILE + " failed with exit code "
-                            + write.exitCode() + ": " + write.stderr());
-                }
-                lifecycleManager.restart(ref.containerName(), RESTART_TIMEOUT_SECONDS);
-                LOG.infov("Restarted k3s sidecar {0} with the moved OCIR mirror", ref.containerName());
+        MirrorRefresh refresh = mirrorRefresh(ref.containerName(), registries);
+        if (refresh == MirrorRefresh.NONE) {
+            LOG.debugv("k3s sidecar {0} needs no OCIR mirror refresh", ref.containerName());
+            return;
+        }
+        ReentrantLock lock = lockCluster(clusterId);
+        try {
+            if (activeClusters.get(clusterId) != ref) {
+                LOG.debugv("k3s sidecar {0} was deleted or started again during the OCIR mirror refresh;"
+                        + " leaving it alone", ref.containerName());
+                return;
             }
-            case RECREATE -> {
+            if (refresh == MirrorRefresh.RESTART) {
+                rewriteRegistriesAndRestart(ref.containerName(), registries);
+                LOG.infov("Restarted k3s sidecar {0} with the moved OCIR mirror", ref.containerName());
+            } else {
                 startCluster(ref.cluster());
                 LOG.infov("Recreated k3s sidecar {0} with the moved OCIR mirror", ref.containerName());
             }
+        } finally {
+            lock.unlock();
         }
+    }
+
+    private void rewriteRegistriesAndRestart(String containerName, String registries) {
+        ContainerLifecycleManager.ExecResult write = lifecycleManager.exec(containerName,
+                List.of(REGISTRIES_ENV + "=" + registries), WRITE_REGISTRIES, EXEC_TIMEOUT);
+        if (!write.succeeded()) {
+            throw new IllegalStateException("writing " + REGISTRIES_FILE + " failed with exit code "
+                    + write.exitCode() + ": " + write.stderr());
+        }
+        lifecycleManager.restart(containerName, RESTART_TIMEOUT_SECONDS);
+    }
+
+    private ReentrantLock lockCluster(String clusterId) {
+        ReentrantLock lock = clusterLocks.computeIfAbsent(clusterId, id -> new ReentrantLock());
+        lock.lock();
+        return lock;
+    }
+
+    /** Whether floci-oci currently runs a sidecar for the cluster. */
+    boolean isActive(String clusterId) {
+        return activeClusters.containsKey(clusterId);
     }
 
     /**
@@ -716,31 +812,47 @@ public class OkeClusterManager implements Resettable, RegistryMirrorListener {
         removeAll(true);
     }
 
+    /** Retires and removes each cluster under its own lock, as {@link #stopCluster} does. */
     private void removeAll(boolean dropVolumes) {
         for (Map.Entry<String, ActiveClusterRef> entry : activeClusters.entrySet()) {
+            String clusterId = entry.getKey();
             ActiveClusterRef ref = entry.getValue();
-            try {
-                lifecycleManager.removeIfExists(ref.containerName());
-            } catch (Exception e) {
-                LOG.warnf(e, "Failed to remove k3s sidecar container '%s'", ref.containerName());
+            if (!activeClusters.remove(clusterId, ref)) {
+                continue;
             }
+            ReentrantLock lock = lockCluster(clusterId);
             try {
-                if (dropVolumes) {
-                    lifecycleManager.removeVolume(ref.volumeName());
-                } else {
-                    removeVolumeIfConfigured(ref.volumeName());
-                }
-            } catch (Exception e) {
-                LOG.warnf(e, "Failed to remove k3s volume '%s'", ref.volumeName());
+                removeSidecar(ref, dropVolumes);
+                activeClusters.remove(clusterId);
+            } finally {
+                lock.unlock();
             }
-            try {
-                portAllocator.release(ref.hostPort());
-                LOG.infof("Cleaned up k3s sidecar container '%s' and released host port %d", ref.containerName(), ref.hostPort());
-            } catch (Exception e) {
-                LOG.warnf(e, "Failed to release host port %d for container '%s'", ref.hostPort(), ref.containerName());
-            }
+            clusterLocks.remove(clusterId, lock);
         }
         activeClusters.clear();
+    }
+
+    private void removeSidecar(ActiveClusterRef ref, boolean dropVolumes) {
+        try {
+            lifecycleManager.removeIfExists(ref.containerName());
+        } catch (Exception e) {
+            LOG.warnf(e, "Failed to remove k3s sidecar container '%s'", ref.containerName());
+        }
+        try {
+            if (dropVolumes) {
+                lifecycleManager.removeVolume(ref.volumeName());
+            } else {
+                removeVolumeIfConfigured(ref.volumeName());
+            }
+        } catch (Exception e) {
+            LOG.warnf(e, "Failed to remove k3s volume '%s'", ref.volumeName());
+        }
+        try {
+            portAllocator.release(ref.hostPort());
+            LOG.infof("Cleaned up k3s sidecar container '%s' and released host port %d", ref.containerName(), ref.hostPort());
+        } catch (Exception e) {
+            LOG.warnf(e, "Failed to release host port %d for container '%s'", ref.hostPort(), ref.containerName());
+        }
     }
 
     /** Whether stopping a cluster, including at shutdown, removes its volume and so its k3s CA. */
