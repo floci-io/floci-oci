@@ -469,20 +469,15 @@ public class ContainerLifecycleManager {
      * volumes are never touched, which is where sidecars keep the data they need to keep.
      *
      * @param name the container name to remove
-     * @return true when this call removed a container, false when there was none or Docker
-     *         refused (the refusal is logged, not thrown)
      */
-    public boolean removeIfExists(String name) {
+    public void removeIfExists(String name) {
         try {
             dockerClient.removeContainerCmd(name).withForce(true).withRemoveVolumes(true).exec();
             LOG.infov("Removed stale container {0}", name);
-            return true;
         } catch (NotFoundException e) {
             // Not found - normal case
-            return false;
         } catch (Exception e) {
             LOG.debugv("Could not remove container {0}: {1}", name, e.getMessage());
-            return false;
         }
     }
 
