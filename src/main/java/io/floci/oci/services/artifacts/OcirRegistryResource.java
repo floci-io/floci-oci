@@ -27,9 +27,7 @@ import java.io.InputStream;
 import java.net.URI;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
-import java.security.SecureRandom;
 import java.time.Duration;
-import java.util.Base64;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -47,9 +45,8 @@ import java.util.regex.Pattern;
  *
  * <p>Requests are only served for a Host with an {@code ocir} label, such as
  * {@code iad.ocir.localhost.floci.io:4599} (resolves to 127.0.0.1, which Docker treats as an
- * insecure registry, so no TLS setup is needed). Login is a Bearer challenge whose token endpoint
- * accepts any {@code <namespace>/<user>} and password: tokens are issued and never checked, as OCI
- * request signatures are never checked.
+ * insecure registry, so no TLS setup is needed). Login is a Bearer challenge answered by the token
+ * endpoint; {@link OcirLogin} decides who gets a token and which tokens the registry accepts.
  */
 @Path("/")
 @ApplicationScoped
@@ -77,12 +74,13 @@ public class OcirRegistryResource {
 
     private final ArtifactsService service;
     private final RequestContext requestContext;
-    private final SecureRandom random = new SecureRandom();
+    private final OcirLogin login;
 
     @Inject
-    public OcirRegistryResource(ArtifactsService service, RequestContext requestContext) {
+    public OcirRegistryResource(ArtifactsService service, RequestContext requestContext, OcirLogin login) {
         this.service = service;
         this.requestContext = requestContext;
+        this.login = login;
     }
 
     // ── Login ──────────────────────────────────────────────────────────────────
@@ -90,11 +88,13 @@ public class OcirRegistryResource {
     @GET
     @Path(SignatureAuthFilter.OCIR_TOKEN_PATH)
     @Produces(MediaType.APPLICATION_JSON)
-    public Response token() {
-        byte[] bytes = new byte[24];
-        random.nextBytes(bytes);
-        String token = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
-        return Response.ok(Map.of("token", token, "access_token", token, "expires_in", 3600)).build();
+    public Response token(@Context HttpHeaders headers) {
+        OcirLogin.Login outcome = login.login(headers.getHeaderString(HttpHeaders.AUTHORIZATION));
+        if (outcome.isRejected()) {
+            return registryError(401, "UNAUTHORIZED", outcome.rejection());
+        }
+        return Response.ok(Map.of("token", outcome.token(), "access_token", outcome.token(),
+                "expires_in", OcirLogin.TOKEN_LIFETIME.toSeconds())).build();
     }
 
     // ── Registry API ───────────────────────────────────────────────────────────
@@ -154,6 +154,10 @@ public class OcirRegistryResource {
         if (authorization == null || !authorization.regionMatches(true, 0, "Bearer ", 0, 7)) {
             return challenge(host, uri);
         }
+        String bearer = authorization.substring(7).trim();
+        if (!login.accepts(bearer)) {
+            return challenge(host, uri);
+        }
         // The raw request path, not the path parameter: JAX-RS drops a trailing slash, and the
         // registry answers "blobs/uploads" (no slash) with a redirect instead of an upload session.
         String requestPath = uri.getRequestUri().getRawPath();
@@ -173,6 +177,9 @@ public class OcirRegistryResource {
         Optional<String> tenancy = service.tenancyOfNamespace(namespace);
         if (tenancy.isEmpty()) {
             return registryError(404, "NAME_UNKNOWN", "namespace " + namespace + " is not known to this registry");
+        }
+        if (!login.allows(bearer, tenancy.get())) {
+            return registryError(403, "DENIED", "the login does not grant access to namespace " + namespace);
         }
         requestContext.setTenancyId(tenancy.get());
         requestContext.setRegion(region.get());

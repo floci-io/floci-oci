@@ -189,7 +189,8 @@ public interface EmulatorConfig {
          * Whether OCI request signatures are verified. {@code off}: parsed for tenancy and user only.
          * {@code known-keys}: security tokens, and API keys that were uploaded or are trusted, must
          * verify; an unknown API key passes unverified. {@code strict}: every API key must be known and
-         * verify. A failure is 401 NotAuthenticated.
+         * verify, and OCIR {@code docker login} takes an Identity auth token as its password. A failure is
+         * 401 NotAuthenticated.
          */
         @WithDefault("off")
         SignatureVerificationMode signatureVerification();
