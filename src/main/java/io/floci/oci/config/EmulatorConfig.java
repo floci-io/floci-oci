@@ -230,6 +230,8 @@ public interface EmulatorConfig {
 
         MysqlServiceConfig mysql();
 
+        DatabaseServiceConfig database();
+
         EventsServiceConfig events();
 
         NotificationsServiceConfig notifications();
@@ -401,6 +403,36 @@ public interface EmulatorConfig {
 
             /** How long a DB system may take to accept connections before it is marked FAILED. */
             @WithDefault("180")
+            int readyTimeoutSeconds();
+        }
+
+        interface DatabaseServiceConfig {
+            @WithDefault("true")
+            boolean enabled();
+
+            /**
+             * When true, no Docker containers are started: Autonomous Databases are
+             * management-plane only and become AVAILABLE at once. Until the Autonomous Database
+             * Free sidecar lands, CreateAutonomousDatabase answers 501 MethodNotImplemented when
+             * this is false. Env: FLOCI_OCI_SERVICES_DATABASE_MOCK.
+             */
+            @WithDefault("false")
+            boolean mock();
+
+            /** The Autonomous Database Free image a real database will run. */
+            @WithDefault("container-registry.oracle.com/database/adb-free:latest-26ai")
+            String image();
+
+            /** First host port published for a database's mTLS listener. */
+            @WithDefault("11522")
+            int basePort();
+
+            /** Last host port published for a database's mTLS listener. */
+            @WithDefault("11621")
+            int maxPort();
+
+            /** How long a database may take to become healthy before it is marked UNAVAILABLE. */
+            @WithDefault("600")
             int readyTimeoutSeconds();
         }
 

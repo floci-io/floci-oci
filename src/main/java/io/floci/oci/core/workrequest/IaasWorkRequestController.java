@@ -16,7 +16,7 @@ import java.util.Set;
 /**
  * GetWorkRequest on {@code /20160918/workRequests/{id}}, the path both Identity's work requests
  * and the core work-request client (oci-go-sdk/workrequests, used for VCN and subnet compartment
- * moves) poll. It belongs to no single service, so no service descriptor registers it and the
+ * moves, and every Autonomous Database operation) poll. It belongs to no single service, so no service descriptor registers it and the
  * enabled check runs here against the service that created the work request: disabling one of
  * them never stops the other's work requests from being polled.
  */
@@ -25,7 +25,7 @@ import java.util.Set;
 @Produces(MediaType.APPLICATION_JSON)
 public class IaasWorkRequestController {
 
-    private static final Set<String> SERVICES = Set.of("identity", "networking");
+    private static final Set<String> SERVICES = Set.of("identity", "networking", "database");
 
     private final WorkRequestService workRequests;
     private final ServiceRegistry serviceRegistry;

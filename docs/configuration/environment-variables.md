@@ -74,6 +74,12 @@ All configuration lives under the `floci-oci.*` prefix; every property maps to a
 | `FLOCI_OCI_SERVICES_MYSQL_BASE_PORT` | `13306` | First host port for MySQL DB system endpoints |
 | `FLOCI_OCI_SERVICES_MYSQL_MAX_PORT` | `13405` | Last host port for MySQL DB system endpoints |
 | `FLOCI_OCI_SERVICES_MYSQL_READY_TIMEOUT_SECONDS` | `180` | How long a MySQL DB system may take to accept connections before it goes `FAILED` |
+| `FLOCI_OCI_SERVICES_DATABASE_ENABLED` | `true` | Enable/disable Autonomous Database |
+| `FLOCI_OCI_SERVICES_DATABASE_MOCK` | `false` | Emulate Autonomous Databases without containers: they become `AVAILABLE` at once. Until the Autonomous Database Free sidecar lands, `CreateAutonomousDatabase` answers `501 MethodNotImplemented` when this is `false` |
+| `FLOCI_OCI_SERVICES_DATABASE_IMAGE` | `container-registry.oracle.com/database/adb-free:latest-26ai` | Autonomous Database Free image for the coming sidecar (about 12 GB) |
+| `FLOCI_OCI_SERVICES_DATABASE_BASE_PORT` | `11522` | First host port for Autonomous Database mTLS listeners (coming sidecar) |
+| `FLOCI_OCI_SERVICES_DATABASE_MAX_PORT` | `11621` | Last host port for Autonomous Database mTLS listeners (coming sidecar) |
+| `FLOCI_OCI_SERVICES_DATABASE_READY_TIMEOUT_SECONDS` | `600` | How long an Autonomous Database may take to become healthy (coming sidecar) |
 | `FLOCI_OCI_SERVICES_DOCKER_NETWORK` | – | Shared Docker network for sidecar containers |
 | `FLOCI_OCI_DOCKER_RESOURCE_NAMESPACE` | – | Namespace inserted into sidecar container/volume names (`floci-oci-<ns>-…`) so parallel emulator instances on one Docker host don't collide |
 | `FLOCI_OCI_DOCKER_IMAGE_PULL_TIMEOUT_SECONDS` | `300` | How long one sidecar image pull may take before the start fails. Raise it for large images on a slow connection, or pull the image beforehand |
