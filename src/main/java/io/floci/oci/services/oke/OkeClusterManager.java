@@ -813,23 +813,25 @@ public class OkeClusterManager implements Resettable, RegistryMirrorListener {
     }
 
     /** Retires and removes each cluster under its own lock, as {@link #stopCluster} does. */
+    /**
+     * Removes every sidecar, each under its cluster's lock, reading the cluster's entry only once
+     * the lock is held: a refresh that recreated the sidecar meanwhile has replaced the entry, with
+     * its own container and possibly another port, and that is the sidecar to remove. A refresh
+     * still waiting for the lock then finds the entry gone and does nothing.
+     */
     private void removeAll(boolean dropVolumes) {
-        for (Map.Entry<String, ActiveClusterRef> entry : activeClusters.entrySet()) {
-            String clusterId = entry.getKey();
-            ActiveClusterRef ref = entry.getValue();
-            if (!activeClusters.remove(clusterId, ref)) {
-                continue;
-            }
+        for (String clusterId : List.copyOf(activeClusters.keySet())) {
             ReentrantLock lock = lockCluster(clusterId);
             try {
-                removeSidecar(ref, dropVolumes);
-                activeClusters.remove(clusterId);
+                ActiveClusterRef ref = activeClusters.remove(clusterId);
+                if (ref != null) {
+                    removeSidecar(ref, dropVolumes);
+                }
             } finally {
                 lock.unlock();
             }
             clusterLocks.remove(clusterId, lock);
         }
-        activeClusters.clear();
     }
 
     private void removeSidecar(ActiveClusterRef ref, boolean dropVolumes) {

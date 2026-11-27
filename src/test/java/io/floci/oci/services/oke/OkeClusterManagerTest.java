@@ -1151,6 +1151,38 @@ class OkeClusterManagerTest {
     }
 
     @Test
+    void aResetDuringARecreateRemovesTheSidecarTheRecreateStarted() throws Exception {
+        List<RegistryMirror> mirror = new ArrayList<>(List.of(IAD_MIRROR));
+        OkeClusterManager mirrored = managerWithMirror(region -> Optional.of(mirror.get(0)));
+        StoredOkeCluster cluster = runningClusterWhoseRegistryMoved(mirror, mirrored, "ocid1.cluster.oc1.iad.retired006");
+        InspectContainerResponse inspect = mock(InspectContainerResponse.class, RETURNS_DEEP_STUBS);
+        when(inspect.getConfig().getEntrypoint()).thenReturn(new String[] {"sh", "-c", "exec /bin/k3s \"$@\""});
+        String sidecar = containerName(cluster);
+        when(lifecycleManager.inspect(sidecar)).thenReturn(Optional.of(inspect));
+        CountDownLatch recreating = new CountDownLatch(1);
+        CountDownLatch finishRecreate = new CountDownLatch(1);
+        doAnswer(invocation -> {
+            recreating.countDown();
+            assertTrue(finishRecreate.await(5, TimeUnit.SECONDS));
+            return "recreated";
+        }).when(lifecycleManager).createAndStart(any());
+        Thread refresher = new Thread(mirrored::refreshRegistryMirrors);
+        refresher.start();
+        assertTrue(recreating.await(5, TimeUnit.SECONDS));
+
+        Thread resetter = new Thread(mirrored::clear);
+        resetter.start();
+        finishRecreate.countDown();
+        refresher.join(5000);
+        resetter.join(5000);
+
+        assertFalse(mirrored.isActive(cluster.getId()), "the recreated sidecar is not left registered");
+        InOrder order = inOrder(lifecycleManager);
+        order.verify(lifecycleManager).createAndStart(any());
+        order.verify(lifecycleManager).removeIfExists(sidecar);
+    }
+
+    @Test
     void aDeleteDuringARestartWaitsForItThenRemovesTheSidecar() throws Exception {
         List<RegistryMirror> mirror = new ArrayList<>(List.of(IAD_MIRROR));
         OkeClusterManager mirrored = managerWithMirror(region -> Optional.of(mirror.get(0)));
