@@ -425,7 +425,7 @@ public class PsqlService implements Resettable, CompartmentUsage, NetworkUsage {
         }
     }
 
-    private String update(String dbSystemId, Map<String, Object> details, String ifMatch) {
+    private synchronized String update(String dbSystemId, Map<String, Object> details, String ifMatch) {
         StoredDbSystem system = mutable(dbSystemId, ifMatch, "ACTIVE", "INACTIVE", "NEEDS_ATTENTION");
         // Everything that can be rejected is checked before anything changes: the store hands
         // out the stored object itself, so a half-applied update would stick.
@@ -578,7 +578,7 @@ public class PsqlService implements Resettable, CompartmentUsage, NetworkUsage {
         try {
             containers.applySettings(system);
         } catch (RuntimeException e) {
-            return () -> fail(system, "NEEDS_ATTENTION",
+            return failedOutcome(system, "NEEDS_ATTENTION",
                     reason + "; restoring the previous one failed too: " + e.getMessage());
         }
         return () -> {
@@ -595,7 +595,7 @@ public class PsqlService implements Resettable, CompartmentUsage, NetworkUsage {
         finishWorkRequest(system, status, error);
     }
 
-    public String changeCompartment(String dbSystemId, String compartmentId, String ifMatch) {
+    public synchronized String changeCompartment(String dbSystemId, String compartmentId, String ifMatch) {
         StoredDbSystem system = mutable(dbSystemId, ifMatch, "ACTIVE", "INACTIVE");
         system.setCompartmentId(compartmentId);
         touch(system);
@@ -612,42 +612,39 @@ public class PsqlService implements Resettable, CompartmentUsage, NetworkUsage {
         return configurations.attachingConfiguration(() -> delete(dbSystemId, ifMatch));
     }
 
-    private String delete(String dbSystemId, String ifMatch) {
+    private synchronized String delete(String dbSystemId, String ifMatch) {
         StoredDbSystem system = getDbSystem(dbSystemId);
         Etags.checkIfMatch(ifMatch, system.getEtag());
         if ("DELETED".equals(system.getLifecycleState()) || "DELETING".equals(system.getLifecycleState())) {
             throw incorrectState(system, "deleted");
         }
-        String workRequestId;
+        if (PRIMARY.equals(system.getSystemRole()) && !replicas(system).isEmpty()) {
+            throw OciException.conflict("DB system " + dbSystemId
+                    + " has replicas; delete them, or make them standalone, first");
+        }
         // An operation still under way is abandoned: its work request ends CANCELED, and its
         // step is skipped, or its outcome dropped, because the system has moved on to another
         // work request. The lock keeps a step from recording its outcome in between, and a
         // switchover from changing which system is the primary.
-        synchronized (this) {
-            if (PRIMARY.equals(system.getSystemRole()) && !replicas(system).isEmpty()) {
-                throw OciException.conflict("DB system " + dbSystemId
-                        + " has replicas; delete them, or make them standalone, first");
-            }
-            pending.remove(dbSystemId);
-            finishWorkRequest(system, "CANCELED", null);
-            String primaryId = WARM_STANDBY.equals(system.getSystemRole()) ? primaryIdOf(system) : null;
-            if (!realMode()) {
-                markDeleted(system);
-                systems.put(system.getId(), system);
-                workRequestId = workRequests.succeeded(WR_SERVICE, "DELETE_POSTGRESQL_DB_SYSTEM",
-                        system.getCompartmentId(), resources(system, "DELETED"));
-            } else {
-                workRequestId = begin(system, "DELETING", "DELETE_POSTGRESQL_DB_SYSTEM", "DELETED");
-            }
-            // A replica stops counting once it is going, so its primary may stand alone again.
-            if (primaryId != null) {
-                standAloneIfNoReplicas(system.getTenancyId(), primaryId);
-            }
-            if (!realMode()) {
-                return workRequestId;
-            }
+        pending.remove(dbSystemId);
+        finishWorkRequest(system, "CANCELED", null);
+        String primaryId = WARM_STANDBY.equals(system.getSystemRole()) ? primaryIdOf(system) : null;
+        String workRequestId;
+        if (!realMode()) {
+            markDeleted(system);
+            systems.put(system.getId(), system);
+            workRequestId = workRequests.succeeded(WR_SERVICE, "DELETE_POSTGRESQL_DB_SYSTEM",
+                    system.getCompartmentId(), resources(system, "DELETED"));
+        } else {
+            workRequestId = begin(system, "DELETING", "DELETE_POSTGRESQL_DB_SYSTEM", "DELETED");
         }
-        runDelete(system);
+        // A replica stops counting once it is going, so its primary may stand alone again.
+        if (primaryId != null) {
+            standAloneIfNoReplicas(system.getTenancyId(), primaryId);
+        }
+        if (realMode()) {
+            runDelete(system);
+        }
         return workRequestId;
     }
 
@@ -1033,7 +1030,7 @@ public class PsqlService implements Resettable, CompartmentUsage, NetworkUsage {
      * what it contains and keeps the admin password. {@code timeToRestore} picks the backup at or
      * before it; otherwise {@code backupId} names it. Returns the work request id.
      */
-    public String restoreDbSystem(String dbSystemId, Map<String, Object> details, String ifMatch) {
+    public synchronized String restoreDbSystem(String dbSystemId, Map<String, Object> details, String ifMatch) {
         StoredDbSystem system = mutable(dbSystemId, ifMatch, "ACTIVE");
         String timeToRestore = PsqlRequests.string(details, "timeToRestore");
         String backupId = PsqlRequests.string(details, "backupId");
@@ -1061,7 +1058,7 @@ public class PsqlService implements Resettable, CompartmentUsage, NetworkUsage {
             try {
                 containers.restore(current, dumpId);
             } catch (RuntimeException e) {
-                return () -> fail(current, "NEEDS_ATTENTION", "The backup could not be restored: " + e.getMessage());
+                return failedOutcome(current, "NEEDS_ATTENTION", "The backup could not be restored: " + e.getMessage());
             }
             return () -> {
                 current.setLifecycleState("ACTIVE");
@@ -1080,8 +1077,11 @@ public class PsqlService implements Resettable, CompartmentUsage, NetworkUsage {
     }
 
     // ── Runtime actions ────────────────────────────────────────────────────────
+    //
+    // Every mutation holds the service lock from its state check until its step is queued, so a
+    // second one sees the system UPDATING or DELETING and is refused with IncorrectState.
 
-    public String stopDbSystem(String dbSystemId, String ifMatch) {
+    public synchronized String stopDbSystem(String dbSystemId, String ifMatch) {
         StoredDbSystem system = mutable(dbSystemId, ifMatch, "ACTIVE");
         if (!realMode()) {
             return finishAtOnce(system, "INACTIVE");
@@ -1100,7 +1100,7 @@ public class PsqlService implements Resettable, CompartmentUsage, NetworkUsage {
         return workRequestId;
     }
 
-    public String startDbSystem(String dbSystemId, String ifMatch) {
+    public synchronized String startDbSystem(String dbSystemId, String ifMatch) {
         StoredDbSystem system = mutable(dbSystemId, ifMatch, "INACTIVE", "NEEDS_ATTENTION");
         if (!realMode()) {
             return finishAtOnce(system, "ACTIVE");
@@ -1110,7 +1110,7 @@ public class PsqlService implements Resettable, CompartmentUsage, NetworkUsage {
         return workRequestId;
     }
 
-    public String restartDbInstance(String dbSystemId, Map<String, Object> details, String ifMatch) {
+    public synchronized String restartDbInstance(String dbSystemId, Map<String, Object> details, String ifMatch) {
         String dbInstanceId = PsqlRequests.requireString(details, "dbInstanceId");
         String restartType = PsqlRequests.requireString(details, "restartType");
         if (!RESTART_TYPES.contains(restartType)) {
@@ -1126,8 +1126,13 @@ public class PsqlService implements Resettable, CompartmentUsage, NetworkUsage {
         return workRequestId;
     }
 
+    /** The new password is resolved before the lock is taken: a Vault secret may have to be read. */
     public String resetMasterUserPassword(String dbSystemId, Map<String, Object> details, String ifMatch) {
         String newPassword = resolvePassword(PsqlRequests.requireMap(details, "passwordDetails"));
+        return resetPassword(dbSystemId, newPassword, ifMatch);
+    }
+
+    private synchronized String resetPassword(String dbSystemId, String newPassword, String ifMatch) {
         StoredDbSystem system = mutable(dbSystemId, ifMatch, "ACTIVE");
         if (!realMode()) {
             return finishAtOnce(system, "ACTIVE");
@@ -1152,8 +1157,8 @@ public class PsqlService implements Resettable, CompartmentUsage, NetworkUsage {
         return workRequestId;
     }
 
-    public String updateDbInstance(String dbSystemId, String dbInstanceId, Map<String, Object> details,
-                                   String ifMatch) {
+    public synchronized String updateDbInstance(String dbSystemId, String dbInstanceId,
+                                                Map<String, Object> details, String ifMatch) {
         StoredDbSystem system = mutable(dbSystemId, ifMatch, "ACTIVE", "INACTIVE");
         StoredDbInstance instance = instance(system, dbInstanceId);
         if (PsqlRequests.string(details, "displayName") != null) {
@@ -1243,8 +1248,8 @@ public class PsqlService implements Resettable, CompartmentUsage, NetworkUsage {
      * found in its own partition since the worker has no request scope. The step is skipped
      * when the system has gone, or has moved on to another operation (a delete that overtook a
      * start, for example), which shows as a different work request. The Docker work can take a
-     * while, so ownership is checked again before its outcome is recorded, under the lock that
-     * delete and reset take: an outcome that arrives too late is dropped.
+     * while, so ownership is checked again before its outcome is recorded, under the lock every
+     * mutation and reset take: an outcome that arrives too late is dropped.
      */
     private void runAsync(StoredDbSystem system, LifecycleStep step) {
         String tenancyId = system.getTenancyId();
@@ -1252,28 +1257,36 @@ public class PsqlService implements Resettable, CompartmentUsage, NetworkUsage {
         String id = system.getId();
         String workRequestId = system.getWorkRequestId();
         lifecycle.execute(() -> {
-            Optional<StoredDbSystem> current = owned(tenancyId, region, id, workRequestId);
-            if (current.isEmpty()) {
-                LOG.debugv("DB system {0} has moved on; skipping its queued lifecycle step", id);
-                return;
+            Optional<StoredDbSystem> current;
+            synchronized (this) {
+                current = owned(tenancyId, region, id, workRequestId);
+                if (current.isEmpty()) {
+                    LOG.debugv("DB system {0} has moved on; skipping its queued lifecycle step", id);
+                    return;
+                }
             }
             Runnable outcome;
             try {
                 outcome = step.run(current.get());
             } catch (RuntimeException e) {
                 LOG.warnv(e, "Lifecycle step failed for DB system {0}", id);
-                outcome = () -> fail(current.get(), "NEEDS_ATTENTION", e.getMessage());
+                outcome = failedOutcome(current.get(), "NEEDS_ATTENTION", e.getMessage());
             }
+            boolean wasReset = false;
             synchronized (this) {
                 if (owned(tenancyId, region, id, workRequestId).isPresent()) {
                     outcome.run();
                 } else if (findIn(tenancyId, region, id).isEmpty()) {
-                    // A reset forgot the system while its step ran: remove what the step started.
-                    LOG.debugv("DB system {0} was reset during its lifecycle step", id);
-                    purgeQuietly(current.get());
+                    wasReset = true;
                 } else {
                     LOG.debugv("DB system {0} moved on during its lifecycle step", id);
                 }
+            }
+            if (wasReset) {
+                // A reset forgot the system while its step ran: remove what the step started,
+                // outside the lock since it is Docker work.
+                LOG.debugv("DB system {0} was reset during its lifecycle step", id);
+                purgeQuietly(current.get());
             }
         });
     }
@@ -1297,7 +1310,7 @@ public class PsqlService implements Resettable, CompartmentUsage, NetworkUsage {
                 containers.stop(current);
                 containers.start(current, password);
             } catch (RuntimeException e) {
-                return () -> fail(current, failureState,
+                return failedOutcome(current, failureState,
                         "The PostgreSQL container could not be started: " + e.getMessage());
             }
             return () -> {
@@ -1344,23 +1357,26 @@ public class PsqlService implements Resettable, CompartmentUsage, NetworkUsage {
             try {
                 containers.applySettings(system);
             } catch (RuntimeException e) {
-                settle(system, () -> fail(system, waiting.failureState(),
-                        "The configuration could not be applied: " + e.getMessage()));
+                failPending(system, waiting.failureState(),
+                        "The configuration could not be applied: " + e.getMessage());
                 return;
             }
             if (system.getRestoreBackupId() != null) {
                 try {
                     containers.restore(system, system.getRestoreBackupId());
                 } catch (RuntimeException e) {
-                    settle(system, () -> fail(system, waiting.failureState(),
-                            "The backup could not be restored: " + e.getMessage()));
+                    failPending(system, waiting.failureState(),
+                            "The backup could not be restored: " + e.getMessage());
                     return;
                 }
                 system.setRestoreBackupId(null);
             }
+            // The Docker calls run before the service lock is taken, so a slow daemon holds up
+            // only this DB system's poll, not every other change.
+            Optional<String> version = containers.serverVersion(system);
+            EndpointInfo endpoint = containers.clientEndpoint(system);
             settle(system, () -> {
-                containers.serverVersion(system).ifPresent(system::setDbVersion);
-                EndpointInfo endpoint = containers.clientEndpoint(system);
+                version.ifPresent(system::setDbVersion);
                 system.setEndpointHost(endpoint.host());
                 system.setEndpointPort(endpoint.port());
                 system.setLifecycleState(waiting.targetState());
@@ -1372,11 +1388,11 @@ public class PsqlService implements Resettable, CompartmentUsage, NetworkUsage {
                 LOG.infov("DB system {0} is {1} at {2}", system.getId(), waiting.targetState(), endpoint);
             });
         } else if (!containers.isRunning(system)) {
-            settle(system, () -> fail(system, waiting.failureState(),
-                    "The PostgreSQL container exited before it accepted connections"));
+            failPending(system, waiting.failureState(),
+                    "The PostgreSQL container exited before it accepted connections");
         } else if (clock.instant().isAfter(waiting.since().plusSeconds(timeout))) {
-            settle(system, () -> fail(system, waiting.failureState(),
-                    "PostgreSQL did not accept connections after " + timeout + " seconds"));
+            failPending(system, waiting.failureState(),
+                    "PostgreSQL did not accept connections after " + timeout + " seconds");
         }
     }
 
@@ -1395,9 +1411,11 @@ public class PsqlService implements Resettable, CompartmentUsage, NetworkUsage {
 
     /**
      * Records an outcome only while the system is still pending, atomically with dropping it
-     * from {@link #pending}: a delete or reset that removed it during the probe wins.
+     * from {@link #pending}: a delete or reset that removed it during the probe wins. Holds the
+     * service lock, so no mutation sees the new state before the outcome has finished its work
+     * request.
      */
-    private void settle(StoredDbSystem system, Runnable outcome) {
+    private synchronized void settle(StoredDbSystem system, Runnable outcome) {
         AtomicBoolean recorded = new AtomicBoolean();
         pending.computeIfPresent(system.getId(), (id, waiting) -> {
             outcome.run();
@@ -1409,8 +1427,31 @@ public class PsqlService implements Resettable, CompartmentUsage, NetworkUsage {
         }
     }
 
+    /**
+     * Fails a pending operation. The container is stopped before the service lock is taken: while
+     * the system is pending every other change is refused except delete, which removes the
+     * container anyway, so stopping first cannot undo another request's work.
+     */
+    private void failPending(StoredDbSystem system, String state, String message) {
+        stopQuietly(system);
+        settle(system, () -> recordFailure(system, state, message));
+    }
+
     private void fail(StoredDbSystem system, String state, String message) {
         stopQuietly(system);
+        recordFailure(system, state, message);
+    }
+
+    /**
+     * For a lifecycle step on the worker: stops the container now, outside the service lock, and
+     * returns the outcome that records the failure under it.
+     */
+    private Runnable failedOutcome(StoredDbSystem system, String state, String message) {
+        stopQuietly(system);
+        return () -> recordFailure(system, state, message);
+    }
+
+    private void recordFailure(StoredDbSystem system, String state, String message) {
         system.setLifecycleState(state);
         system.setLifecycleDetails(message);
         setInstanceStates(system, "FAILED");

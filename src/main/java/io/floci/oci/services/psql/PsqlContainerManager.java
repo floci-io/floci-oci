@@ -25,6 +25,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Stream;
 
 /**
@@ -97,6 +98,12 @@ public class PsqlContainerManager {
     private final PortAllocator portAllocator;
     private final EmulatorConfig config;
     private final ServiceConfigAccess serviceConfigAccess;
+    /**
+     * Which DB system each host port was claimed for. A delete and a stale failure can both stop
+     * the same system, and by the second call its port may be reserved for another one, so a stop
+     * gives a port back only while it still belongs to that system.
+     */
+    private final Map<Integer, String> portOwners = new ConcurrentHashMap<>();
     private Path temporaryDumps;
 
     @Inject
@@ -152,6 +159,7 @@ public class PsqlContainerManager {
         String name = system.getContainerName();
         lifecycleManager.removeIfExists(name);
         int hostPort = claimPort(system.getHostPort());
+        portOwners.put(hostPort, system.getId());
         try {
             lifecycleManager.ensureVolume(system.getVolumeName());
             ContainerSpec spec = containerBuilder.newContainer(image)
@@ -175,7 +183,7 @@ public class PsqlContainerManager {
             LOG.infov("Started PostgreSQL {0} for DB system {1} on host port {2}", major, system.getId(), hostPort);
         } catch (RuntimeException e) {
             lifecycleManager.removeIfExists(name);
-            portAllocator.release(hostPort);
+            releaseOwned(hostPort, system.getId());
             throw e;
         }
     }
@@ -291,8 +299,12 @@ public class PsqlContainerManager {
     /** Removes the container and releases its port. The data volume stays. */
     public void stop(StoredDbSystem system) {
         lifecycleManager.removeIfExists(system.getContainerName());
-        if (system.getHostPort() > 0) {
-            portAllocator.release(system.getHostPort());
+        releaseOwned(system.getHostPort(), system.getId());
+    }
+
+    private void releaseOwned(int port, String systemId) {
+        if (port > 0 && portOwners.remove(port, systemId)) {
+            portAllocator.release(port);
         }
     }
 

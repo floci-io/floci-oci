@@ -30,6 +30,7 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
+import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
@@ -166,13 +167,43 @@ class PsqlContainerManagerTest {
     @Test
     void stopReleasesThePortAndKeepsTheVolume() {
         StoredDbSystem system = system("16");
-        system.setHostPort(15440);
+        manager.start(system, PASSWORD);
 
         manager.stop(system);
 
-        verify(lifecycleManager).removeIfExists("floci-oci-psql-abcdefghijklmnop");
+        verify(lifecycleManager, times(2)).removeIfExists("floci-oci-psql-abcdefghijklmnop");
         verify(portAllocator).release(15440);
         verify(lifecycleManager, never()).removeVolume(any());
+    }
+
+    @Test
+    void aStopGivesBackOnlyThePortItsSystemStillHolds() {
+        StoredDbSystem deleted = system("16");
+        manager.start(deleted, PASSWORD);
+        manager.stop(deleted);
+        // Another DB system is handed the freed port, then a stale failure stops the deleted one again.
+        StoredDbSystem other = system("16");
+        other.setId("ocid1.postgresqldbsystem.oc1.phx.other");
+        other.setContainerName(manager.containerName(other.getId()));
+        manager.start(other, PASSWORD);
+
+        manager.stop(deleted);
+        verify(portAllocator, times(1)).release(15440);
+
+        manager.stop(other);
+        verify(portAllocator, times(2)).release(15440);
+    }
+
+    @Test
+    void aStopReleasesThePortEvenWhenTheContainerWasRemovedOutsideFloci() {
+        StoredDbSystem system = system("16");
+        manager.start(system, PASSWORD);
+        // removeIfExists finds nothing to remove: the reservation is still this system's to release.
+        doNothing().when(lifecycleManager).removeIfExists(any());
+
+        manager.stop(system);
+
+        verify(portAllocator).release(15440);
     }
 
     @Test

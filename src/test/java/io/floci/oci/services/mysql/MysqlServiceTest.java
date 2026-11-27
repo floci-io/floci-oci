@@ -22,11 +22,13 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
@@ -713,5 +715,67 @@ class MysqlServiceTest {
         assertEquals("SUCCEEDED", workRequest(delete).getStatus());
         assertEquals(List.of(), deferred.resourcesUsing(SUBNET));
         assertEquals(List.of(), deferred.resourcesUsing(NSG));
+    }
+
+    // ── Concurrent state changes ───────────────────────────────────────────────
+
+    /**
+     * Holds the first caller between its state check and its transition, which is where it asks
+     * whether real mode is on, and lets a second caller try the same change meanwhile.
+     */
+    @Test
+    void twoConcurrentStartsAcceptOneAndEveryWorkRequestFinishes() throws Exception {
+        String id = activeRealSystem().getId();
+        real.stopDbSystem(id, Map.of("shutdownType", "FAST"), null);
+        List<Runnable> queued = Collections.synchronizedList(new ArrayList<>());
+        MysqlService deferred = new MysqlService(systems, config, null, workRequests, containers, configurations,
+                OciContext.fromConfig(config), ONE_SUBNET, clock, queued::add);
+        AtomicBoolean armed = new AtomicBoolean();
+        CountDownLatch checked = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        when(config.services().mysql().mock()).thenAnswer(call -> {
+            if (armed.compareAndSet(true, false)) {
+                checked.countDown();
+                release.await(5, TimeUnit.SECONDS);
+            }
+            return false;
+        });
+        List<String> accepted = Collections.synchronizedList(new ArrayList<>());
+        List<String> refusals = Collections.synchronizedList(new ArrayList<>());
+        Runnable start = () -> {
+            try {
+                accepted.add(deferred.startDbSystem(id, null));
+            } catch (OciException e) {
+                refusals.add(e.getHttpStatus() + " " + e.getCode());
+            }
+        };
+
+        armed.set(true);
+        Thread first = new Thread(start);
+        first.start();
+        assertTrue(checked.await(5, TimeUnit.SECONDS));
+        Thread second = new Thread(start);
+        second.start();
+        // The second start waits for the lock the first holds; without one it would get through.
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (second.isAlive() && second.getState() != Thread.State.BLOCKED && System.nanoTime() < deadline) {
+            Thread.sleep(5);
+        }
+        release.countDown();
+        first.join(5000);
+        second.join(5000);
+
+        assertEquals(1, accepted.size(), refusals.toString());
+        assertEquals(List.of("409 IncorrectState"), refusals);
+        for (Runnable task : List.copyOf(queued)) {
+            task.run();
+        }
+        deferred.pollReadiness();
+        assertEquals("ACTIVE", deferred.getDbSystem(id).getLifecycleState());
+        assertEquals("SUCCEEDED", workRequest(accepted.getFirst()).getStatus());
+        assertEquals(List.of(), workRequests.list(MysqlService.WR_SERVICE, null).stream()
+                .filter(workRequest -> !Set.of("SUCCEEDED", "FAILED", "CANCELED").contains(workRequest.getStatus()))
+                .map(StoredWorkRequest::getId)
+                .toList());
     }
 }
