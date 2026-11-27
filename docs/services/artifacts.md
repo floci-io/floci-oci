@@ -55,17 +55,50 @@ docker tag alpine:3.20 iad.ocir.localhost.floci.io:4599/floci-local/project/app:
 docker push iad.ocir.localhost.floci.io:4599/floci-local/project/app:v1
 ```
 
-- Any `<namespace>/<user>` and password is accepted; the token is issued and never
-  checked.
+- Any `<namespace>/<user>` and password is accepted, and the registry takes any Bearer token,
+  unless signature verification is `strict` (see [Docker login in strict mode](#docker-login-in-strict-mode)).
 - A push into a repository that does not exist is refused with `NAME_UNKNOWN`, unless the
   tenancy's container configuration has `isRepositoryCreatedOnFirstPush: true`. Then a
   private repository is created in the root compartment.
 - An immutable repository refuses manifest pushes with `DENIED`.
+- A cross-repository blob mount (`POST .../blobs/uploads/?mount=<digest>&from=<namespace>/<repository>`)
+  is performed when the login may read `from`'s namespace, which in `strict` mode means the same
+  tenancy as the destination. Otherwise the mount is ignored and a plain upload session is opened
+  (`202` with a `Location`), the fallback the
+  [Registry HTTP API V2](https://distribution.github.io/distribution/spec/api/#cross-repository-blob-mount)
+  defines, so `docker push` uploads the layer instead. `from` is always read as an OCIR repository
+  in the request's region.
 - A namespace is known to the data plane once its tenancy has used the management API
   (created a repository or read the container configuration).
 - The data plane only answers on a Host with an `ocir` label. Hosts of the form
   `<region-key>.ocir.<domain>`, `<region>.ocir.<domain>` and
   `ocir.<region>.oci.<domain>` are recognised.
+
+### Docker login in strict mode
+
+With `FLOCI_OCI_AUTH_SIGNATURE_VERIFICATION=strict`, `docker login` works as OCI documents it
+([Pushing Images Using the Docker CLI](https://docs.oracle.com/en-us/iaas/Content/Registry/Tasks/registrypushingimagesusingthedockercli.htm)):
+the username is `<tenancy-namespace>/<username>`, and the password is an
+[auth token](identity.md#notes-limitations) of that user.
+
+```bash
+token=$(oci iam auth-token create --user-id "$USER_OCID" --description docker \
+    --query 'data.token' --raw-output)
+docker login iad.ocir.localhost.floci.io:4599 -u "floci-local/jdoe" -p "$token"
+```
+
+- The federated form `<tenancy-namespace>/<domain-name>/<username>` (for example
+  `floci-local/oracleidentitycloudservice/jdoe`) is accepted too. floci-oci has no identity
+  domains, so the domain segment is not checked.
+- A wrong username or token, or no Basic credentials at all, is `401` with a registry error body
+  (`{"errors":[{"code":"UNAUTHORIZED",...}]}`), which Docker reports as a failed login.
+- The registry then accepts only the Bearer tokens it issued, for one hour. Any other token gets
+  the login challenge again. A token issued to one tenancy's user is refused with `DENIED` on
+  another tenancy's namespace, and a blob mount from another tenancy's repository falls back to
+  an upload. Issued tokens live in memory, so after a restart Docker logs in
+  again with the credentials it saved.
+- Real OCIR's error bodies for a failed login are not public: the code and messages are
+  floci-oci's, in the Registry HTTP API V2 error format.
 
 ## Configuration
 

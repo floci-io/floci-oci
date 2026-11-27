@@ -25,16 +25,19 @@ import org.jboss.logging.Logger;
 
 import java.io.InputStream;
 import java.net.URI;
+import java.net.URLDecoder;
+import java.net.URLEncoder;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
-import java.security.SecureRandom;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.util.Base64;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Function;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -47,9 +50,8 @@ import java.util.regex.Pattern;
  *
  * <p>Requests are only served for a Host with an {@code ocir} label, such as
  * {@code iad.ocir.localhost.floci.io:4599} (resolves to 127.0.0.1, which Docker treats as an
- * insecure registry, so no TLS setup is needed). Login is a Bearer challenge whose token endpoint
- * accepts any {@code <namespace>/<user>} and password: tokens are issued and never checked, as OCI
- * request signatures are never checked.
+ * insecure registry, so no TLS setup is needed). Login is a Bearer challenge answered by the token
+ * endpoint; {@link OcirLogin} decides who gets a token and which tokens the registry accepts.
  */
 @Path("/")
 @ApplicationScoped
@@ -77,12 +79,13 @@ public class OcirRegistryResource {
 
     private final ArtifactsService service;
     private final RequestContext requestContext;
-    private final SecureRandom random = new SecureRandom();
+    private final OcirLogin login;
 
     @Inject
-    public OcirRegistryResource(ArtifactsService service, RequestContext requestContext) {
+    public OcirRegistryResource(ArtifactsService service, RequestContext requestContext, OcirLogin login) {
         this.service = service;
         this.requestContext = requestContext;
+        this.login = login;
     }
 
     // ── Login ──────────────────────────────────────────────────────────────────
@@ -90,11 +93,13 @@ public class OcirRegistryResource {
     @GET
     @Path(SignatureAuthFilter.OCIR_TOKEN_PATH)
     @Produces(MediaType.APPLICATION_JSON)
-    public Response token() {
-        byte[] bytes = new byte[24];
-        random.nextBytes(bytes);
-        String token = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
-        return Response.ok(Map.of("token", token, "access_token", token, "expires_in", 3600)).build();
+    public Response token(@Context HttpHeaders headers) {
+        OcirLogin.Login outcome = login.login(headers.getHeaderString(HttpHeaders.AUTHORIZATION));
+        if (outcome.isRejected()) {
+            return registryError(401, "UNAUTHORIZED", outcome.rejection());
+        }
+        return Response.ok(Map.of("token", outcome.token(), "access_token", outcome.token(),
+                "expires_in", OcirLogin.TOKEN_LIFETIME.toSeconds())).build();
     }
 
     // ── Registry API ───────────────────────────────────────────────────────────
@@ -154,6 +159,10 @@ public class OcirRegistryResource {
         if (authorization == null || !authorization.regionMatches(true, 0, "Bearer ", 0, 7)) {
             return challenge(host, uri);
         }
+        String bearer = authorization.substring(7).trim();
+        if (!login.accepts(bearer)) {
+            return challenge(host, uri);
+        }
         // The raw request path, not the path parameter: JAX-RS drops a trailing slash, and the
         // registry answers "blobs/uploads" (no slash) with a redirect instead of an upload session.
         String requestPath = uri.getRequestUri().getRawPath();
@@ -173,6 +182,9 @@ public class OcirRegistryResource {
         Optional<String> tenancy = service.tenancyOfNamespace(namespace);
         if (tenancy.isEmpty()) {
             return registryError(404, "NAME_UNKNOWN", "namespace " + namespace + " is not known to this registry");
+        }
+        if (!login.allows(bearer, tenancy.get())) {
+            return registryError(403, "DENIED", "the login does not grant access to namespace " + namespace);
         }
         requestContext.setTenancyId(tenancy.get());
         requestContext.setRegion(region.get());
@@ -194,7 +206,7 @@ public class OcirRegistryResource {
         registry.ensureReady();
         String backendName = service.backendRepository(repo);
         String backendPath = "/v2/" + backendName + "/" + operation.kind() + operation.suffix();
-        String query = uri.getRequestUri().getRawQuery();
+        String query = backendQuery(method, operation, uri.getRequestUri().getRawQuery(), bearer);
         URI target = URI.create("http://" + registry.endpoint() + backendPath + (query == null ? "" : "?" + query));
         try {
             Response response = forward(registry, method, target, headers, body, backendName, fullName);
@@ -206,6 +218,73 @@ public class OcirRegistryResource {
             LOG.warnv("OCIR request to {0} failed: {1}", target, e.getMessage());
             return registryError(502, "UNAVAILABLE", "the registry is unavailable: " + e.getMessage());
         }
+    }
+
+    /**
+     * The query sent to the sidecar. A cross-repository blob mount names its source as an OCIR
+     * repository, {@code from=<namespace>/<repository>}, which is translated to the sidecar path the
+     * way the request path is, when the login may read that namespace. Otherwise the mount is left
+     * out and the sidecar opens a plain upload session (202 with a Location), the fallback the
+     * Registry HTTP API V2 gives a mount the registry will not perform, which docker push follows.
+     */
+    private String backendQuery(String method, RepositoryOperation operation, String rawQuery, String bearer) {
+        if (rawQuery == null || !"POST".equals(method) || !"blobs".equals(operation.kind())) {
+            return rawQuery;
+        }
+        return mountQuery(rawQuery, from -> mountSource(from, bearer));
+    }
+
+    private Optional<String> mountSource(String from, String bearer) {
+        int slash = from.indexOf('/');
+        if (slash <= 0 || slash == from.length() - 1) {
+            return Optional.empty();
+        }
+        String namespace = from.substring(0, slash);
+        Optional<String> tenancy = service.tenancyOfNamespace(namespace);
+        if (tenancy.isEmpty() || !login.allows(bearer, tenancy.get())) {
+            return Optional.empty();
+        }
+        return Optional.of(service.backendRepository(namespace, from.substring(slash + 1)));
+    }
+
+    /**
+     * {@code rawQuery} with its {@code mount} and {@code from} parameters replaced: kept with
+     * {@code from} set to the backend repository {@code source} maps it to, or both left out when it
+     * maps to none. As Docker Distribution reads them, only the first of each counts.
+     */
+    static String mountQuery(String rawQuery, Function<String, Optional<String>> source) {
+        List<String> kept = new ArrayList<>();
+        String mount = null;
+        String from = null;
+        for (String pair : rawQuery.split("&")) {
+            int equals = pair.indexOf('=');
+            String name = decode(equals < 0 ? pair : pair.substring(0, equals));
+            String value = equals < 0 ? "" : decode(pair.substring(equals + 1));
+            if ("mount".equals(name)) {
+                mount = mount == null ? value : mount;
+            } else if ("from".equals(name)) {
+                from = from == null ? value : from;
+            } else {
+                kept.add(pair);
+            }
+        }
+        if (mount == null && from == null) {
+            return rawQuery;
+        }
+        Optional<String> backend = mount == null || from == null ? Optional.empty() : source.apply(from);
+        if (backend.isPresent()) {
+            kept.add("mount=" + encode(mount));
+            kept.add("from=" + encode(backend.get()));
+        }
+        return kept.isEmpty() ? null : String.join("&", kept);
+    }
+
+    private static String decode(String value) {
+        return URLDecoder.decode(value, StandardCharsets.UTF_8);
+    }
+
+    private static String encode(String value) {
+        return URLEncoder.encode(value, StandardCharsets.UTF_8);
     }
 
     private Response forward(ArtifactsRegistryManager registry, String method, URI target, HttpHeaders headers,

@@ -111,8 +111,9 @@ With `mock: false` (the default) every stream pool, the `DefaultPool` included, 
 - **No authentication.** The listener is `PLAINTEXT` without SASL. OCI's own endpoint is
   `cell-1.streaming.<region>.oci.oraclecloud.com:9092` with `SASL_SSL`, mechanism `PLAIN`,
   username `<tenancy>/<user>/<streamPoolOCID>` and an auth token as the password
-  (`local/oracle/oci-docs/streaming-kafka*.md`); floci-oci has no auth tokens yet, so clients
-  connect without credentials.
+  (`local/oracle/oci-docs/streaming-kafka*.md`). Identity serves
+  [auth tokens](identity.md#notes-limitations) now, but the broker does not check them yet, in any
+  signature verification mode, so clients connect without credentials.
 - Consumer groups of Kafka clients and OCI group cursors are separate: group cursors keep their
   committed offsets in floci-oci.
 - The data stays on a named volume per pool. A restart of floci-oci starts the brokers again

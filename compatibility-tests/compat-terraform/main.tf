@@ -52,6 +52,24 @@ output "api_keys_listed" {
   value = length(data.oci_identity_api_keys.tf_api_keys.api_keys)
 }
 
+resource "oci_identity_auth_token" "tf_auth_token" {
+  user_id     = oci_identity_user.tf_user.id
+  description = "Created by the terraform compatibility suite"
+}
+
+data "oci_identity_auth_tokens" "tf_auth_tokens" {
+  user_id    = oci_identity_user.tf_user.id
+  depends_on = [oci_identity_auth_token.tf_auth_token]
+}
+
+output "auth_token_state" {
+  value = oci_identity_auth_token.tf_auth_token.state
+}
+
+output "auth_tokens_listed" {
+  value = length(data.oci_identity_auth_tokens.tf_auth_tokens.tokens)
+}
+
 resource "oci_identity_policy" "tf_policy" {
   compartment_id = var.tenancy_ocid
   name           = "tf-compat-policy"

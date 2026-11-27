@@ -56,6 +56,34 @@ setup() {
     [ -z "$output" ] || [ "$(json_get '.data | length')" -eq 0 ]
 }
 
+@test "iam: user auth-token create/list/update/delete" {
+    local user_id token_id
+    user_id="$(cat "$BATS_FILE_TMPDIR/user_id")"
+
+    run oci_cmd iam auth-token create --user-id "$user_id" --description "cli docker login"
+    [ "$status" -eq 0 ]
+    token_id="$(json_get '.data.id')"
+    [[ "$token_id" == ocid1.credential.* ]]
+    [ -n "$(json_get '.data.token')" ]
+    [ "$(json_get '.data."lifecycle-state"')" = "ACTIVE" ]
+
+    run oci_cmd iam auth-token list --user-id "$user_id"
+    [ "$status" -eq 0 ]
+    [ "$(json_get '.data[0].id')" = "$token_id" ]
+    [ "$(json_get '.data[0].token')" = "null" ]
+
+    run oci_cmd iam auth-token update --user-id "$user_id" --auth-token-id "$token_id" --description "renamed"
+    [ "$status" -eq 0 ]
+    [ "$(json_get '.data.description')" = "renamed" ]
+
+    run oci_cmd iam auth-token delete --user-id "$user_id" --auth-token-id "$token_id" --force
+    [ "$status" -eq 0 ]
+    run oci_cmd iam auth-token list --user-id "$user_id"
+    [ "$status" -eq 0 ]
+    # The CLI prints nothing at all for an empty list.
+    [ -z "$output" ] || [ "$(json_get '.data | length')" -eq 0 ]
+}
+
 @test "iam: group create and add-user membership" {
     run oci_cmd iam group create --name "$(unique_name cli-grp)" --description "cli compat"
     [ "$status" -eq 0 ]

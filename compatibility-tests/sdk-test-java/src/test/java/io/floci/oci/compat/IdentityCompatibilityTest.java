@@ -2,7 +2,9 @@ package io.floci.oci.compat;
 
 import com.oracle.bmc.identity.IdentityClient;
 import com.oracle.bmc.identity.model.AddUserToGroupDetails;
+import com.oracle.bmc.identity.model.AuthToken;
 import com.oracle.bmc.identity.model.Compartment;
+import com.oracle.bmc.identity.model.CreateAuthTokenDetails;
 import com.oracle.bmc.identity.model.CreateCompartmentDetails;
 import com.oracle.bmc.identity.model.CreateGroupDetails;
 import com.oracle.bmc.identity.model.CreatePolicyDetails;
@@ -14,14 +16,17 @@ import com.oracle.bmc.identity.model.MoveCompartmentDetails;
 import com.oracle.bmc.identity.model.Policy;
 import com.oracle.bmc.identity.model.Region;
 import com.oracle.bmc.identity.model.RegionSubscription;
+import com.oracle.bmc.identity.model.UpdateAuthTokenDetails;
 import com.oracle.bmc.identity.model.User;
 import com.oracle.bmc.identity.model.UserGroupMembership;
 import com.oracle.bmc.identity.requests.AddUserToGroupRequest;
+import com.oracle.bmc.identity.requests.CreateAuthTokenRequest;
 import com.oracle.bmc.identity.requests.CreateCompartmentRequest;
 import com.oracle.bmc.identity.requests.CreateGroupRequest;
 import com.oracle.bmc.identity.requests.CreatePolicyRequest;
 import com.oracle.bmc.identity.requests.CreateRegionSubscriptionRequest;
 import com.oracle.bmc.identity.requests.CreateUserRequest;
+import com.oracle.bmc.identity.requests.DeleteAuthTokenRequest;
 import com.oracle.bmc.identity.requests.DeleteCompartmentRequest;
 import com.oracle.bmc.identity.requests.DeleteGroupRequest;
 import com.oracle.bmc.identity.requests.DeletePolicyRequest;
@@ -29,6 +34,7 @@ import com.oracle.bmc.identity.requests.DeleteUserRequest;
 import com.oracle.bmc.identity.requests.GetCompartmentRequest;
 import com.oracle.bmc.identity.requests.GetUserRequest;
 import com.oracle.bmc.identity.requests.GetWorkRequestRequest;
+import com.oracle.bmc.identity.requests.ListAuthTokensRequest;
 import com.oracle.bmc.identity.requests.ListAvailabilityDomainsRequest;
 import com.oracle.bmc.identity.requests.ListCompartmentsRequest;
 import com.oracle.bmc.identity.requests.ListFaultDomainsRequest;
@@ -39,6 +45,7 @@ import com.oracle.bmc.identity.requests.ListUsersRequest;
 import com.oracle.bmc.identity.requests.MoveCompartmentRequest;
 import com.oracle.bmc.identity.requests.RecoverCompartmentRequest;
 import com.oracle.bmc.identity.requests.RemoveUserFromGroupRequest;
+import com.oracle.bmc.identity.requests.UpdateAuthTokenRequest;
 import com.oracle.bmc.identity.responses.CreateCompartmentResponse;
 import com.oracle.bmc.identity.responses.DeleteCompartmentResponse;
 import com.oracle.bmc.identity.responses.MoveCompartmentResponse;
@@ -151,6 +158,46 @@ class IdentityCompatibilityTest {
                     assertThat(e.getStatusCode()).isEqualTo(404);
                     assertThat(e.getServiceCode()).isEqualTo("NotAuthorizedOrNotFound");
                 });
+    }
+
+    @Test
+    void authTokenLifecycle() {
+        User user = identity.createUser(CreateUserRequest.builder()
+                .createUserDetails(CreateUserDetails.builder()
+                        .compartmentId(TENANCY)
+                        .name("sdk-authtoken-" + System.nanoTime())
+                        .description("auth tokens")
+                        .build())
+                .build()).getUser();
+
+        AuthToken created = identity.createAuthToken(CreateAuthTokenRequest.builder()
+                .userId(user.getId())
+                .createAuthTokenDetails(CreateAuthTokenDetails.builder().description("docker login").build())
+                .build()).getAuthToken();
+        assertThat(created.getToken()).isNotBlank();
+        assertThat(created.getId()).startsWith("ocid1.credential.");
+        assertThat(created.getUserId()).isEqualTo(user.getId());
+        assertThat(created.getLifecycleState()).isEqualTo(AuthToken.LifecycleState.Active);
+        assertThat(created.getTimeExpires()).isNull();
+
+        List<AuthToken> listed = identity.listAuthTokens(ListAuthTokensRequest.builder()
+                .userId(user.getId()).build()).getItems();
+        assertThat(listed).extracting(AuthToken::getId).containsExactly(created.getId());
+        assertThat(listed.get(0).getToken()).isNull();
+
+        AuthToken updated = identity.updateAuthToken(UpdateAuthTokenRequest.builder()
+                .userId(user.getId())
+                .authTokenId(created.getId())
+                .updateAuthTokenDetails(UpdateAuthTokenDetails.builder().description("renamed").build())
+                .build()).getAuthToken();
+        assertThat(updated.getDescription()).isEqualTo("renamed");
+        assertThat(updated.getToken()).isNull();
+
+        identity.deleteAuthToken(DeleteAuthTokenRequest.builder()
+                .userId(user.getId()).authTokenId(created.getId()).build());
+        assertThat(identity.listAuthTokens(ListAuthTokensRequest.builder()
+                .userId(user.getId()).build()).getItems()).isEmpty();
+        identity.deleteUser(DeleteUserRequest.builder().userId(user.getId()).build());
     }
 
     @Test

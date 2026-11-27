@@ -19,7 +19,8 @@ import java.util.Set;
 
 /**
  * IAM resources can only be changed in the tenancy's home region: every write
- * {@link IdentityController} and {@link CustomerSecretKeyController} serve is answered with 403 NotAllowed when it is sent to another
+ * {@link IdentityController}, {@link CustomerSecretKeyController}, {@link ApiKeyController} and
+ * {@link AuthTokenController} serve is answered with 403 NotAllowed when it is sent to another
  * region's endpoint. Reads work in every region, and so does a write marked
  * {@link AnyRegionWrite}.
  *
@@ -32,7 +33,8 @@ import java.util.Set;
 public class HomeRegionWriteFilter implements ContainerRequestFilter {
 
     private static final Set<Class<?>> HOME_REGION_CLASSES =
-            Set.of(IdentityController.class, CustomerSecretKeyController.class, ApiKeyController.class);
+            Set.of(IdentityController.class, CustomerSecretKeyController.class, ApiKeyController.class,
+                    AuthTokenController.class);
     private static final Set<String> READ_METHODS = Set.of(HttpMethod.GET, HttpMethod.HEAD, HttpMethod.OPTIONS);
 
     @Context
